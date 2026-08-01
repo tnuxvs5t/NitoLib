@@ -17,11 +17,16 @@ struct nmod_add {
 
 int main() {
     static_assert(ncommutative_monoid<nadd<long long>, long long>);
+    static_assert(!ngroup<nadd<bool>, bool>);
     static_assert(!ngroup<nadd<string>, string>);
     static_assert(!ncommutative_monoid<nadd<string>, string>);
     static_assert(nmonoid<nconcat, string>);
     static_assert(!ncommutative_monoid<nconcat, string>);
     static_assert(ngroup<nmod_add, int>);
+    static_assert(nsemiring<nadd<long long>, nmul<long long>, long long>);
+    static_assert(!nsemiring<nadd<double>, nmul<double>, double>);
+    static_assert(naction<naddsum_action<long long>, long long, long long>);
+    static_assert(!naction<naddsum_action<double>, double, double>);
 
     nvector<string> words{"ka", "ppa", "!"};
     ntest(nfold(words, nconcat{}) == "kappa!");
@@ -29,4 +34,9 @@ int main() {
     nvector<int> values{8, 7, 6};
     ntest(nfold(values, nmod_add{10}) == 1);
     ntest(nhas_law(nmin<int>::laws, nlaw::idempotent));
+
+    ntest(nfold(nvector<int>{1'000'000'000}, nmin<int>{}) == 1'000'000'000);
+    ntest(nfold(nvector<int>{-1'000'000'000}, nmax<int>{}) == -1'000'000'000);
+    ntest(nmin<int>{}.id() == numeric_limits<int>::max());
+    ntest(nmax<int>{}.id() == numeric_limits<int>::lowest());
 }

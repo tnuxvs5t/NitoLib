@@ -8,9 +8,12 @@ struct nconcat_queue {
 
 int main() {
     nqueue_agg<string, nconcat_queue> queue;
+    static_assert(same_as<decltype(queue.front()), const string&>);
     queue.push("ab");
     queue.push("c");
     ntest(queue.fold() == "abc" && queue.front() == "ab");
+    const auto& const_queue = queue;
+    ntest(const_queue.front() == "ab" && const_queue.fold() == "abc");
     ntest(queue.pop() == "ab");
     queue.push("de");
     ntest(queue.fold() == "cde");

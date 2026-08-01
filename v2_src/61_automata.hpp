@@ -1,3 +1,15 @@
+namespace ni {
+template <class A>
+concept nautomaton_sequence = nindexed<A> && integral<nindex_value_t<const A>>;
+
+template <int Alphabet, integral I> constexpr int nautomaton_symbol(I value) {
+    if constexpr (signed_integral<I>)
+        if (value < 0)
+            return npos;
+    return __uint128_t(value) < __uint128_t(Alphabet) ? int(value) : npos;
+}
+} // namespace ni
+
 template <int Alphabet>
     requires(Alphabet > 0)
 class ntrie {
@@ -11,12 +23,13 @@ class ntrie {
   public:
     int len() const noexcept { return nodes_.len(); }
 
-    template <nindexed A> int add(const A& sequence) {
+    template <ni::nautomaton_sequence A> int add(const A& sequence) {
         int vertex = 0;
+        npre(nodes_[vertex].passing < INT_MAX);
         ++nodes_[vertex].passing;
         for (int i = 0; i < nlen(sequence); ++i) {
-            int symbol = int(sequence[i]);
-            npre(0 <= symbol && symbol < Alphabet);
+            int symbol = ni::nautomaton_symbol<Alphabet>(sequence[i]);
+            npre(symbol != npos);
             int next = nodes_[vertex].next[symbol];
             if (next == npos) {
                 next = nodes_.len();
@@ -24,27 +37,29 @@ class ntrie {
                 nodes_.push(vertex, symbol);
             }
             vertex = next;
+            npre(nodes_[vertex].passing < INT_MAX);
             ++nodes_[vertex].passing;
         }
+        npre(nodes_[vertex].terminal < INT_MAX);
         ++nodes_[vertex].terminal;
         return vertex;
     }
 
-    template <nindexed A> int find(const A& sequence, int fallback = npos) const {
+    template <ni::nautomaton_sequence A> int find(const A& sequence, int fallback = npos) const {
         int vertex = 0;
         for (int i = 0; i < nlen(sequence); ++i) {
-            int symbol = int(sequence[i]);
-            if (symbol < 0 || symbol >= Alphabet || nodes_[vertex].next[symbol] == npos)
+            int symbol = ni::nautomaton_symbol<Alphabet>(sequence[i]);
+            if (symbol == npos || nodes_[vertex].next[symbol] == npos)
                 return fallback;
             vertex = nodes_[vertex].next[symbol];
         }
         return vertex;
     }
-    template <nindexed A> int count(const A& sequence) const {
+    template <ni::nautomaton_sequence A> int count(const A& sequence) const {
         int vertex = find(sequence);
         return vertex == npos ? 0 : nodes_[vertex].terminal;
     }
-    template <nindexed A> int count_prefix(const A& prefix) const {
+    template <ni::nautomaton_sequence A> int count_prefix(const A& prefix) const {
         int vertex = find(prefix);
         return vertex == npos ? 0 : nodes_[vertex].passing;
     }
@@ -75,12 +90,12 @@ class nac {
     int len() const noexcept { return nodes_.len(); }
     int patterns() const noexcept { return patterns_; }
 
-    template <nindexed A> int add(const A& pattern) {
-        npre(!built_ && nlen(pattern) > 0);
+    template <ni::nautomaton_sequence A> int add(const A& pattern) {
+        npre(!built_ && nlen(pattern) > 0 && patterns_ < INT_MAX);
         int vertex = 0;
         for (int i = 0; i < nlen(pattern); ++i) {
-            int symbol = int(pattern[i]);
-            npre(0 <= symbol && symbol < Alphabet);
+            int symbol = ni::nautomaton_symbol<Alphabet>(pattern[i]);
+            npre(symbol != npos);
             int next = nodes_[vertex].next[symbol];
             if (next == npos) {
                 next = nodes_.len();
@@ -129,12 +144,12 @@ class nac {
     }
 
     // Callback receives the inclusive text position and the pattern id.
-    template <nindexed A, class F> void match(const A& text, F callback) const {
+    template <ni::nautomaton_sequence A, class F> void match(const A& text, F&& callback) const {
         npre(built_);
         int state = 0;
         for (int position = 0; position < nlen(text); ++position) {
-            int symbol = int(text[position]);
-            npre(0 <= symbol && symbol < Alphabet);
+            int symbol = ni::nautomaton_symbol<Alphabet>(text[position]);
+            npre(symbol != npos);
             state = nodes_[state].next[symbol];
             for (int vertex = state; vertex != npos; vertex = nodes_[vertex].output)
                 for (int i = 0; i < nodes_[vertex].patterns.len(); ++i)
@@ -142,7 +157,7 @@ class nac {
         }
     }
 
-    template <nindexed A> long long count(const A& text) const {
+    template <ni::nautomaton_sequence A> long long count(const A& text) const {
         long long result = 0;
         match(text, [&](int, int) { ++result; });
         return result;

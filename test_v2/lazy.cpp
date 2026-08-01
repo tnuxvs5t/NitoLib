@@ -23,6 +23,9 @@ struct naffine_sum_action {
     }
 };
 
+template <>
+inline constexpr bool naction_laws<naffine_sum_action, long long, naffine> = true;
+
 int main() {
     nvector<long long> values{1, 2, 3, 4, 5};
     nlazy_addsum<long long> addsum(values);

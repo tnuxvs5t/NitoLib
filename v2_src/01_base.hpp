@@ -21,6 +21,80 @@ inline constexpr T nninf = [] {
         return T{};
 }();
 
+namespace ni {
+template <integral To, integral From> constexpr To nchecked_integral_cast(From value) {
+    if constexpr (signed_integral<From> && signed_integral<To>) {
+        npre(__int128_t(value) >= __int128_t(numeric_limits<To>::lowest()));
+        npre(__int128_t(value) <= __int128_t(numeric_limits<To>::max()));
+    } else if constexpr (signed_integral<From>) {
+        npre(value >= 0);
+        npre(__uint128_t(value) <= __uint128_t(numeric_limits<To>::max()));
+    } else {
+        npre(__uint128_t(value) <= __uint128_t(numeric_limits<To>::max()));
+    }
+    return To(value);
+}
+
+template <integral I> constexpr int nchecked_int(I value) {
+    return nchecked_integral_cast<int>(value);
+}
+
+template <class To, class From>
+    requires is_arithmetic_v<To> && is_arithmetic_v<From>
+constexpr To nchecked_number(From value) {
+    if constexpr (integral<To> && integral<From>) {
+        return nchecked_integral_cast<To>(value);
+    } else {
+        long double wide = static_cast<long double>(value);
+        npre(!isnan(wide));
+        if constexpr (integral<To>) {
+            npre(isfinite(wide) && trunc(wide) == wide);
+            long double limit = ldexp(1.0L, numeric_limits<To>::digits);
+            if constexpr (signed_integral<To>)
+                npre(-limit <= wide && wide < limit);
+            else
+                npre(0 <= wide && wide < limit);
+        } else if (isfinite(wide)) {
+            npre(wide >= -static_cast<long double>(numeric_limits<To>::max()));
+            npre(wide <= static_cast<long double>(numeric_limits<To>::max()));
+        } else {
+            npre(numeric_limits<To>::has_infinity);
+        }
+        return static_cast<To>(value);
+    }
+}
+
+template <class T> constexpr T nchecked_add(T a, T b) {
+    if constexpr (is_integral_v<T>) {
+        T result;
+        npre(!__builtin_add_overflow(a, b, &result));
+        return result;
+    } else {
+        return a + b;
+    }
+}
+
+template <class T> constexpr T nchecked_sub(T a, T b) {
+    if constexpr (is_integral_v<T>) {
+        T result;
+        npre(!__builtin_sub_overflow(a, b, &result));
+        return result;
+    } else {
+        return a - b;
+    }
+}
+
+template <class T> constexpr T nchecked_mul(T a, T b) {
+    if constexpr (is_integral_v<T>) {
+        T result;
+        npre(!__builtin_mul_overflow(a, b, &result));
+        return result;
+    } else {
+        return a * b;
+    }
+}
+} // namespace ni
+
 template <class T> class nmaybe {
     optional<T> value_;
 
@@ -66,15 +140,37 @@ template <class T, class U> constexpr bool nchmax(T& a, U&& b) {
     return false;
 }
 
-template <class A> constexpr int nlen(const A& a) {
-    if constexpr (requires { a.len(); }) {
+namespace ni {
+template <class A>
+concept nhas_len_member = requires(const A& a) { a.len(); };
+
+template <class A>
+concept nhas_integral_len = requires(const A& a) {
+    a.len();
+    requires integral<remove_cvref_t<decltype(a.len())>>;
+};
+
+template <class A>
+concept nhas_integral_size = requires(const A& a) {
+    a.size();
+    requires integral<remove_cvref_t<decltype(a.size())>>;
+};
+} // namespace ni
+
+template <class A>
+    requires ni::nhas_integral_len<A> ||
+             ((!ni::nhas_len_member<A>) && ni::nhas_integral_size<A>)
+constexpr int nlen(const A& a) {
+    if constexpr (ni::nhas_integral_len<A>) {
         auto n = a.len();
-        npre(0 <= n && uint64_t(n) <= uint64_t(INT_MAX));
-        return int(n);
+        if constexpr (signed_integral<remove_cvref_t<decltype(n)>>)
+            npre(n >= 0);
+        return ni::nchecked_int(n);
     } else {
         auto n = a.size();
-        npre(uint64_t(n) <= uint64_t(INT_MAX));
-        return int(n);
+        if constexpr (signed_integral<remove_cvref_t<decltype(n)>>)
+            npre(n >= 0);
+        return ni::nchecked_int(n);
     }
 }
 

@@ -49,4 +49,11 @@ int main() {
     ntest(nunimodal_arg(-100LL, 101LL, bowl) == 37);
     auto hill = [](long long x) { return 1000 - (x + 11) * (x + 11); };
     ntest(nunimodal_arg(-100LL, 101LL, hill, ngreater<>{}) == -11);
+
+    nvector<long long> calls;
+    ntest(nunimodal_arg(0LL, 10LL, [&](long long x) {
+              calls.push(x);
+              return (x - 4) * (x - 4);
+          }) == 4);
+    ntest(calls.len() >= 2 && calls[0] == 3 && calls[1] == 6);
 }

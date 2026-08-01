@@ -1,12 +1,26 @@
 #include "common.hpp"
 
+template <class T>
+concept nhas_poly_integral = requires(nvector<T> values) { npoly_integral(values); };
+
+template <class T>
+concept nhas_ntt = requires(nvector<T> values) { nconv_ntt(values, values); };
+
 int main() {
+    static_assert(!nhas_poly_integral<int> && nhas_poly_integral<double>);
+    static_assert(nhas_poly_integral<nmodint<101>> && !nhas_poly_integral<nmodint<100>>);
+    static_assert(nhas_ntt<nmodint<998244353>> && !nhas_ntt<nmodint<100>>);
+
     nvector<long long> a{1, 2, 3}, b{4, 5};
     ntest(nconv(a, b) == nvector<long long>({4, 13, 22, 15}));
     ntest(nconv(nvector<int>{}, nvector<int>{1}).empty());
     ntest(npoly_derivative(a) == nvector<long long>({2, 6}));
     ntest(npoly_integral(nvector<double>{2, 6}) == nvector<double>({0, 2, 3}));
     ntest(npoly_evaluate(a, 10LL) == 321);
+
+    using ring = nmodint<12>;
+    ntest(nconv(nvector<ring>{1, 2}, nvector<ring>{3, 4}) ==
+          nvector<ring>({3, 10, 8}));
 
     using mint = nmodint<998244353>;
     mt19937 random(0x54f01aU);

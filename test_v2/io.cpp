@@ -1,6 +1,11 @@
 #include "common.hpp"
 
+template <class T>
+concept ninput_readable = requires(ninput& input, T& value) { input.read(value); };
+
 int main() {
+    static_assert(!ninput_readable<bool>);
+
     FILE* input_file = tmpfile();
     ntest(input_file != nullptr);
     string input = "-9223372036854775808 18446744073709551615 -170141183460469231731687303715884105728 hello Z";

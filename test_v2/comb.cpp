@@ -1,6 +1,11 @@
 #include "common.hpp"
 
+template <class T>
+concept nhas_submasks = requires(T mask) { nsubmasks(mask); };
+
 int main() {
+    static_assert(nhas_submasks<unsigned> && !nhas_submasks<bool>);
+
     nvector<unsigned> masks;
     nfor(mask, nsubmasks(0b10110U)) masks.push(mask);
     ntest(masks == nvector<unsigned>({22, 20, 18, 16, 6, 4, 2, 0}));
@@ -16,6 +21,11 @@ int main() {
     ntest(values[0] == 36 && values[2] == 22);
     nmobius_superset(values);
     ntest(values == original);
+
+    nvector<long long> padded{99, 1, 2, 3, 4, 77};
+    nzeta_subset(nsub(padded, 1, 5));
+    nmobius_subset(nsub(padded, 1, 5));
+    ntest((padded == nvector<long long>{99, 1, 2, 3, 4, 77}));
 
     mt19937 random(0x52c0bU);
     for (int bits = 0; bits <= 6; ++bits) {

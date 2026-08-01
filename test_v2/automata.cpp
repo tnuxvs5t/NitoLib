@@ -2,6 +2,13 @@
 
 static auto letters(string& text) { return nproject(text, [](char c) { return c - 'a'; }); }
 
+struct nnoncopy_match_sink {
+    int calls = 0;
+    nnoncopy_match_sink() = default;
+    nnoncopy_match_sink(const nnoncopy_match_sink&) = delete;
+    void operator()(int, int) { ++calls; }
+};
+
 int main() {
     ntrie<26> trie;
     string apple = "apple", app = "app", ape = "ape";
@@ -13,6 +20,8 @@ int main() {
     ntest(trie.count_prefix(letters(app)) == 3);
     string absent = "apply";
     ntest(trie.find(letters(absent)) == npos);
+    nvector<unsigned long long> oversized_symbol{1ULL << 32};
+    ntest(trie.find(oversized_symbol, 77) == 77);
 
     nac<26> automaton;
     nvector<string> patterns{"he", "she", "hers", "his"};
@@ -23,6 +32,9 @@ int main() {
     nvector<pair<int, int>> matches;
     automaton.match(letters(sample), [&](int end, int id) { matches.push(end, id); });
     ntest(matches.len() == 3 && automaton.count(letters(sample)) == 3);
+    nnoncopy_match_sink sink;
+    automaton.match(letters(sample), sink);
+    ntest(sink.calls == 3);
 
     mt19937 random(0x61acU);
     for (int repeat = 0; repeat < 300; ++repeat) {

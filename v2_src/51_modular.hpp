@@ -80,6 +80,13 @@ class nmodint {
 };
 
 template <uint64_t Modulus> inline constexpr bool nadd_group<nmodint<Modulus>> = true;
+template <uint64_t Modulus> inline constexpr bool nexact_field<nmodint<Modulus>> = nisprime(Modulus);
+template <uint64_t Modulus>
+inline constexpr bool nsemiring_laws<nadd<nmodint<Modulus>>, nmul<nmodint<Modulus>>,
+                                     nmodint<Modulus>> = true;
+template <uint64_t Modulus>
+inline constexpr bool naction_laws<naddsum_action<nmodint<Modulus>>, nmodint<Modulus>,
+                                   nmodint<Modulus>> = true;
 
 template <class Mint> class ncomb {
     nvector<Mint> factorial_, inverse_factorial_;

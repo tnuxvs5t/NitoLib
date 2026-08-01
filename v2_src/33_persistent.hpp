@@ -18,25 +18,27 @@ class npersistent_seg {
 
     const T& aggregate(int node_index) const { return nodes_[node_index].aggregate; }
 
+    int append(node value) {
+        npre(nodes_.size() <= size_t(INT_MAX));
+        int index = int(nodes_.size());
+        nodes_.push_back(move(value));
+        return index;
+    }
+
     template <class V> int build(const V& source, int left, int right) {
         if (left >= size_)
             return 0;
-        if (right - left == 1) {
-            nodes_.push_back({source[left], 0, 0});
-            return int(nodes_.size()) - 1;
-        }
+        if (right - left == 1)
+            return append({source[left], 0, 0});
         int middle = left + (right - left) / 2;
         int left_node = build(source, left, middle);
         int right_node = build(source, middle, right);
-        nodes_.push_back({operation_(aggregate(left_node), aggregate(right_node)), left_node, right_node});
-        return int(nodes_.size()) - 1;
+        return append({operation_(aggregate(left_node), aggregate(right_node)), left_node, right_node});
     }
 
     int set0(int current, int left, int right, int index, const T& value) {
-        if (right - left == 1) {
-            nodes_.push_back({value, 0, 0});
-            return int(nodes_.size()) - 1;
-        }
+        if (right - left == 1)
+            return append({value, 0, 0});
         int left_node = nodes_[current].left;
         int right_node = nodes_[current].right;
         int middle = left + (right - left) / 2;
@@ -44,8 +46,7 @@ class npersistent_seg {
             left_node = set0(left_node, left, middle, index, value);
         else
             right_node = set0(right_node, middle, right, index, value);
-        nodes_.push_back({operation_(aggregate(left_node), aggregate(right_node)), left_node, right_node});
-        return int(nodes_.size()) - 1;
+        return append({operation_(aggregate(left_node), aggregate(right_node)), left_node, right_node});
     }
 
     T fold0(int current, int left, int right, int query_left, int query_right) const {
@@ -71,8 +72,14 @@ class npersistent_seg {
     }
 
     int len() const noexcept { return size_; }
-    int versions() const noexcept { return int(roots_.size()); }
-    int nodes() const noexcept { return int(nodes_.size()) - 1; }
+    int versions() const noexcept {
+        npre(roots_.size() <= size_t(INT_MAX));
+        return int(roots_.size());
+    }
+    int nodes() const noexcept {
+        npre(0 < nodes_.size() && nodes_.size() <= size_t(INT_MAX) + 1);
+        return int(nodes_.size() - 1);
+    }
     const O& operation() const noexcept { return operation_; }
 
     void reserve_nodes(int count) {
@@ -82,6 +89,7 @@ class npersistent_seg {
 
     int fork(int version) {
         npre(0 <= version && version < versions());
+        npre(roots_.size() < size_t(INT_MAX));
         roots_.push_back(roots_[version]);
         return versions() - 1;
     }
@@ -89,6 +97,7 @@ class npersistent_seg {
     int set(int version, int index, const T& value) {
         npre(0 <= version && version < versions());
         npre(0 <= index && index < size_);
+        npre(roots_.size() < size_t(INT_MAX));
         int root = set0(roots_[version], 0, base_, index, value);
         roots_.push_back(root);
         return versions() - 1;

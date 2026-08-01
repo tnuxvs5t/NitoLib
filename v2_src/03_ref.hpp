@@ -5,6 +5,7 @@ template <class T> class nspan {
   public:
     using value_type = remove_cv_t<T>;
     using reference = T&;
+    using nview_tag = void;
 
     constexpr nspan() = default;
     constexpr nspan(T* data, int size) : data_(data), size_(size) {
@@ -43,6 +44,7 @@ template <class F> class nview {
 
   public:
     using accessor_type = F;
+    using nview_tag = void;
 
     constexpr nview(int size, F access) : size_(size), access_(move(access)) { npre(size >= 0); }
 
@@ -92,36 +94,89 @@ concept nresizable = requires(A& a, int n) {
     a.resize(n);
 };
 
+template <class A>
+concept nview_object = requires { typename remove_cvref_t<A>::nview_tag; };
+
+template <class A>
+concept nviewable_indexed = nindexed<remove_reference_t<A>> &&
+                            (is_lvalue_reference_v<A> || nview_object<remove_cvref_t<A>>) &&
+                            (!nview_object<remove_cvref_t<A>> ||
+                             constructible_from<remove_cvref_t<A>, A>);
+
 namespace ni {
-template <class A> struct nindex_access {
-    A* owner;
-    constexpr decltype(auto) operator()(int i) const { return (*owner)[i]; }
+template <class A> class nindexed_holder {
+    using value_type = remove_cvref_t<A>;
+    static constexpr bool stores_view = nview_object<value_type>;
+    using pointer_type = remove_reference_t<A>*;
+    using storage_type = conditional_t<stores_view, value_type, pointer_type>;
+    storage_type storage_;
+
+    static constexpr storage_type make(A&& value) {
+        if constexpr (stores_view)
+            return forward<A>(value);
+        else
+            return addressof(value);
+    }
+
+  public:
+    constexpr explicit nindexed_holder(A&& value) : storage_(make(forward<A>(value))) {
+        static_assert(stores_view || is_lvalue_reference_v<A>);
+    }
+
+    constexpr decltype(auto) get() {
+        if constexpr (stores_view)
+            return (storage_);
+        else
+            return (*storage_);
+    }
+    constexpr decltype(auto) get() const {
+        if constexpr (stores_view)
+            return as_const(storage_);
+        else
+            return (*storage_);
+    }
 };
+
+template <class A>
+    requires nviewable_indexed<A&&>
+constexpr auto nhold_indexed(A&& value) {
+    return nindexed_holder<A&&>(forward<A>(value));
+}
 } // namespace ni
 
-template <class A> constexpr auto nall(A& a) {
-    return nview(nlen(a), ni::nindex_access<A>{addressof(a)});
-}
-template <class A> auto nall(A&&) = delete;
-
-template <class A> constexpr auto nsub(A& a, int l, int r) {
-    npre(0 <= l && l <= r && r <= nlen(a));
-    return nview(r - l, [owner = addressof(a), l](int i) -> decltype(auto) { return (*owner)[l + i]; });
-}
-
-template <class F> constexpr auto nsub(nview<F> view, int l, int r) {
-    npre(0 <= l && l <= r && r <= view.len());
-    return nview(r - l, [view = move(view), l](int i) -> decltype(auto) { return view[l + i]; });
+template <class A>
+    requires nviewable_indexed<A&&>
+constexpr auto nall(A&& a) {
+    if constexpr (nview_object<remove_cvref_t<A>>) {
+        return remove_cvref_t<A>(forward<A>(a));
+    } else {
+        auto owner = ni::nhold_indexed(forward<A>(a));
+        int size = nlen(owner.get());
+        return nview(size,
+                     [owner = move(owner)](int i) -> decltype(auto) { return owner.get()[i]; });
+    }
 }
 
-template <class A> constexpr auto nstride(A& a, int first, int count, int step) {
+template <class A>
+    requires nviewable_indexed<A&&>
+constexpr auto nsub(A&& a, int l, int r) {
+    auto owner = ni::nhold_indexed(forward<A>(a));
+    npre(0 <= l && l <= r && r <= nlen(owner.get()));
+    return nview(r - l,
+                 [owner = move(owner), l](int i) -> decltype(auto) { return owner.get()[l + i]; });
+}
+
+template <class A>
+    requires nviewable_indexed<A&&>
+constexpr auto nstride(A&& a, int first, int count, int step) {
+    auto owner = ni::nhold_indexed(forward<A>(a));
     npre(count >= 0);
     if (count) {
         long long last = first + 1LL * (count - 1) * step;
-        npre(0 <= first && first < nlen(a));
-        npre(0 <= last && last < nlen(a));
+        npre(0 <= first && first < nlen(owner.get()));
+        npre(0 <= last && last < nlen(owner.get()));
     }
-    return nview(count, [owner = addressof(a), first, step](int i) -> decltype(auto) {
-        return (*owner)[int(first + 1LL * i * step)];
+    return nview(count, [owner = move(owner), first, step](int i) -> decltype(auto) {
+        return owner.get()[int(first + 1LL * i * step)];
     });
 }

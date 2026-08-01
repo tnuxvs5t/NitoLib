@@ -1,5 +1,5 @@
 template <ngraph_like G> nvector<int> n01bfs(const G& graph, int source) {
-    int vertices = graph.vertices();
+    int vertices = ni::ngraph_vertices(graph);
     npre(0 <= source && source < vertices);
     nvector<int> distance(vertices, npos);
     ndeque<int> queue;
@@ -7,11 +7,13 @@ template <ngraph_like G> nvector<int> n01bfs(const G& graph, int source) {
     queue.pushr(source);
     while (!queue.empty()) {
         int from = queue.popl();
-        auto adjacency = graph.neighbors(from);
+        decltype(auto) adjacency = graph.neighbors(from);
         nfor(edge, adjacency) {
             int to = nedge_to(edge);
-            int weight = int(nedge_weight(edge));
-            npre(0 <= to && to < vertices && (weight == 0 || weight == 1));
+            auto&& raw_weight = nedge_weight(edge);
+            npre(raw_weight == 0 || raw_weight == 1);
+            int weight = int(raw_weight);
+            npre(0 <= to && to < vertices);
             int candidate = distance[from] + weight;
             if (distance[to] == npos || candidate < distance[to]) {
                 distance[to] = candidate;
@@ -28,9 +30,9 @@ template <class W> struct nmst_result {
 };
 
 template <class D = long long, ngraph_like G>
-    requires is_arithmetic_v<D>
+    requires is_arithmetic_v<D> && (!same_as<remove_cv_t<D>, bool>)
 nmaybe<nmst_result<D>> nprim(const G& graph, int root = 0) {
-    int vertices = graph.vertices();
+    int vertices = ni::ngraph_vertices(graph);
     if (!vertices)
         return nmst_result<D>{};
     npre(0 <= root && root < vertices);
@@ -49,22 +51,22 @@ nmaybe<nmst_result<D>> nprim(const G& graph, int root = 0) {
         used[vertex] = true;
         ++visited;
         if (parent != npos) {
-            result.weight += weight;
+            result.weight = ni::nchecked_add(result.weight, weight);
             result.edges.push(pair<int, int>{parent, vertex});
         }
-        auto adjacency = graph.neighbors(vertex);
+        decltype(auto) adjacency = graph.neighbors(vertex);
         nfor(edge, adjacency) {
             int to = nedge_to(edge);
             npre(0 <= to && to < vertices);
             if (!used[to])
-                queue.push({D(nedge_weight(edge)), to, vertex});
+                queue.push({ni::nchecked_number<D>(nedge_weight(edge)), to, vertex});
         }
     }
     return visited == vertices ? nmaybe<nmst_result<D>>(move(result)) : nmaybe<nmst_result<D>>{};
 }
 
 template <class C>
-    requires is_arithmetic_v<C>
+    requires integral<C> && (!same_as<remove_cv_t<C>, bool>)
 class nmaxflow {
     struct edge {
         int to, reverse;
@@ -74,7 +76,7 @@ class nmaxflow {
     bool flowed_ = false;
 
     static size_t checked_vertices(int vertices) {
-        npre(vertices >= 0);
+        npre(0 <= vertices && vertices <= INT_MAX / 2);
         return size_t(vertices);
     }
 
@@ -86,6 +88,7 @@ class nmaxflow {
         npre(!flowed_);
         npre(0 <= from && from < vertices() && 0 <= to && to < vertices() && from != to);
         npre(!(capacity < C{}));
+        npre(graph_[to].size() < size_t(INT_MAX) && graph_[from].size() < size_t(INT_MAX));
         int from_reverse = int(graph_[to].size());
         int to_reverse = int(graph_[from].size());
         graph_[from].push_back({to, from_reverse, capacity});
@@ -112,6 +115,8 @@ class nmaxflow {
             C sent = min(excess[from], arc.capacity);
             if (!(C{} < sent) || height[from] != height[arc.to] + 1)
                 return false;
+            npre(graph_[arc.to][arc.reverse].capacity <= numeric_limits<C>::max() - sent);
+            npre(excess[arc.to] <= numeric_limits<C>::max() - sent);
             arc.capacity -= sent;
             graph_[arc.to][arc.reverse].capacity += sent;
             excess[from] -= sent;
@@ -125,6 +130,8 @@ class nmaxflow {
             C sent = arc.capacity;
             if (!(C{} < sent))
                 continue;
+            npre(graph_[arc.to][arc.reverse].capacity <= numeric_limits<C>::max() - sent);
+            npre(excess[arc.to] <= numeric_limits<C>::max() - sent);
             arc.capacity = C{};
             graph_[arc.to][arc.reverse].capacity += sent;
             excess[arc.to] += sent;

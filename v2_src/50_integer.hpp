@@ -1,4 +1,7 @@
-template <integral T> constexpr make_unsigned_t<T> nmag(T value) {
+template <class T>
+concept ninteger = integral<T> && (!same_as<remove_cv_t<T>, bool>);
+
+template <ninteger T> constexpr make_unsigned_t<T> nmag(T value) {
     using U = make_unsigned_t<T>;
     U encoded = U(value);
     if constexpr (is_signed_v<T>)
@@ -7,9 +10,9 @@ template <integral T> constexpr make_unsigned_t<T> nmag(T value) {
         return encoded;
 }
 
-template <integral T> constexpr make_unsigned_t<T> nabs(T value) { return nmag(value); }
+template <ninteger T> constexpr make_unsigned_t<T> nabs(T value) { return nmag(value); }
 
-template <integral T> constexpr make_unsigned_t<T> ngcd(T a, T b) {
+template <ninteger T> constexpr make_unsigned_t<T> ngcd(T a, T b) {
     using U = make_unsigned_t<T>;
     U x = nmag(a), y = nmag(b);
     while (y) {
@@ -20,7 +23,7 @@ template <integral T> constexpr make_unsigned_t<T> ngcd(T a, T b) {
     return x;
 }
 
-template <integral T> constexpr make_unsigned_t<T> nlcm(T a, T b) {
+template <ninteger T> constexpr make_unsigned_t<T> nlcm(T a, T b) {
     using U = make_unsigned_t<T>;
     U x = nmag(a), y = nmag(b);
     if (!x || !y)
@@ -54,12 +57,16 @@ template <signed_integral T> constexpr T nmod(T value, T modulus) {
     return remainder < 0 ? remainder + modulus : remainder;
 }
 
-template <integral T> struct nextgcd_result {
+template <ninteger T>
+    requires(sizeof(T) <= sizeof(uint64_t))
+struct nextgcd_result {
     make_unsigned_t<T> gcd;
     __int128_t x, y;
 };
 
-template <integral T> constexpr nextgcd_result<T> nextgcd(T a, T b) {
+template <ninteger T>
+    requires(sizeof(T) <= sizeof(uint64_t))
+constexpr nextgcd_result<T> nextgcd(T a, T b) {
     using U = make_unsigned_t<T>;
     U old_remainder = nmag(a), remainder = nmag(b);
     __int128_t old_x = 1, x = 0, old_y = 0, y = 1;

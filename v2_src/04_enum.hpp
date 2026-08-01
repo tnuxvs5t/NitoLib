@@ -5,16 +5,16 @@ template <signed_integral T> class nrange_t {
     constexpr nrange_t() = default;
     constexpr nrange_t(T first, T last, T step = 1) : first_(first), last_(last), step_(step) {
         npre(step != 0);
+        (void)len();
     }
 
     constexpr int len() const {
-        using W = __int128_t;
-        W first = first_, last = last_, step = step_;
-        if ((step > 0 && first >= last) || (step < 0 && first <= last))
+        if ((step_ > 0 && first_ >= last_) || (step_ < 0 && first_ <= last_))
             return 0;
-        W distance = step > 0 ? last - first : first - last;
-        W stride = step > 0 ? step : -step;
-        W count = (distance + stride - 1) / stride;
+        __uint128_t first = __uint128_t(first_), last = __uint128_t(last_), step = __uint128_t(step_);
+        __uint128_t distance = step_ > 0 ? last - first : first - last;
+        __uint128_t stride = step_ > 0 ? step : __uint128_t{} - step;
+        __uint128_t count = distance / stride + (distance % stride != 0);
         npre(count <= INT_MAX);
         return int(count);
     }
@@ -28,12 +28,12 @@ template <signed_integral T> class nrange_t {
         constexpr T val() const { return value; }
         constexpr int idx() const { return index; }
         constexpr void next() {
-            using W = __int128_t;
-            W next = W(value) + step;
-            if (next < numeric_limits<T>::lowest() || next > numeric_limits<T>::max())
+            bool overflow = step > 0 ? value > numeric_limits<T>::max() - step
+                                     : value < numeric_limits<T>::lowest() - step;
+            if (overflow)
                 value = last;
             else
-                value = T(next);
+                value += step;
             ++index;
         }
     };
@@ -54,7 +54,7 @@ template <integral I> constexpr int ni_nloop_count(I count) {
     } else if (count == 0) {
         return 0;
     }
-    npre(uint64_t(count) <= uint64_t(INT_MAX));
+    npre(__uint128_t(count) <= __uint128_t(INT_MAX));
     return int(count);
 }
 
@@ -96,6 +96,17 @@ template <class A>
 constexpr auto nenumerate(A&& a) {
     return ni::nowned_index_cursor<remove_cvref_t<A>>{forward<A>(a)};
 }
+
+template <class A> using nenumerator_t = remove_cvref_t<decltype(nenumerate(declval<A>()))>;
+
+template <class A>
+concept nenumerable = requires(A&& sequence) { nenumerate(forward<A>(sequence)); } &&
+                      requires(nenumerator_t<A>& cursor) {
+                          { cursor.ok() } -> convertible_to<bool>;
+                          cursor.val();
+                          { cursor.idx() } -> convertible_to<int>;
+                          cursor.next();
+                      };
 
 namespace ni {
 struct ncursor_sentinel {};
@@ -143,81 +154,117 @@ template <bool WithIndex, class A> constexpr auto ni_ncursor_range(A&& a) {
 #define nrrep(index, count)                                                                                           \
     for (int index : ni_ncursor_range<false>(nrange(ni_nloop_count((count)) - 1, -1, -1)))
 
-template <class A> constexpr auto nreverse(A& a) {
-    return nstride(a, nlen(a) - 1, nlen(a), -1);
+template <class A>
+    requires nviewable_indexed<A&&>
+constexpr auto nreverse(A&& a) {
+    int size = nlen(a);
+    return nstride(forward<A>(a), size - 1, size, -1);
 }
 
-template <class A, class F> constexpr auto nproject(A& a, F projection) {
-    return nview(nlen(a), [owner = addressof(a), projection = move(projection)](int i) -> decltype(auto) {
-        return invoke(projection, (*owner)[i]);
+template <class A, class F>
+    requires nviewable_indexed<A&&>
+constexpr auto nproject(A&& a, F projection) {
+    auto owner = ni::nhold_indexed(forward<A>(a));
+    int size = nlen(owner.get());
+    return nview(size, [owner = move(owner), projection = move(projection)](int i) -> decltype(auto) {
+        return invoke(projection, owner.get()[i]);
     });
 }
 
-template <class A, class B> class nzip_view {
-    A* left_;
-    B* right_;
+template <class L, class R> class nzip_view {
+    L left_;
+    R right_;
 
   public:
-    constexpr nzip_view(A& left, B& right) : left_(addressof(left)), right_(addressof(right)) {}
-    constexpr int len() const { return min(nlen(*left_), nlen(*right_)); }
+    using nview_tag = void;
+
+    constexpr nzip_view(L left, R right) : left_(move(left)), right_(move(right)) {}
+    constexpr int len() const { return min(nlen(left_.get()), nlen(right_.get())); }
     constexpr bool empty() const { return len() == 0; }
     constexpr auto operator[](int i) const {
         npre(0 <= i && i < len());
-        using L = decltype((*left_)[i]);
-        using R = decltype((*right_)[i]);
-        return pair<L, R>((*left_)[i], (*right_)[i]);
+        using left_reference = decltype(left_.get()[i]);
+        using right_reference = decltype(right_.get()[i]);
+        return pair<left_reference, right_reference>(left_.get()[i], right_.get()[i]);
     }
 };
 
-template <class A, class B> constexpr auto nzip(A& left, B& right) { return nzip_view<A, B>(left, right); }
+template <class A, class B>
+    requires nviewable_indexed<A&&> && nviewable_indexed<B&&>
+constexpr auto nzip(A&& left, B&& right) {
+    auto left_holder = ni::nhold_indexed(forward<A>(left));
+    auto right_holder = ni::nhold_indexed(forward<B>(right));
+    return nzip_view<decltype(left_holder), decltype(right_holder)>(move(left_holder), move(right_holder));
+}
 
-template <class A, class B> class nproduct_view {
-    A* left_;
-    B* right_;
+template <class L, class R> class nproduct_view {
+    L left_;
+    R right_;
     int left_size_, right_size_;
 
   public:
-    constexpr nproduct_view(A& left, B& right)
-        : left_(addressof(left)), right_(addressof(right)), left_size_(nlen(left)), right_size_(nlen(right)) {
-        npre(nlen(left) == 0 || nlen(right) <= INT_MAX / nlen(left));
+    using nview_tag = void;
+
+    constexpr nproduct_view(L left, R right)
+        : left_(move(left)), right_(move(right)), left_size_(nlen(left_.get())),
+          right_size_(nlen(right_.get())) {
+        npre(left_size_ == 0 || right_size_ <= INT_MAX / left_size_);
     }
     constexpr int len() const { return left_size_ * right_size_; }
     constexpr bool empty() const { return len() == 0; }
     constexpr auto operator[](int i) const {
         npre(0 <= i && i < len());
         int width = right_size_;
-        using L = decltype((*left_)[i / width]);
-        using R = decltype((*right_)[i % width]);
-        return pair<L, R>((*left_)[i / width], (*right_)[i % width]);
+        using left_reference = decltype(left_.get()[i / width]);
+        using right_reference = decltype(right_.get()[i % width]);
+        return pair<left_reference, right_reference>(left_.get()[i / width], right_.get()[i % width]);
     }
 };
 
-template <class A, class B> constexpr auto nproduct(A& left, B& right) {
-    return nproduct_view<A, B>(left, right);
+template <class A, class B>
+    requires nviewable_indexed<A&&> && nviewable_indexed<B&&>
+constexpr auto nproduct(A&& left, B&& right) {
+    auto left_holder = ni::nhold_indexed(forward<A>(left));
+    auto right_holder = ni::nhold_indexed(forward<B>(right));
+    return nproduct_view<decltype(left_holder), decltype(right_holder)>(move(left_holder), move(right_holder));
 }
 
-template <class A> class nwindow_view {
-    A* owner_;
+template <class H> class nwindow_view {
+    H owner_;
     int width_, step_, size_;
 
-    static constexpr int count(const A& owner, int width, int step) {
+    static constexpr int count(const H& owner, int width, int step) {
         npre(width >= 0 && step > 0);
-        return width <= nlen(owner) ? 1 + (nlen(owner) - width) / step : 0;
+        int length = nlen(owner.get());
+        if (width > length)
+            return 0;
+        long long result = 1LL + (length - width) / step;
+        npre(result <= INT_MAX);
+        return int(result);
     }
 
   public:
-    constexpr nwindow_view(A& owner, int width, int step)
-        : owner_(addressof(owner)), width_(width), step_(step),
-          size_(count(owner, width, step)) {}
+    using nview_tag = void;
+
+    constexpr nwindow_view(H owner, int width, int step)
+        : owner_(move(owner)), width_(width), step_(step), size_(count(owner_, width, step)) {}
     constexpr int len() const { return size_; }
     constexpr bool empty() const { return size_ == 0; }
-    constexpr auto operator[](int i) const {
+    constexpr auto operator[](int i) const
+        requires copy_constructible<H>
+    {
         npre(0 <= i && i < size_);
         int first = i * step_;
-        return nsub(*owner_, first, first + width_);
+        H owner = owner_;
+        return nview(width_, [owner = move(owner), first](int offset) -> decltype(auto) {
+            return owner.get()[first + offset];
+        });
     }
 };
 
-template <class A> constexpr auto nwindows(A& owner, int width, int step = 1) {
-    return nwindow_view<A>(owner, width, step);
+template <class A>
+    requires nviewable_indexed<A&&>
+constexpr auto nwindows(A&& owner, int width, int step = 1) {
+    auto holder = ni::nhold_indexed(forward<A>(owner));
+    return nwindow_view<decltype(holder)>(move(holder), width, step);
 }

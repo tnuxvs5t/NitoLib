@@ -38,10 +38,38 @@ concept ngroup = nmonoid<O, T> && requires(const O& op, T a) {
 template <class O, class T>
 concept ncommutative_monoid = nmonoid<O, T> && ndeclares<O, nlaw::commutative>;
 
-template <class T> inline constexpr bool nadd_group = is_arithmetic_v<T>;
+template <class Add, class Multiply, class T>
+inline constexpr bool nsemiring_laws = false;
+
+template <class Add, class Multiply, class T>
+concept nsemiring = ncommutative_monoid<Add, T> && nmonoid<Multiply, T> &&
+                    nsemiring_laws<remove_cvref_t<Add>, remove_cvref_t<Multiply>, T>;
+
+template <class T>
+inline constexpr bool nadd_group = is_arithmetic_v<T> && (!same_as<remove_cv_t<T>, bool>);
+
+template <class T> inline constexpr bool nexact_field = false;
+
+template <class T>
+concept nexact_field_element = nexact_field<remove_cvref_t<T>> && copyable<remove_cvref_t<T>> &&
+                               requires(remove_cvref_t<T> a, const remove_cvref_t<T>& b) {
+                                   remove_cvref_t<T>{};
+                                   remove_cvref_t<T>{1};
+                                   { a == b } -> convertible_to<bool>;
+                                   { a != b } -> convertible_to<bool>;
+                                   { a * b } -> convertible_to<remove_cvref_t<T>>;
+                                   { a *= b } -> same_as<remove_cvref_t<T>&>;
+                                   { a -= b } -> same_as<remove_cvref_t<T>&>;
+                                   { a / b } -> convertible_to<remove_cvref_t<T>>;
+                                   { -a } -> convertible_to<remove_cvref_t<T>>;
+                               };
 
 template <class A, class S, class F>
-concept naction = copyable<F> && requires(const A& action, S aggregate, const F& tag, int length) {
+inline constexpr bool naction_laws = false;
+
+template <class A, class S, class F>
+concept naction = copyable<F> && naction_laws<remove_cvref_t<A>, S, F> &&
+                  requires(const A& action, S aggregate, const F& tag, int length) {
     { action.tag_id() } -> convertible_to<F>;
     { action.compose(tag, tag) } -> convertible_to<F>;
     { action.apply(move(aggregate), tag, length) } -> convertible_to<S>;
@@ -108,7 +136,14 @@ template <class T> struct nxor {
 template <class T> struct nmin {
     static constexpr nlaw laws =
         nlaw::associative | nlaw::identity | nlaw::commutative | nlaw::idempotent;
-    constexpr T id() const { return ninf<T>; }
+    constexpr T id() const
+        requires numeric_limits<T>::is_specialized
+    {
+        if constexpr (numeric_limits<T>::has_infinity)
+            return numeric_limits<T>::infinity();
+        else
+            return numeric_limits<T>::max();
+    }
     constexpr T operator()(const T& a, const T& b) const
         requires requires { b < a; }
     {
@@ -119,7 +154,14 @@ template <class T> struct nmin {
 template <class T> struct nmax {
     static constexpr nlaw laws =
         nlaw::associative | nlaw::identity | nlaw::commutative | nlaw::idempotent;
-    constexpr T id() const { return nninf<T>; }
+    constexpr T id() const
+        requires numeric_limits<T>::is_specialized
+    {
+        if constexpr (numeric_limits<T>::has_infinity)
+            return -numeric_limits<T>::infinity();
+        else
+            return numeric_limits<T>::lowest();
+    }
     constexpr T operator()(const T& a, const T& b) const
         requires requires { a < b; }
     {
@@ -132,3 +174,11 @@ template <class T> struct naddsum_action {
     constexpr T compose(const T& newer, const T& older) const { return older + newer; }
     constexpr T apply(T sum, const T& delta, int length) const { return sum + delta * T(length); }
 };
+
+template <integral T>
+    requires(!same_as<remove_cv_t<T>, bool>)
+inline constexpr bool naction_laws<naddsum_action<T>, T, T> = true;
+
+template <integral T>
+    requires(!same_as<remove_cv_t<T>, bool>)
+inline constexpr bool nsemiring_laws<nadd<T>, nmul<T>, T> = true;

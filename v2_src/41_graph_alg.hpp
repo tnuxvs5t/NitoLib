@@ -1,8 +1,8 @@
 template <ngraph_like G> nmaybe<nvector<int>> ntoposort(const G& graph) {
-    int vertices = graph.vertices();
+    int vertices = ni::ngraph_vertices(graph);
     nvector<int> indegree(vertices, 0);
     for (int from = 0; from < vertices; ++from) {
-        auto adjacency = graph.neighbors(from);
+        decltype(auto) adjacency = graph.neighbors(from);
         nfor(edge, adjacency) {
             int to = nedge_to(edge);
             npre(0 <= to && to < vertices);
@@ -21,7 +21,7 @@ template <ngraph_like G> nmaybe<nvector<int>> ntoposort(const G& graph) {
     while (!queue.empty()) {
         int from = queue.popl();
         order.push(from);
-        auto adjacency = graph.neighbors(from);
+        decltype(auto) adjacency = graph.neighbors(from);
         nfor(edge, adjacency) {
             int to = nedge_to(edge);
             if (--indegree[to] == 0)
@@ -32,14 +32,16 @@ template <ngraph_like G> nmaybe<nvector<int>> ntoposort(const G& graph) {
 }
 
 template <ngraph_like G> npartition nscc(const G& graph) {
-    int vertices = graph.vertices();
+    int vertices = ni::ngraph_vertices(graph);
     auto forward = vector<vector<int>>(size_t(vertices));
     auto reverse = vector<vector<int>>(size_t(vertices));
     for (int from = 0; from < vertices; ++from) {
-        auto adjacency = graph.neighbors(from);
+        decltype(auto) adjacency = graph.neighbors(from);
         nfor(edge, adjacency) {
             int to = nedge_to(edge);
             npre(0 <= to && to < vertices);
+            npre(forward[from].size() < size_t(INT_MAX));
+            npre(reverse[to].size() < size_t(INT_MAX));
             forward[from].push_back(to);
             reverse[to].push_back(from);
         }
@@ -91,6 +93,60 @@ template <ngraph_like G> npartition nscc(const G& graph) {
     return npartition(move(component));
 }
 
+namespace ni {
+struct ntree_layout {
+    vector<vector<int>> adjacency;
+    nvector<int> parent, order;
+};
+
+template <ngraph_like G>
+ntree_layout nbuild_tree_layout(const G& graph, int root, bool require_symmetric) {
+    int vertices = ngraph_vertices(graph);
+    npre(vertices > 0 && 0 <= root && root < vertices);
+    ntree_layout result{vector<vector<int>>(size_t(vertices)), nvector<int>(vertices, npos), {}};
+
+    for (int from = 0; from < vertices; ++from) {
+        decltype(auto) edges = graph.neighbors(from);
+        nfor(edge, edges) {
+            int to = nedge_to(edge);
+            npre(0 <= to && to < vertices && to != from);
+            npre(result.adjacency[from].size() < size_t(INT_MAX));
+            result.adjacency[from].push_back(to);
+        }
+    }
+
+    result.order.reserve(vertices);
+    result.parent[root] = root;
+    result.order.push(root);
+    for (int position = 0; position < result.order.len(); ++position) {
+        int from = result.order[position];
+        for (int to : result.adjacency[from])
+            if (result.parent[to] == npos) {
+                result.parent[to] = from;
+                result.order.push(to);
+            }
+    }
+    npre(result.order.len() == vertices);
+
+    long long forward_arcs = 0, reverse_arcs = 0;
+    for (int from = 0; from < vertices; ++from)
+        for (int to : result.adjacency[from]) {
+            if (result.parent[to] == from)
+                ++forward_arcs;
+            else if (from != root && to == result.parent[from])
+                ++reverse_arcs;
+            else
+                npre(false);
+        }
+    npre(forward_arcs == vertices - 1LL);
+    if (require_symmetric)
+        npre(reverse_arcs == vertices - 1LL);
+    else
+        npre(reverse_arcs == 0 || reverse_arcs == vertices - 1LL);
+    return result;
+}
+} // namespace ni
+
 class nlca {
     int vertices_ = 0;
     vector<vector<int>> ancestor_;
@@ -100,30 +156,17 @@ class nlca {
     nlca() = default;
 
     template <ngraph_like G> explicit nlca(const G& graph, int root = 0)
-        : vertices_(graph.vertices()), depth_(vertices_, npos) {
-        npre(vertices_ > 0 && 0 <= root && root < vertices_);
+        : vertices_(ni::ngraph_vertices(graph)), depth_(vertices_, npos) {
+        auto layout = ni::nbuild_tree_layout(graph, root, false);
         int levels = max(1, int(bit_width(unsigned(vertices_))));
         ancestor_.assign(size_t(levels), vector<int>(size_t(vertices_), root));
-        ndeque<int> queue;
         depth_[root] = 0;
         ancestor_[0][root] = root;
-        queue.pushr(root);
-        int visited = 0;
-        while (!queue.empty()) {
-            int vertex = queue.popl();
-            ++visited;
-            auto adjacency = graph.neighbors(vertex);
-            nfor(edge, adjacency) {
-                int to = nedge_to(edge);
-                npre(0 <= to && to < vertices_);
-                if (depth_[to] == npos) {
-                    depth_[to] = depth_[vertex] + 1;
-                    ancestor_[0][to] = vertex;
-                    queue.pushr(to);
-                }
-            }
+        for (int position = 1; position < layout.order.len(); ++position) {
+            int vertex = layout.order[position], parent = layout.parent[vertex];
+            depth_[vertex] = depth_[parent] + 1;
+            ancestor_[0][vertex] = parent;
         }
-        npre(visited == vertices_);
         for (int level = 1; level < levels; ++level)
             for (int vertex = 0; vertex < vertices_; ++vertex)
                 ancestor_[level][vertex] = ancestor_[level - 1][ancestor_[level - 1][vertex]];
@@ -162,7 +205,9 @@ class nlca {
 
     int distance(int a, int b) const {
         int common = (*this)(a, b);
-        return depth_[a] + depth_[b] - 2 * depth_[common];
+        long long result = 1LL * depth_[a] + depth_[b] - 2LL * depth_[common];
+        npre(0 <= result && result <= INT_MAX);
+        return int(result);
     }
 
     int kth_on_path(int from, int to, int steps) const {
@@ -170,8 +215,9 @@ class nlca {
         int common = (*this)(from, to);
         int upward = depth_[from] - depth_[common];
         int downward = depth_[to] - depth_[common];
-        if (steps > upward + downward)
+        long long length = 1LL * upward + downward;
+        if (steps > length)
             return npos;
-        return steps <= upward ? jump(from, steps) : jump(to, upward + downward - steps);
+        return steps <= upward ? jump(from, steps) : jump(to, int(length - steps));
     }
 };

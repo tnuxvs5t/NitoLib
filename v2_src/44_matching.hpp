@@ -4,11 +4,11 @@ struct nbipartite_matching {
 };
 
 template <ngraph_like G> nbipartite_matching nhopcroft_karp(const G& graph, int right_vertices) {
-    int left_vertices = graph.vertices();
+    int left_vertices = ni::ngraph_vertices(graph);
     npre(right_vertices >= 0);
     nvector<nvector<int>> adjacency(left_vertices);
     for (int left = 0; left < left_vertices; ++left) {
-        auto edges = graph.neighbors(left);
+        decltype(auto) edges = graph.neighbors(left);
         nfor(edge, edges) {
             int right = nedge_to(edge);
             npre(0 <= right && right < right_vertices);
@@ -27,7 +27,7 @@ template <ngraph_like G> nbipartite_matching nhopcroft_karp(const G& graph, int 
                 distance[left] = 0;
                 queue.pushr(left);
             }
-        int shortest = ninf<int>;
+        long long shortest = numeric_limits<long long>::max();
         while (!queue.empty()) {
             int left = queue.popl();
             if (distance[left] + 1 > shortest)
@@ -42,7 +42,7 @@ template <ngraph_like G> nbipartite_matching nhopcroft_karp(const G& graph, int 
                 }
             }
         }
-        if (shortest == ninf<int>)
+        if (shortest == numeric_limits<long long>::max())
             break;
         for (int left = 0; left < left_vertices; ++left)
             next[left] = 0;

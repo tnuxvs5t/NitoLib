@@ -2,7 +2,8 @@ template <class T> struct nline_function {
     T slope{}, intercept{};
     using value_type = nwide_t<T>;
     constexpr value_type operator()(T x) const {
-        return value_type(slope) * value_type(x) + value_type(intercept);
+        return ni::nchecked_add(ni::nchecked_mul(ni::ngeom_widen(slope), ni::ngeom_widen(x)),
+                                ni::ngeom_widen(intercept));
     }
 };
 
@@ -109,11 +110,14 @@ template <signed_integral T, class Better = nless<nwide_t<T>>> class nlichao {
 template <signed_integral I, class F, class Better = nless<>>
 I nunimodal_arg(I first, I last, F function, Better better = {}) {
     npre(first < last);
-    while (__int128_t(last) - first > 4) {
-        I third = I((__int128_t(last) - first) / 3);
+    auto distance = [](I left, I right) { return __uint128_t(right) - __uint128_t(left); };
+    while (distance(first, last) > 4) {
+        I third = I(distance(first, last) / 3);
         I left = I(__int128_t(first) + third);
         I right = I(__int128_t(last) - 1 - third);
-        if (invoke(better, invoke(function, right), invoke(function, left)))
+        auto left_value = invoke(function, left);
+        auto right_value = invoke(function, right);
+        if (invoke(better, right_value, left_value))
             first = left + 1;
         else
             last = right + 1;

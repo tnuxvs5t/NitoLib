@@ -24,22 +24,26 @@ class nqueue_agg {
     explicit nqueue_agg(O operation) : operation_(move(operation)) {}
 
     int len() const noexcept {
-        npre(left_.size() + right_.size() <= size_t(INT_MAX));
+        npre(left_.size() <= size_t(INT_MAX));
+        npre(right_.size() <= size_t(INT_MAX) - left_.size());
         return int(left_.size() + right_.size());
     }
     bool empty() const noexcept { return left_.empty() && right_.empty(); }
 
     void push(T value) {
+        npre(len() < INT_MAX);
         T aggregate = right_.empty() ? value : operation_(right_.back().aggregate, value);
         right_.push_back({move(value), move(aggregate)});
     }
 
-    T& front() {
+    const T& front() {
         npre(!empty());
-        transfer();
-        return left_.back().value;
+        return left_.empty() ? right_.front().value : left_.back().value;
     }
-    const T& front() const { return const_cast<nqueue_agg*>(this)->front(); }
+    const T& front() const {
+        npre(!empty());
+        return left_.empty() ? right_.front().value : left_.back().value;
+    }
 
     T pop() {
         npre(!empty());

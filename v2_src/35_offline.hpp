@@ -22,8 +22,8 @@ template <nindexed Q> nvector<int> nmo_order(const Q& queries, int universe) {
 }
 
 template <nindexed Q, class AddLeft, class AddRight, class RemoveLeft, class RemoveRight, class Answer>
-void nrun_mo(const Q& queries, int universe, AddLeft add_left, AddRight add_right, RemoveLeft remove_left,
-             RemoveRight remove_right, Answer answer) {
+void nrun_mo(const Q& queries, int universe, AddLeft&& add_left, AddRight&& add_right,
+             RemoveLeft&& remove_left, RemoveRight&& remove_right, Answer&& answer) {
     auto order = nmo_order(queries, universe);
     int left = 0, right = 0;
     for (int position = 0; position < order.len(); ++position) {
@@ -42,6 +42,6 @@ void nrun_mo(const Q& queries, int universe, AddLeft add_left, AddRight add_righ
 }
 
 template <nindexed Q, class Add, class Remove, class Answer>
-void nrun_mo(const Q& queries, int universe, Add add, Remove remove, Answer answer) {
-    nrun_mo(queries, universe, add, add, remove, remove, move(answer));
+void nrun_mo(const Q& queries, int universe, Add&& add, Remove&& remove, Answer&& answer) {
+    nrun_mo(queries, universe, add, add, remove, remove, answer);
 }

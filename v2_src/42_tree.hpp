@@ -1,40 +1,13 @@
 template <ngraph_like G, class T, class Merge, class Vertex, class Lift>
     requires copyable<T>
 nvector<T> nreroot(const G& graph, T identity, Merge merge, Vertex vertex, Lift lift, int root = 0) {
-    int vertices = graph.vertices();
+    int vertices = ni::ngraph_vertices(graph);
     if (!vertices)
         return {};
-    npre(0 <= root && root < vertices);
-
-    auto adjacency = vector<vector<int>>(size_t(vertices));
-    long long arcs = 0;
-    for (int from = 0; from < vertices; ++from) {
-        auto edges = graph.neighbors(from);
-        nfor(edge, edges) {
-            int to = nedge_to(edge);
-            npre(0 <= to && to < vertices);
-            adjacency[from].push_back(to);
-            ++arcs;
-        }
-    }
-    npre(arcs == 2LL * (vertices - 1));
-
-    nvector<int> parent(vertices, npos), order;
-    order.reserve(vertices);
-    parent[root] = root;
-    order.push(root);
-    for (int position = 0; position < order.len(); ++position) {
-        int from = order[position];
-        for (int to : adjacency[from]) {
-            if (parent[to] == npos) {
-                parent[to] = from;
-                order.push(to);
-            } else {
-                npre(to == parent[from] || parent[to] == from);
-            }
-        }
-    }
-    npre(order.len() == vertices);
+    auto layout = ni::nbuild_tree_layout(graph, root, true);
+    auto& adjacency = layout.adjacency;
+    auto& parent = layout.parent;
+    auto& order = layout.order;
 
     nvector<T> down(vertices, identity), upward(vertices, identity), answer(vertices, identity);
     for (int position = vertices; position-- > 0;) {

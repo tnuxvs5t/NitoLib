@@ -4,11 +4,13 @@ template <class W = int> struct narc {
     friend bool operator==(const narc&, const narc&) = default;
 };
 
-template <integral E> constexpr int nedge_to(E vertex) { return int(vertex); }
+template <integral E> constexpr int nedge_to(E vertex) { return ni::nchecked_int(vertex); }
 template <class E>
-    requires requires(const E& edge) { edge.to; }
+    requires requires(const E& edge) {
+        requires integral<remove_cvref_t<decltype(edge.to)>>;
+    }
 constexpr int nedge_to(const E& edge) {
-    return int(edge.to);
+    return ni::nchecked_int(edge.to);
 }
 
 template <integral E> constexpr int nedge_weight(E) { return 1; }
@@ -37,9 +39,19 @@ template <class F> ngraph_view(int, F) -> ngraph_view<F>;
 
 template <class G>
 concept ngraph_like = requires(const G& graph, int vertex) {
-    { graph.vertices() } -> convertible_to<int>;
+    requires integral<remove_cvref_t<decltype(graph.vertices())>>;
+    requires(!same_as<remove_cvref_t<decltype(graph.vertices())>, bool>);
     graph.neighbors(vertex);
+    requires nenumerable<decltype(graph.neighbors(vertex))>;
 };
+
+namespace ni {
+template <ngraph_like G> constexpr int ngraph_vertices(const G& graph) {
+    int vertices = nchecked_int(graph.vertices());
+    npre(vertices >= 0);
+    return vertices;
+}
+} // namespace ni
 
 template <class W = int> class ngraph_list {
     vector<vector<narc<W>>> adjacency_;
@@ -58,6 +70,8 @@ template <class W = int> class ngraph_list {
 
     void add(int from, int to, W weight = W{1}) {
         npre(0 <= from && from < vertices() && 0 <= to && to < vertices());
+        npre(arcs_ < INT_MAX);
+        npre(adjacency_[from].size() < size_t(INT_MAX));
         adjacency_[from].push_back({to, move(weight)});
         ++arcs_;
     }
@@ -75,7 +89,7 @@ template <class W = int> class ngraph_list {
 };
 
 template <ngraph_like G> nvector<int> nbfs(const G& graph, int source) {
-    int vertices = graph.vertices();
+    int vertices = ni::ngraph_vertices(graph);
     npre(0 <= source && source < vertices);
     nvector<int> distance(vertices, npos);
     ndeque<int> queue;
@@ -83,7 +97,7 @@ template <ngraph_like G> nvector<int> nbfs(const G& graph, int source) {
     queue.pushr(source);
     while (!queue.empty()) {
         int vertex = queue.popl();
-        auto adjacency = graph.neighbors(vertex);
+        decltype(auto) adjacency = graph.neighbors(vertex);
         nfor(edge, adjacency) {
             int to = nedge_to(edge);
             npre(0 <= to && to < vertices);
@@ -97,10 +111,11 @@ template <ngraph_like G> nvector<int> nbfs(const G& graph, int source) {
 }
 
 template <class D = long long, ngraph_like G>
-    requires is_arithmetic_v<D>
-nvector<D> ndijkstra(const G& graph, int source, D infinity = ninf<D>) {
-    int vertices = graph.vertices();
+    requires is_arithmetic_v<D> && (!same_as<remove_cv_t<D>, bool>)
+nvector<D> ndijkstra(const G& graph, int source, D infinity = nmin<D>{}.id()) {
+    int vertices = ni::ngraph_vertices(graph);
     npre(0 <= source && source < vertices);
+    npre(D{} <= infinity);
     nvector<D> distance(vertices, infinity);
     using state = pair<D, int>;
     priority_queue<state, vector<state>, greater<state>> queue;
@@ -112,10 +127,10 @@ nvector<D> ndijkstra(const G& graph, int source, D infinity = ninf<D>) {
         queue.pop();
         if (current != distance[vertex])
             continue;
-        auto adjacency = graph.neighbors(vertex);
+        decltype(auto) adjacency = graph.neighbors(vertex);
         nfor(edge, adjacency) {
             int to = nedge_to(edge);
-            D weight = D(nedge_weight(edge));
+            D weight = ni::nchecked_number<D>(nedge_weight(edge));
             npre(0 <= to && to < vertices);
             npre(!(weight < D{}));
             if (current <= infinity && weight <= infinity - current) {

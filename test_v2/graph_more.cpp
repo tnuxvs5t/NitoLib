@@ -1,6 +1,11 @@
 #include "common.hpp"
 
+template <class C>
+concept nhas_maxflow = requires { typename nmaxflow<C>; };
+
 int main() {
+    static_assert(nhas_maxflow<long long> && !nhas_maxflow<double> && !nhas_maxflow<bool>);
+
     ngraph_list<int> binary(6);
     binary.add(0, 1, 0);
     binary.add(0, 2, 1);

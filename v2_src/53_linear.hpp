@@ -98,7 +98,7 @@ concept nmatrix_like = requires(const A& matrix, int row, int column) {
 };
 
 template <class T, class Add = nadd<T>, class Mul = nmul<T>>
-    requires nmonoid<Add, T> && nmonoid<Mul, T>
+    requires nsemiring<Add, Mul, T>
 nmatrix<T> nmatrix_identity(int n, Add add = {}, Mul multiply = {}) {
     npre(n >= 0);
     nmatrix<T> result(n, n, add.id());
@@ -109,9 +109,11 @@ nmatrix<T> nmatrix_identity(int n, Add add = {}, Mul multiply = {}) {
 
 template <nmatrix_like A, nmatrix_like B, class Add = nadd<remove_cvref_t<decltype(declval<const A&>()(0, 0))>>,
           class Mul = nmul<remove_cvref_t<decltype(declval<const A&>()(0, 0))>>>
+    requires nsemiring<Add, Mul, remove_cvref_t<decltype(declval<const A&>()(0, 0))>> &&
+             same_as<remove_cvref_t<decltype(declval<const A&>()(0, 0))>,
+                     remove_cvref_t<decltype(declval<const B&>()(0, 0))>>
 auto nmatmul(const A& a, const B& b, Add add = {}, Mul multiply = {}) {
     using T = remove_cvref_t<decltype(a(0, 0))>;
-    static_assert(nmonoid<Add, T> && nmonoid<Mul, T>);
     npre(a.cols() == b.rows());
     nmatrix<T> result(a.rows(), b.cols(), add.id());
     for (int i = 0; i < a.rows(); ++i)
@@ -122,6 +124,7 @@ auto nmatmul(const A& a, const B& b, Add add = {}, Mul multiply = {}) {
 }
 
 template <class T, class Add = nadd<T>, class Mul = nmul<T>>
+    requires nsemiring<Add, Mul, T>
 nmatrix<T> nmatpow(nmatrix<T> base, uint64_t exponent, Add add = {}, Mul multiply = {}) {
     npre(base.rows() == base.cols());
     auto result = nmatrix_identity<T>(base.rows(), add, multiply);
@@ -135,7 +138,7 @@ nmatrix<T> nmatpow(nmatrix<T> base, uint64_t exponent, Add add = {}, Mul multipl
     return result;
 }
 
-template <class T> int nrref(nmatrix<T>& matrix, nvector<int>* pivot_columns = nullptr) {
+template <nexact_field_element T> int nrref(nmatrix<T>& matrix, nvector<int>* pivot_columns = nullptr) {
     if (pivot_columns)
         pivot_columns->clear();
     int row = 0;
@@ -164,7 +167,7 @@ template <class T> int nrref(nmatrix<T>& matrix, nvector<int>* pivot_columns = n
     return row;
 }
 
-template <class T> T ndeterminant(nmatrix<T> matrix) {
+template <nexact_field_element T> T ndeterminant(nmatrix<T> matrix) {
     npre(matrix.rows() == matrix.cols());
     T determinant{1};
     for (int column = 0; column < matrix.cols(); ++column) {
@@ -194,9 +197,11 @@ template <class T> struct nlinear_solution {
     nvector<nvector<T>> basis;
 };
 
-template <class T, nindexed B> nmaybe<nlinear_solution<T>> nlinear_solve(nmatrix<T> coefficients, const B& values) {
+template <nexact_field_element T, nindexed B>
+nmaybe<nlinear_solution<T>> nlinear_solve(nmatrix<T> coefficients, const B& values) {
     npre(coefficients.rows() == nlen(values));
     int equations = coefficients.rows(), variables = coefficients.cols();
+    npre(variables < INT_MAX);
     nmatrix<T> augmented(equations, variables + 1);
     for (int i = 0; i < equations; ++i) {
         for (int j = 0; j < variables; ++j)

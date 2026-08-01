@@ -34,6 +34,7 @@ template <nindexed Text, nindexed Pattern> nvector<int> nkmp_find(const Text& te
     int n = nlen(text), m = nlen(pattern);
     nvector<int> result;
     if (!m) {
+        npre(n < INT_MAX);
         result.reserve(n + 1);
         for (int i = 0; i <= n; ++i)
             result.push(i);
@@ -47,7 +48,7 @@ template <nindexed Text, nindexed Pattern> nvector<int> nkmp_find(const Text& te
         if (text[i] == pattern[matched])
             ++matched;
         if (matched == m) {
-            result.push(i + 1 - m);
+            result.push(i - m + 1);
             matched = prefix[matched - 1];
         }
     }
@@ -64,7 +65,8 @@ class npalindrome_index {
         : odd_(nlen(sequence), 0), even_(nlen(sequence), 0) {
         int n = nlen(sequence);
         for (int i = 0, left = 0, right = -1; i < n; ++i) {
-            int radius = i > right ? 1 : min(odd_[left + right - i], right - i + 1);
+            int mirror = i > right ? 0 : int(1LL * left + right - i);
+            int radius = i > right ? 1 : min(odd_[mirror], right - i + 1);
             while (0 <= i - radius && i + radius < n && sequence[i - radius] == sequence[i + radius])
                 ++radius;
             odd_[i] = radius;
@@ -74,7 +76,8 @@ class npalindrome_index {
             }
         }
         for (int i = 0, left = 0, right = -1; i < n; ++i) {
-            int radius = i > right ? 0 : min(even_[left + right - i + 1], right - i + 1);
+            int mirror = i > right ? 0 : int(1LL * left + right - i + 1);
+            int radius = i > right ? 0 : min(even_[mirror], right - i + 1);
             while (0 <= i - radius - 1 && i + radius < n &&
                    sequence[i - radius - 1] == sequence[i + radius])
                 ++radius;
@@ -100,7 +103,7 @@ class npalindrome_index {
         int length = right - left;
         if (!length)
             return true;
-        int center = (left + right) / 2;
+        int center = left + (right - left) / 2;
         return length & 1 ? odd_[center] >= length / 2 + 1 : even_[center] >= length / 2;
     }
 };
@@ -122,15 +125,15 @@ template <nindexed A, class C = nless<>> nvector<int> nsuffix_array(const A& seq
         nsort(suffix, [&](int a, int b) {
             if (rank[a] != rank[b])
                 return rank[a] < rank[b];
-            int rank_a = a + length < n ? rank[a + length] : npos;
-            int rank_b = b + length < n ? rank[b + length] : npos;
+            int rank_a = 1LL * a + length < n ? rank[a + length] : npos;
+            int rank_b = 1LL * b + length < n ? rank[b + length] : npos;
             return rank_a < rank_b;
         });
         next_rank[suffix[0]] = 0;
         for (int i = 1; i < n; ++i) {
             int a = suffix[i - 1], b = suffix[i];
-            pair<int, int> key_a{rank[a], a + length < n ? rank[a + length] : npos};
-            pair<int, int> key_b{rank[b], b + length < n ? rank[b + length] : npos};
+            pair<int, int> key_a{rank[a], 1LL * a + length < n ? rank[a + length] : npos};
+            pair<int, int> key_b{rank[b], 1LL * b + length < n ? rank[b + length] : npos};
             next_rank[b] = next_rank[a] + int(key_a != key_b);
         }
         swap(rank, next_rank);
@@ -144,8 +147,11 @@ template <nindexed A> nvector<int> nlcp_array(const A& sequence, const nvector<i
     int n = nlen(sequence);
     npre(suffix.len() == n);
     nvector<int> rank(n), lcp(n, 0);
+    nvector<unsigned char> seen(n, 0);
     for (int i = 0; i < n; ++i) {
         npre(0 <= suffix[i] && suffix[i] < n);
+        npre(!seen[suffix[i]]);
+        seen[suffix[i]] = 1;
         rank[suffix[i]] = i;
     }
     int common = 0;

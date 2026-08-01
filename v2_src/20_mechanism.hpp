@@ -26,6 +26,7 @@ auto nsuffix_scan(const A& a, O op = {}) {
 }
 
 template <signed_integral I, class P> constexpr I nfirst_true(I first, I last, P predicate) {
+    npre(first <= last);
     while (first < last) {
         I middle = midpoint(first, last);
         predicate(middle) ? last = middle : first = middle + 1;
@@ -34,7 +35,7 @@ template <signed_integral I, class P> constexpr I nfirst_true(I first, I last, P
 }
 
 template <signed_integral I, class P> constexpr I nlast_true(I first, I last, P predicate) {
-    npre(first > numeric_limits<I>::lowest());
+    npre(first <= last && first > numeric_limits<I>::lowest());
     while (first < last) {
         I middle = midpoint(first, last);
         if (predicate(middle))
@@ -62,8 +63,12 @@ template <class T> class nrollback {
         npre(n >= 0);
         history_.reserve(size_t(n));
     }
-    void save(T& target) { history_.push_back({addressof(target), target}); }
+    void save(T& target) {
+        npre(history_.size() < size_t(INT_MAX));
+        history_.push_back({addressof(target), target});
+    }
     void assign(T& target, T value) {
+        npre(history_.size() < size_t(INT_MAX));
         history_.push_back({addressof(target), move(target)});
         target = move(value);
     }

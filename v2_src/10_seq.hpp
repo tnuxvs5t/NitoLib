@@ -52,7 +52,10 @@ template <class T> class nvector {
     }
     void clear() noexcept { storage_.clear(); }
 
-    template <class... A> T& push(A&&... args) { return storage_.emplace_back(forward<A>(args)...); }
+    template <class... A> T& push(A&&... args) {
+        npre(storage_.size() < size_t(INT_MAX));
+        return storage_.emplace_back(forward<A>(args)...);
+    }
     T pop() {
         npre(!empty());
         T value = move(storage_.back());
@@ -108,8 +111,14 @@ template <class T> class ndeque {
     const T* get(int i) const noexcept { return 0 <= i && i < len() ? addressof(storage_[i]) : nullptr; }
     T get(int i, T fallback) const { return 0 <= i && i < len() ? storage_[i] : move(fallback); }
 
-    template <class... A> T& pushr(A&&... args) { return storage_.emplace_back(forward<A>(args)...); }
-    template <class... A> T& pushl(A&&... args) { return storage_.emplace_front(forward<A>(args)...); }
+    template <class... A> T& pushr(A&&... args) {
+        npre(storage_.size() < size_t(INT_MAX));
+        return storage_.emplace_back(forward<A>(args)...);
+    }
+    template <class... A> T& pushl(A&&... args) {
+        npre(storage_.size() < size_t(INT_MAX));
+        return storage_.emplace_front(forward<A>(args)...);
+    }
     T popr() {
         npre(!empty());
         T value = move(storage_.back());
@@ -154,13 +163,19 @@ class narray {
         long long product = 1;
         for (int extent : shape) {
             npre(extent >= 0);
-            if (extent == 0)
-                return 0;
+            if (extent == 0) {
+                product = 0;
+                continue;
+            }
+            if (product == 0)
+                continue;
             npre(product <= INT_MAX / extent);
             product *= extent;
         }
         return int(product);
     }
+
+    template <integral I> static constexpr int coordinate(I value) { return ni::nchecked_int(value); }
 
   public:
     using value_type = T;
@@ -210,23 +225,24 @@ class narray {
     }
 
     template <class... I>
-        requires(sizeof...(I) == Rank && (convertible_to<I, int> && ...))
+        requires(sizeof...(I) == Rank && (integral<remove_cvref_t<I>> && ...))
     T& operator()(I... coord) {
-        return (*this)(coord_type{int(coord)...});
+        return (*this)(coord_type{coordinate(coord)...});
     }
     template <class... I>
-        requires(sizeof...(I) == Rank && (convertible_to<I, int> && ...))
+        requires(sizeof...(I) == Rank && (integral<remove_cvref_t<I>> && ...))
     const T& operator()(I... coord) const {
-        return (*this)(coord_type{int(coord)...});
+        return (*this)(coord_type{coordinate(coord)...});
     }
 };
 
 namespace ni {
 template <class A, class C> void nheap_sift(A& a, int root, int count, C& compare) {
     for (;;) {
-        int child = root * 2 + 1;
-        if (child >= count)
+        long long first_child = 2LL * root + 1;
+        if (first_child >= count)
             return;
+        int child = int(first_child);
         if (child + 1 < count && compare(a[child], a[child + 1]))
             ++child;
         if (!compare(a[root], a[child]))
@@ -248,20 +264,20 @@ template <class A, class C> void nheap_sort(A& a, C& compare) {
 } // namespace ni
 
 template <class A, class C = nless<>>
-    requires nswappable_indexed<A>
-void nsort(A& a, C compare = {}) {
+    requires nviewable_indexed<A&&> && nswappable_indexed<remove_reference_t<A>>
+void nsort(A&& a, C compare = {}) {
     int n = nlen(a);
     if (n < 2)
         return;
-    if constexpr (ncontiguous_indexed<A>)
+    if constexpr (ncontiguous_indexed<remove_reference_t<A>>)
         sort(a.data(), a.data() + n, move(compare));
     else
         ni::nheap_sort(a, compare);
 }
 
 template <class A>
-    requires nswappable_indexed<A>
-void nreverse_inplace(A& a, int l = 0, int r = npos) {
+    requires nviewable_indexed<A&&> && nswappable_indexed<remove_reference_t<A>>
+void nreverse_inplace(A&& a, int l = 0, int r = npos) {
     if (r == npos)
         r = nlen(a);
     npre(0 <= l && l <= r && r <= nlen(a));
@@ -312,8 +328,9 @@ auto nfold(const A& a, O op = {}) {
 }
 
 template <class A, class E = nequal<>>
-    requires nreference_indexed<A> && (!is_const_v<remove_reference_t<nindex_reference_t<A>>>)
-int nunique_compact(A& a, E equal = {}) {
+    requires nviewable_indexed<A&&> && nreference_indexed<remove_reference_t<A>> &&
+             (!is_const_v<remove_reference_t<nindex_reference_t<remove_reference_t<A>>>>)
+int nunique_compact(A&& a, E equal = {}) {
     if (nlen(a) == 0)
         return 0;
     int kept = 1;
@@ -327,9 +344,10 @@ int nunique_compact(A& a, E equal = {}) {
 }
 
 template <class A, class E = nequal<>>
-    requires nresizable<A> && nreference_indexed<A> &&
-             (!is_const_v<remove_reference_t<nindex_reference_t<A>>>)
-int nunique(A& a, E equal = {}) {
+    requires nviewable_indexed<A&&> && nresizable<remove_reference_t<A>> &&
+             nreference_indexed<remove_reference_t<A>> &&
+             (!is_const_v<remove_reference_t<nindex_reference_t<remove_reference_t<A>>>>)
+int nunique(A&& a, E equal = {}) {
     int kept = nunique_compact(a, move(equal));
     a.resize(kept);
     return kept;

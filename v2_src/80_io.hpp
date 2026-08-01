@@ -1,6 +1,8 @@
 namespace ni {
 template <class T>
-inline constexpr bool nio_integer = is_integral_v<T> || same_as<T, __int128_t> || same_as<T, __uint128_t>;
+inline constexpr bool nio_integer =
+    (!same_as<remove_cv_t<T>, bool>) &&
+    (is_integral_v<T> || same_as<T, __int128_t> || same_as<T, __uint128_t>);
 
 template <class T> struct nio_unsigned_type {
     using type = make_unsigned_t<T>;
@@ -60,6 +62,7 @@ class ninput {
             magnitude = magnitude * 10 + digit;
             character = get();
         } while ('0' <= character && character <= '9');
+        npre(character == EOF || character <= ' ');
 
         if constexpr (is_signed_v<T> || same_as<T, __int128_t>) {
             __uint128_t positive_limit = __uint128_t(numeric_limits<T>::max());

@@ -1,6 +1,12 @@
 #include "common.hpp"
 
+template <class T>
+concept nhas_extgcd = requires(T value) { nextgcd(value, value); };
+
 int main() {
+    static_assert(ninteger<int> && ninteger<__int128_t> && !ninteger<bool>);
+    static_assert(nhas_extgcd<long long> && !nhas_extgcd<__int128_t>);
+
     ntest(nmag(LLONG_MIN) == (1ULL << 63));
     ntest(ngcd(84, 30) == 6 && ngcd(LLONG_MIN, 0LL) == (1ULL << 63));
     ntest(nlcm(12, -18) == 36);

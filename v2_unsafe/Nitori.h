@@ -68,6 +68,80 @@ inline constexpr T nninf = [] {
         return T{};
 }();
 
+namespace ni {
+template <integral To, integral From> constexpr To nchecked_integral_cast(From value) {
+    if constexpr (signed_integral<From> && signed_integral<To>) {
+        npre(__int128_t(value) >= __int128_t(numeric_limits<To>::lowest()));
+        npre(__int128_t(value) <= __int128_t(numeric_limits<To>::max()));
+    } else if constexpr (signed_integral<From>) {
+        npre(value >= 0);
+        npre(__uint128_t(value) <= __uint128_t(numeric_limits<To>::max()));
+    } else {
+        npre(__uint128_t(value) <= __uint128_t(numeric_limits<To>::max()));
+    }
+    return To(value);
+}
+
+template <integral I> constexpr int nchecked_int(I value) {
+    return nchecked_integral_cast<int>(value);
+}
+
+template <class To, class From>
+    requires is_arithmetic_v<To> && is_arithmetic_v<From>
+constexpr To nchecked_number(From value) {
+    if constexpr (integral<To> && integral<From>) {
+        return nchecked_integral_cast<To>(value);
+    } else {
+        long double wide = static_cast<long double>(value);
+        npre(!isnan(wide));
+        if constexpr (integral<To>) {
+            npre(isfinite(wide) && trunc(wide) == wide);
+            long double limit = ldexp(1.0L, numeric_limits<To>::digits);
+            if constexpr (signed_integral<To>)
+                npre(-limit <= wide && wide < limit);
+            else
+                npre(0 <= wide && wide < limit);
+        } else if (isfinite(wide)) {
+            npre(wide >= -static_cast<long double>(numeric_limits<To>::max()));
+            npre(wide <= static_cast<long double>(numeric_limits<To>::max()));
+        } else {
+            npre(numeric_limits<To>::has_infinity);
+        }
+        return static_cast<To>(value);
+    }
+}
+
+template <class T> constexpr T nchecked_add(T a, T b) {
+    if constexpr (is_integral_v<T>) {
+        T result;
+        npre(!__builtin_add_overflow(a, b, &result));
+        return result;
+    } else {
+        return a + b;
+    }
+}
+
+template <class T> constexpr T nchecked_sub(T a, T b) {
+    if constexpr (is_integral_v<T>) {
+        T result;
+        npre(!__builtin_sub_overflow(a, b, &result));
+        return result;
+    } else {
+        return a - b;
+    }
+}
+
+template <class T> constexpr T nchecked_mul(T a, T b) {
+    if constexpr (is_integral_v<T>) {
+        T result;
+        npre(!__builtin_mul_overflow(a, b, &result));
+        return result;
+    } else {
+        return a * b;
+    }
+}
+} // namespace ni
+
 template <class T> class nmaybe {
     optional<T> value_;
 
@@ -113,15 +187,37 @@ template <class T, class U> constexpr bool nchmax(T& a, U&& b) {
     return false;
 }
 
-template <class A> constexpr int nlen(const A& a) {
-    if constexpr (requires { a.len(); }) {
+namespace ni {
+template <class A>
+concept nhas_len_member = requires(const A& a) { a.len(); };
+
+template <class A>
+concept nhas_integral_len = requires(const A& a) {
+    a.len();
+    requires integral<remove_cvref_t<decltype(a.len())>>;
+};
+
+template <class A>
+concept nhas_integral_size = requires(const A& a) {
+    a.size();
+    requires integral<remove_cvref_t<decltype(a.size())>>;
+};
+} // namespace ni
+
+template <class A>
+    requires ni::nhas_integral_len<A> ||
+             ((!ni::nhas_len_member<A>) && ni::nhas_integral_size<A>)
+constexpr int nlen(const A& a) {
+    if constexpr (ni::nhas_integral_len<A>) {
         auto n = a.len();
-        npre(0 <= n && uint64_t(n) <= uint64_t(INT_MAX));
-        return int(n);
+        if constexpr (signed_integral<remove_cvref_t<decltype(n)>>)
+            npre(n >= 0);
+        return ni::nchecked_int(n);
     } else {
         auto n = a.size();
-        npre(uint64_t(n) <= uint64_t(INT_MAX));
-        return int(n);
+        if constexpr (signed_integral<remove_cvref_t<decltype(n)>>)
+            npre(n >= 0);
+        return ni::nchecked_int(n);
     }
 }
 
@@ -183,10 +279,38 @@ concept ngroup = nmonoid<O, T> && requires(const O& op, T a) {
 template <class O, class T>
 concept ncommutative_monoid = nmonoid<O, T> && ndeclares<O, nlaw::commutative>;
 
-template <class T> inline constexpr bool nadd_group = is_arithmetic_v<T>;
+template <class Add, class Multiply, class T>
+inline constexpr bool nsemiring_laws = false;
+
+template <class Add, class Multiply, class T>
+concept nsemiring = ncommutative_monoid<Add, T> && nmonoid<Multiply, T> &&
+                    nsemiring_laws<remove_cvref_t<Add>, remove_cvref_t<Multiply>, T>;
+
+template <class T>
+inline constexpr bool nadd_group = is_arithmetic_v<T> && (!same_as<remove_cv_t<T>, bool>);
+
+template <class T> inline constexpr bool nexact_field = false;
+
+template <class T>
+concept nexact_field_element = nexact_field<remove_cvref_t<T>> && copyable<remove_cvref_t<T>> &&
+                               requires(remove_cvref_t<T> a, const remove_cvref_t<T>& b) {
+                                   remove_cvref_t<T>{};
+                                   remove_cvref_t<T>{1};
+                                   { a == b } -> convertible_to<bool>;
+                                   { a != b } -> convertible_to<bool>;
+                                   { a * b } -> convertible_to<remove_cvref_t<T>>;
+                                   { a *= b } -> same_as<remove_cvref_t<T>&>;
+                                   { a -= b } -> same_as<remove_cvref_t<T>&>;
+                                   { a / b } -> convertible_to<remove_cvref_t<T>>;
+                                   { -a } -> convertible_to<remove_cvref_t<T>>;
+                               };
 
 template <class A, class S, class F>
-concept naction = copyable<F> && requires(const A& action, S aggregate, const F& tag, int length) {
+inline constexpr bool naction_laws = false;
+
+template <class A, class S, class F>
+concept naction = copyable<F> && naction_laws<remove_cvref_t<A>, S, F> &&
+                  requires(const A& action, S aggregate, const F& tag, int length) {
     { action.tag_id() } -> convertible_to<F>;
     { action.compose(tag, tag) } -> convertible_to<F>;
     { action.apply(move(aggregate), tag, length) } -> convertible_to<S>;
@@ -253,7 +377,14 @@ template <class T> struct nxor {
 template <class T> struct nmin {
     static constexpr nlaw laws =
         nlaw::associative | nlaw::identity | nlaw::commutative | nlaw::idempotent;
-    constexpr T id() const { return ninf<T>; }
+    constexpr T id() const
+        requires numeric_limits<T>::is_specialized
+    {
+        if constexpr (numeric_limits<T>::has_infinity)
+            return numeric_limits<T>::infinity();
+        else
+            return numeric_limits<T>::max();
+    }
     constexpr T operator()(const T& a, const T& b) const
         requires requires { b < a; }
     {
@@ -264,7 +395,14 @@ template <class T> struct nmin {
 template <class T> struct nmax {
     static constexpr nlaw laws =
         nlaw::associative | nlaw::identity | nlaw::commutative | nlaw::idempotent;
-    constexpr T id() const { return nninf<T>; }
+    constexpr T id() const
+        requires numeric_limits<T>::is_specialized
+    {
+        if constexpr (numeric_limits<T>::has_infinity)
+            return -numeric_limits<T>::infinity();
+        else
+            return numeric_limits<T>::lowest();
+    }
     constexpr T operator()(const T& a, const T& b) const
         requires requires { a < b; }
     {
@@ -278,6 +416,14 @@ template <class T> struct naddsum_action {
     constexpr T apply(T sum, const T& delta, int length) const { return sum + delta * T(length); }
 };
 
+template <integral T>
+    requires(!same_as<remove_cv_t<T>, bool>)
+inline constexpr bool naction_laws<naddsum_action<T>, T, T> = true;
+
+template <integral T>
+    requires(!same_as<remove_cv_t<T>, bool>)
+inline constexpr bool nsemiring_laws<nadd<T>, nmul<T>, T> = true;
+
 // ---- 03_ref.hpp ----
 template <class T> class nspan {
     T* data_ = nullptr;
@@ -286,6 +432,7 @@ template <class T> class nspan {
   public:
     using value_type = remove_cv_t<T>;
     using reference = T&;
+    using nview_tag = void;
 
     constexpr nspan() = default;
     constexpr nspan(T* data, int size) : data_(data), size_(size) {
@@ -324,6 +471,7 @@ template <class F> class nview {
 
   public:
     using accessor_type = F;
+    using nview_tag = void;
 
     constexpr nview(int size, F access) : size_(size), access_(move(access)) { npre(size >= 0); }
 
@@ -373,37 +521,90 @@ concept nresizable = requires(A& a, int n) {
     a.resize(n);
 };
 
+template <class A>
+concept nview_object = requires { typename remove_cvref_t<A>::nview_tag; };
+
+template <class A>
+concept nviewable_indexed = nindexed<remove_reference_t<A>> &&
+                            (is_lvalue_reference_v<A> || nview_object<remove_cvref_t<A>>) &&
+                            (!nview_object<remove_cvref_t<A>> ||
+                             constructible_from<remove_cvref_t<A>, A>);
+
 namespace ni {
-template <class A> struct nindex_access {
-    A* owner;
-    constexpr decltype(auto) operator()(int i) const { return (*owner)[i]; }
+template <class A> class nindexed_holder {
+    using value_type = remove_cvref_t<A>;
+    static constexpr bool stores_view = nview_object<value_type>;
+    using pointer_type = remove_reference_t<A>*;
+    using storage_type = conditional_t<stores_view, value_type, pointer_type>;
+    storage_type storage_;
+
+    static constexpr storage_type make(A&& value) {
+        if constexpr (stores_view)
+            return forward<A>(value);
+        else
+            return addressof(value);
+    }
+
+  public:
+    constexpr explicit nindexed_holder(A&& value) : storage_(make(forward<A>(value))) {
+        static_assert(stores_view || is_lvalue_reference_v<A>);
+    }
+
+    constexpr decltype(auto) get() {
+        if constexpr (stores_view)
+            return (storage_);
+        else
+            return (*storage_);
+    }
+    constexpr decltype(auto) get() const {
+        if constexpr (stores_view)
+            return as_const(storage_);
+        else
+            return (*storage_);
+    }
 };
+
+template <class A>
+    requires nviewable_indexed<A&&>
+constexpr auto nhold_indexed(A&& value) {
+    return nindexed_holder<A&&>(forward<A>(value));
+}
 } // namespace ni
 
-template <class A> constexpr auto nall(A& a) {
-    return nview(nlen(a), ni::nindex_access<A>{addressof(a)});
-}
-template <class A> auto nall(A&&) = delete;
-
-template <class A> constexpr auto nsub(A& a, int l, int r) {
-    npre(0 <= l && l <= r && r <= nlen(a));
-    return nview(r - l, [owner = addressof(a), l](int i) -> decltype(auto) { return (*owner)[l + i]; });
-}
-
-template <class F> constexpr auto nsub(nview<F> view, int l, int r) {
-    npre(0 <= l && l <= r && r <= view.len());
-    return nview(r - l, [view = move(view), l](int i) -> decltype(auto) { return view[l + i]; });
+template <class A>
+    requires nviewable_indexed<A&&>
+constexpr auto nall(A&& a) {
+    if constexpr (nview_object<remove_cvref_t<A>>) {
+        return remove_cvref_t<A>(forward<A>(a));
+    } else {
+        auto owner = ni::nhold_indexed(forward<A>(a));
+        int size = nlen(owner.get());
+        return nview(size,
+                     [owner = move(owner)](int i) -> decltype(auto) { return owner.get()[i]; });
+    }
 }
 
-template <class A> constexpr auto nstride(A& a, int first, int count, int step) {
+template <class A>
+    requires nviewable_indexed<A&&>
+constexpr auto nsub(A&& a, int l, int r) {
+    auto owner = ni::nhold_indexed(forward<A>(a));
+    npre(0 <= l && l <= r && r <= nlen(owner.get()));
+    return nview(r - l,
+                 [owner = move(owner), l](int i) -> decltype(auto) { return owner.get()[l + i]; });
+}
+
+template <class A>
+    requires nviewable_indexed<A&&>
+constexpr auto nstride(A&& a, int first, int count, int step) {
+    auto owner = ni::nhold_indexed(forward<A>(a));
     npre(count >= 0);
     if (count) {
         long long last = first + 1LL * (count - 1) * step;
-        npre(0 <= first && first < nlen(a));
-        npre(0 <= last && last < nlen(a));
+        npre(0 <= first && first < nlen(owner.get()));
+        npre(0 <= last && last < nlen(owner.get()));
     }
-    return nview(count, [owner = addressof(a), first, step](int i) -> decltype(auto) {
-        return (*owner)[int(first + 1LL * i * step)];
+    return nview(count, [owner = move(owner), first, step](int i) -> decltype(auto) {
+        return owner.get()[int(first + 1LL * i * step)];
     });
 }
 
@@ -415,16 +616,16 @@ template <signed_integral T> class nrange_t {
     constexpr nrange_t() = default;
     constexpr nrange_t(T first, T last, T step = 1) : first_(first), last_(last), step_(step) {
         npre(step != 0);
+        (void)len();
     }
 
     constexpr int len() const {
-        using W = __int128_t;
-        W first = first_, last = last_, step = step_;
-        if ((step > 0 && first >= last) || (step < 0 && first <= last))
+        if ((step_ > 0 && first_ >= last_) || (step_ < 0 && first_ <= last_))
             return 0;
-        W distance = step > 0 ? last - first : first - last;
-        W stride = step > 0 ? step : -step;
-        W count = (distance + stride - 1) / stride;
+        __uint128_t first = __uint128_t(first_), last = __uint128_t(last_), step = __uint128_t(step_);
+        __uint128_t distance = step_ > 0 ? last - first : first - last;
+        __uint128_t stride = step_ > 0 ? step : __uint128_t{} - step;
+        __uint128_t count = distance / stride + (distance % stride != 0);
         npre(count <= INT_MAX);
         return int(count);
     }
@@ -438,12 +639,12 @@ template <signed_integral T> class nrange_t {
         constexpr T val() const { return value; }
         constexpr int idx() const { return index; }
         constexpr void next() {
-            using W = __int128_t;
-            W next = W(value) + step;
-            if (next < numeric_limits<T>::lowest() || next > numeric_limits<T>::max())
+            bool overflow = step > 0 ? value > numeric_limits<T>::max() - step
+                                     : value < numeric_limits<T>::lowest() - step;
+            if (overflow)
                 value = last;
             else
-                value = T(next);
+                value += step;
             ++index;
         }
     };
@@ -464,7 +665,7 @@ template <integral I> constexpr int ni_nloop_count(I count) {
     } else if (count == 0) {
         return 0;
     }
-    npre(uint64_t(count) <= uint64_t(INT_MAX));
+    npre(__uint128_t(count) <= __uint128_t(INT_MAX));
     return int(count);
 }
 
@@ -506,6 +707,17 @@ template <class A>
 constexpr auto nenumerate(A&& a) {
     return ni::nowned_index_cursor<remove_cvref_t<A>>{forward<A>(a)};
 }
+
+template <class A> using nenumerator_t = remove_cvref_t<decltype(nenumerate(declval<A>()))>;
+
+template <class A>
+concept nenumerable = requires(A&& sequence) { nenumerate(forward<A>(sequence)); } &&
+                      requires(nenumerator_t<A>& cursor) {
+                          { cursor.ok() } -> convertible_to<bool>;
+                          cursor.val();
+                          { cursor.idx() } -> convertible_to<int>;
+                          cursor.next();
+                      };
 
 namespace ni {
 struct ncursor_sentinel {};
@@ -553,83 +765,119 @@ template <bool WithIndex, class A> constexpr auto ni_ncursor_range(A&& a) {
 #define nrrep(index, count)                                                                                           \
     for (int index : ni_ncursor_range<false>(nrange(ni_nloop_count((count)) - 1, -1, -1)))
 
-template <class A> constexpr auto nreverse(A& a) {
-    return nstride(a, nlen(a) - 1, nlen(a), -1);
+template <class A>
+    requires nviewable_indexed<A&&>
+constexpr auto nreverse(A&& a) {
+    int size = nlen(a);
+    return nstride(forward<A>(a), size - 1, size, -1);
 }
 
-template <class A, class F> constexpr auto nproject(A& a, F projection) {
-    return nview(nlen(a), [owner = addressof(a), projection = move(projection)](int i) -> decltype(auto) {
-        return invoke(projection, (*owner)[i]);
+template <class A, class F>
+    requires nviewable_indexed<A&&>
+constexpr auto nproject(A&& a, F projection) {
+    auto owner = ni::nhold_indexed(forward<A>(a));
+    int size = nlen(owner.get());
+    return nview(size, [owner = move(owner), projection = move(projection)](int i) -> decltype(auto) {
+        return invoke(projection, owner.get()[i]);
     });
 }
 
-template <class A, class B> class nzip_view {
-    A* left_;
-    B* right_;
+template <class L, class R> class nzip_view {
+    L left_;
+    R right_;
 
   public:
-    constexpr nzip_view(A& left, B& right) : left_(addressof(left)), right_(addressof(right)) {}
-    constexpr int len() const { return min(nlen(*left_), nlen(*right_)); }
+    using nview_tag = void;
+
+    constexpr nzip_view(L left, R right) : left_(move(left)), right_(move(right)) {}
+    constexpr int len() const { return min(nlen(left_.get()), nlen(right_.get())); }
     constexpr bool empty() const { return len() == 0; }
     constexpr auto operator[](int i) const {
         npre(0 <= i && i < len());
-        using L = decltype((*left_)[i]);
-        using R = decltype((*right_)[i]);
-        return pair<L, R>((*left_)[i], (*right_)[i]);
+        using left_reference = decltype(left_.get()[i]);
+        using right_reference = decltype(right_.get()[i]);
+        return pair<left_reference, right_reference>(left_.get()[i], right_.get()[i]);
     }
 };
 
-template <class A, class B> constexpr auto nzip(A& left, B& right) { return nzip_view<A, B>(left, right); }
+template <class A, class B>
+    requires nviewable_indexed<A&&> && nviewable_indexed<B&&>
+constexpr auto nzip(A&& left, B&& right) {
+    auto left_holder = ni::nhold_indexed(forward<A>(left));
+    auto right_holder = ni::nhold_indexed(forward<B>(right));
+    return nzip_view<decltype(left_holder), decltype(right_holder)>(move(left_holder), move(right_holder));
+}
 
-template <class A, class B> class nproduct_view {
-    A* left_;
-    B* right_;
+template <class L, class R> class nproduct_view {
+    L left_;
+    R right_;
     int left_size_, right_size_;
 
   public:
-    constexpr nproduct_view(A& left, B& right)
-        : left_(addressof(left)), right_(addressof(right)), left_size_(nlen(left)), right_size_(nlen(right)) {
-        npre(nlen(left) == 0 || nlen(right) <= INT_MAX / nlen(left));
+    using nview_tag = void;
+
+    constexpr nproduct_view(L left, R right)
+        : left_(move(left)), right_(move(right)), left_size_(nlen(left_.get())),
+          right_size_(nlen(right_.get())) {
+        npre(left_size_ == 0 || right_size_ <= INT_MAX / left_size_);
     }
     constexpr int len() const { return left_size_ * right_size_; }
     constexpr bool empty() const { return len() == 0; }
     constexpr auto operator[](int i) const {
         npre(0 <= i && i < len());
         int width = right_size_;
-        using L = decltype((*left_)[i / width]);
-        using R = decltype((*right_)[i % width]);
-        return pair<L, R>((*left_)[i / width], (*right_)[i % width]);
+        using left_reference = decltype(left_.get()[i / width]);
+        using right_reference = decltype(right_.get()[i % width]);
+        return pair<left_reference, right_reference>(left_.get()[i / width], right_.get()[i % width]);
     }
 };
 
-template <class A, class B> constexpr auto nproduct(A& left, B& right) {
-    return nproduct_view<A, B>(left, right);
+template <class A, class B>
+    requires nviewable_indexed<A&&> && nviewable_indexed<B&&>
+constexpr auto nproduct(A&& left, B&& right) {
+    auto left_holder = ni::nhold_indexed(forward<A>(left));
+    auto right_holder = ni::nhold_indexed(forward<B>(right));
+    return nproduct_view<decltype(left_holder), decltype(right_holder)>(move(left_holder), move(right_holder));
 }
 
-template <class A> class nwindow_view {
-    A* owner_;
+template <class H> class nwindow_view {
+    H owner_;
     int width_, step_, size_;
 
-    static constexpr int count(const A& owner, int width, int step) {
+    static constexpr int count(const H& owner, int width, int step) {
         npre(width >= 0 && step > 0);
-        return width <= nlen(owner) ? 1 + (nlen(owner) - width) / step : 0;
+        int length = nlen(owner.get());
+        if (width > length)
+            return 0;
+        long long result = 1LL + (length - width) / step;
+        npre(result <= INT_MAX);
+        return int(result);
     }
 
   public:
-    constexpr nwindow_view(A& owner, int width, int step)
-        : owner_(addressof(owner)), width_(width), step_(step),
-          size_(count(owner, width, step)) {}
+    using nview_tag = void;
+
+    constexpr nwindow_view(H owner, int width, int step)
+        : owner_(move(owner)), width_(width), step_(step), size_(count(owner_, width, step)) {}
     constexpr int len() const { return size_; }
     constexpr bool empty() const { return size_ == 0; }
-    constexpr auto operator[](int i) const {
+    constexpr auto operator[](int i) const
+        requires copy_constructible<H>
+    {
         npre(0 <= i && i < size_);
         int first = i * step_;
-        return nsub(*owner_, first, first + width_);
+        H owner = owner_;
+        return nview(width_, [owner = move(owner), first](int offset) -> decltype(auto) {
+            return owner.get()[first + offset];
+        });
     }
 };
 
-template <class A> constexpr auto nwindows(A& owner, int width, int step = 1) {
-    return nwindow_view<A>(owner, width, step);
+template <class A>
+    requires nviewable_indexed<A&&>
+constexpr auto nwindows(A&& owner, int width, int step = 1) {
+    auto holder = ni::nhold_indexed(forward<A>(owner));
+    return nwindow_view<decltype(holder)>(move(holder), width, step);
 }
 
 // ---- 10_seq.hpp ----
@@ -687,7 +935,10 @@ template <class T> class nvector {
     }
     void clear() noexcept { storage_.clear(); }
 
-    template <class... A> T& push(A&&... args) { return storage_.emplace_back(forward<A>(args)...); }
+    template <class... A> T& push(A&&... args) {
+        npre(storage_.size() < size_t(INT_MAX));
+        return storage_.emplace_back(forward<A>(args)...);
+    }
     T pop() {
         npre(!empty());
         T value = move(storage_.back());
@@ -743,8 +994,14 @@ template <class T> class ndeque {
     const T* get(int i) const noexcept { return 0 <= i && i < len() ? addressof(storage_[i]) : nullptr; }
     T get(int i, T fallback) const { return 0 <= i && i < len() ? storage_[i] : move(fallback); }
 
-    template <class... A> T& pushr(A&&... args) { return storage_.emplace_back(forward<A>(args)...); }
-    template <class... A> T& pushl(A&&... args) { return storage_.emplace_front(forward<A>(args)...); }
+    template <class... A> T& pushr(A&&... args) {
+        npre(storage_.size() < size_t(INT_MAX));
+        return storage_.emplace_back(forward<A>(args)...);
+    }
+    template <class... A> T& pushl(A&&... args) {
+        npre(storage_.size() < size_t(INT_MAX));
+        return storage_.emplace_front(forward<A>(args)...);
+    }
     T popr() {
         npre(!empty());
         T value = move(storage_.back());
@@ -789,13 +1046,19 @@ class narray {
         long long product = 1;
         for (int extent : shape) {
             npre(extent >= 0);
-            if (extent == 0)
-                return 0;
+            if (extent == 0) {
+                product = 0;
+                continue;
+            }
+            if (product == 0)
+                continue;
             npre(product <= INT_MAX / extent);
             product *= extent;
         }
         return int(product);
     }
+
+    template <integral I> static constexpr int coordinate(I value) { return ni::nchecked_int(value); }
 
   public:
     using value_type = T;
@@ -845,23 +1108,24 @@ class narray {
     }
 
     template <class... I>
-        requires(sizeof...(I) == Rank && (convertible_to<I, int> && ...))
+        requires(sizeof...(I) == Rank && (integral<remove_cvref_t<I>> && ...))
     T& operator()(I... coord) {
-        return (*this)(coord_type{int(coord)...});
+        return (*this)(coord_type{coordinate(coord)...});
     }
     template <class... I>
-        requires(sizeof...(I) == Rank && (convertible_to<I, int> && ...))
+        requires(sizeof...(I) == Rank && (integral<remove_cvref_t<I>> && ...))
     const T& operator()(I... coord) const {
-        return (*this)(coord_type{int(coord)...});
+        return (*this)(coord_type{coordinate(coord)...});
     }
 };
 
 namespace ni {
 template <class A, class C> void nheap_sift(A& a, int root, int count, C& compare) {
     for (;;) {
-        int child = root * 2 + 1;
-        if (child >= count)
+        long long first_child = 2LL * root + 1;
+        if (first_child >= count)
             return;
+        int child = int(first_child);
         if (child + 1 < count && compare(a[child], a[child + 1]))
             ++child;
         if (!compare(a[root], a[child]))
@@ -883,20 +1147,20 @@ template <class A, class C> void nheap_sort(A& a, C& compare) {
 } // namespace ni
 
 template <class A, class C = nless<>>
-    requires nswappable_indexed<A>
-void nsort(A& a, C compare = {}) {
+    requires nviewable_indexed<A&&> && nswappable_indexed<remove_reference_t<A>>
+void nsort(A&& a, C compare = {}) {
     int n = nlen(a);
     if (n < 2)
         return;
-    if constexpr (ncontiguous_indexed<A>)
+    if constexpr (ncontiguous_indexed<remove_reference_t<A>>)
         sort(a.data(), a.data() + n, move(compare));
     else
         ni::nheap_sort(a, compare);
 }
 
 template <class A>
-    requires nswappable_indexed<A>
-void nreverse_inplace(A& a, int l = 0, int r = npos) {
+    requires nviewable_indexed<A&&> && nswappable_indexed<remove_reference_t<A>>
+void nreverse_inplace(A&& a, int l = 0, int r = npos) {
     if (r == npos)
         r = nlen(a);
     npre(0 <= l && l <= r && r <= nlen(a));
@@ -947,8 +1211,9 @@ auto nfold(const A& a, O op = {}) {
 }
 
 template <class A, class E = nequal<>>
-    requires nreference_indexed<A> && (!is_const_v<remove_reference_t<nindex_reference_t<A>>>)
-int nunique_compact(A& a, E equal = {}) {
+    requires nviewable_indexed<A&&> && nreference_indexed<remove_reference_t<A>> &&
+             (!is_const_v<remove_reference_t<nindex_reference_t<remove_reference_t<A>>>>)
+int nunique_compact(A&& a, E equal = {}) {
     if (nlen(a) == 0)
         return 0;
     int kept = 1;
@@ -962,9 +1227,10 @@ int nunique_compact(A& a, E equal = {}) {
 }
 
 template <class A, class E = nequal<>>
-    requires nresizable<A> && nreference_indexed<A> &&
-             (!is_const_v<remove_reference_t<nindex_reference_t<A>>>)
-int nunique(A& a, E equal = {}) {
+    requires nviewable_indexed<A&&> && nresizable<remove_reference_t<A>> &&
+             nreference_indexed<remove_reference_t<A>> &&
+             (!is_const_v<remove_reference_t<nindex_reference_t<remove_reference_t<A>>>>)
+int nunique(A&& a, E equal = {}) {
     int kept = nunique_compact(a, move(equal));
     a.resize(kept);
     return kept;
@@ -999,6 +1265,7 @@ auto nsuffix_scan(const A& a, O op = {}) {
 }
 
 template <signed_integral I, class P> constexpr I nfirst_true(I first, I last, P predicate) {
+    npre(first <= last);
     while (first < last) {
         I middle = midpoint(first, last);
         predicate(middle) ? last = middle : first = middle + 1;
@@ -1007,7 +1274,7 @@ template <signed_integral I, class P> constexpr I nfirst_true(I first, I last, P
 }
 
 template <signed_integral I, class P> constexpr I nlast_true(I first, I last, P predicate) {
-    npre(first > numeric_limits<I>::lowest());
+    npre(first <= last && first > numeric_limits<I>::lowest());
     while (first < last) {
         I middle = midpoint(first, last);
         if (predicate(middle))
@@ -1035,8 +1302,12 @@ template <class T> class nrollback {
         npre(n >= 0);
         history_.reserve(size_t(n));
     }
-    void save(T& target) { history_.push_back({addressof(target), target}); }
+    void save(T& target) {
+        npre(history_.size() < size_t(INT_MAX));
+        history_.push_back({addressof(target), target});
+    }
     void assign(T& target, T value) {
+        npre(history_.size() < size_t(INT_MAX));
         history_.push_back({addressof(target), move(target)});
         target = move(value);
     }
@@ -1268,9 +1539,9 @@ class nfenwick {
         for (int i = 0; i < size_; ++i)
             tree_[i + 1] = source[i];
         for (int i = 1; i <= size_; ++i) {
-            int parent = i + (i & -i);
+            long long parent = 1LL * i + (i & -i);
             if (parent <= size_)
-                tree_[parent] = operation_(tree_[parent], tree_[i]);
+                tree_[size_t(parent)] = operation_(tree_[size_t(parent)], tree_[i]);
         }
     }
 
@@ -1282,8 +1553,13 @@ class nfenwick {
 
     void add(int index, const T& delta) {
         npre(0 <= index && index < size_);
-        for (++index; index <= size_; index += index & -index)
+        for (++index; index <= size_;) {
             tree_[index] = operation_(tree_[index], delta);
+            long long next = 1LL * index + (index & -index);
+            if (next > size_)
+                break;
+            index = int(next);
+        }
     }
 
     T prefix(int right) const {
@@ -1375,11 +1651,12 @@ class nseg {
     T fold(int left, int right) const {
         npre(0 <= left && left <= right && right <= size_);
         T prefix = operation_.id(), suffix = operation_.id();
-        for (left += base_, right += base_; left < right; left >>= 1, right >>= 1) {
-            if (left & 1)
-                prefix = operation_(move(prefix), tree_[left++]);
-            if (right & 1)
-                suffix = operation_(tree_[--right], move(suffix));
+        long long first = 1LL * left + base_, last = 1LL * right + base_;
+        for (; first < last; first >>= 1, last >>= 1) {
+            if (first & 1)
+                prefix = operation_(move(prefix), tree_[size_t(first++)]);
+            if (last & 1)
+                suffix = operation_(tree_[size_t(--last)], move(suffix));
         }
         return operation_(move(prefix), move(suffix));
     }
@@ -1550,22 +1827,26 @@ class nqueue_agg {
     explicit nqueue_agg(O operation) : operation_(move(operation)) {}
 
     int len() const noexcept {
-        npre(left_.size() + right_.size() <= size_t(INT_MAX));
+        npre(left_.size() <= size_t(INT_MAX));
+        npre(right_.size() <= size_t(INT_MAX) - left_.size());
         return int(left_.size() + right_.size());
     }
     bool empty() const noexcept { return left_.empty() && right_.empty(); }
 
     void push(T value) {
+        npre(len() < INT_MAX);
         T aggregate = right_.empty() ? value : operation_(right_.back().aggregate, value);
         right_.push_back({move(value), move(aggregate)});
     }
 
-    T& front() {
+    const T& front() {
         npre(!empty());
-        transfer();
-        return left_.back().value;
+        return left_.empty() ? right_.front().value : left_.back().value;
     }
-    const T& front() const { return const_cast<nqueue_agg*>(this)->front(); }
+    const T& front() const {
+        npre(!empty());
+        return left_.empty() ? right_.front().value : left_.back().value;
+    }
 
     T pop() {
         npre(!empty());
@@ -1714,25 +1995,27 @@ class npersistent_seg {
 
     const T& aggregate(int node_index) const { return nodes_[node_index].aggregate; }
 
+    int append(node value) {
+        npre(nodes_.size() <= size_t(INT_MAX));
+        int index = int(nodes_.size());
+        nodes_.push_back(move(value));
+        return index;
+    }
+
     template <class V> int build(const V& source, int left, int right) {
         if (left >= size_)
             return 0;
-        if (right - left == 1) {
-            nodes_.push_back({source[left], 0, 0});
-            return int(nodes_.size()) - 1;
-        }
+        if (right - left == 1)
+            return append({source[left], 0, 0});
         int middle = left + (right - left) / 2;
         int left_node = build(source, left, middle);
         int right_node = build(source, middle, right);
-        nodes_.push_back({operation_(aggregate(left_node), aggregate(right_node)), left_node, right_node});
-        return int(nodes_.size()) - 1;
+        return append({operation_(aggregate(left_node), aggregate(right_node)), left_node, right_node});
     }
 
     int set0(int current, int left, int right, int index, const T& value) {
-        if (right - left == 1) {
-            nodes_.push_back({value, 0, 0});
-            return int(nodes_.size()) - 1;
-        }
+        if (right - left == 1)
+            return append({value, 0, 0});
         int left_node = nodes_[current].left;
         int right_node = nodes_[current].right;
         int middle = left + (right - left) / 2;
@@ -1740,8 +2023,7 @@ class npersistent_seg {
             left_node = set0(left_node, left, middle, index, value);
         else
             right_node = set0(right_node, middle, right, index, value);
-        nodes_.push_back({operation_(aggregate(left_node), aggregate(right_node)), left_node, right_node});
-        return int(nodes_.size()) - 1;
+        return append({operation_(aggregate(left_node), aggregate(right_node)), left_node, right_node});
     }
 
     T fold0(int current, int left, int right, int query_left, int query_right) const {
@@ -1767,8 +2049,14 @@ class npersistent_seg {
     }
 
     int len() const noexcept { return size_; }
-    int versions() const noexcept { return int(roots_.size()); }
-    int nodes() const noexcept { return int(nodes_.size()) - 1; }
+    int versions() const noexcept {
+        npre(roots_.size() <= size_t(INT_MAX));
+        return int(roots_.size());
+    }
+    int nodes() const noexcept {
+        npre(0 < nodes_.size() && nodes_.size() <= size_t(INT_MAX) + 1);
+        return int(nodes_.size() - 1);
+    }
     const O& operation() const noexcept { return operation_; }
 
     void reserve_nodes(int count) {
@@ -1778,6 +2066,7 @@ class npersistent_seg {
 
     int fork(int version) {
         npre(0 <= version && version < versions());
+        npre(roots_.size() < size_t(INT_MAX));
         roots_.push_back(roots_[version]);
         return versions() - 1;
     }
@@ -1785,6 +2074,7 @@ class npersistent_seg {
     int set(int version, int index, const T& value) {
         npre(0 <= version && version < versions());
         npre(0 <= index && index < size_);
+        npre(roots_.size() < size_t(INT_MAX));
         int root = set0(roots_[version], 0, base_, index, value);
         roots_.push_back(root);
         return versions() - 1;
@@ -1960,8 +2250,8 @@ template <nindexed Q> nvector<int> nmo_order(const Q& queries, int universe) {
 }
 
 template <nindexed Q, class AddLeft, class AddRight, class RemoveLeft, class RemoveRight, class Answer>
-void nrun_mo(const Q& queries, int universe, AddLeft add_left, AddRight add_right, RemoveLeft remove_left,
-             RemoveRight remove_right, Answer answer) {
+void nrun_mo(const Q& queries, int universe, AddLeft&& add_left, AddRight&& add_right,
+             RemoveLeft&& remove_left, RemoveRight&& remove_right, Answer&& answer) {
     auto order = nmo_order(queries, universe);
     int left = 0, right = 0;
     for (int position = 0; position < order.len(); ++position) {
@@ -1980,8 +2270,8 @@ void nrun_mo(const Q& queries, int universe, AddLeft add_left, AddRight add_righ
 }
 
 template <nindexed Q, class Add, class Remove, class Answer>
-void nrun_mo(const Q& queries, int universe, Add add, Remove remove, Answer answer) {
-    nrun_mo(queries, universe, add, add, remove, remove, move(answer));
+void nrun_mo(const Q& queries, int universe, Add&& add, Remove&& remove, Answer&& answer) {
+    nrun_mo(queries, universe, add, add, remove, remove, answer);
 }
 
 // ---- 40_graph.hpp ----
@@ -1991,11 +2281,13 @@ template <class W = int> struct narc {
     friend bool operator==(const narc&, const narc&) = default;
 };
 
-template <integral E> constexpr int nedge_to(E vertex) { return int(vertex); }
+template <integral E> constexpr int nedge_to(E vertex) { return ni::nchecked_int(vertex); }
 template <class E>
-    requires requires(const E& edge) { edge.to; }
+    requires requires(const E& edge) {
+        requires integral<remove_cvref_t<decltype(edge.to)>>;
+    }
 constexpr int nedge_to(const E& edge) {
-    return int(edge.to);
+    return ni::nchecked_int(edge.to);
 }
 
 template <integral E> constexpr int nedge_weight(E) { return 1; }
@@ -2024,9 +2316,19 @@ template <class F> ngraph_view(int, F) -> ngraph_view<F>;
 
 template <class G>
 concept ngraph_like = requires(const G& graph, int vertex) {
-    { graph.vertices() } -> convertible_to<int>;
+    requires integral<remove_cvref_t<decltype(graph.vertices())>>;
+    requires(!same_as<remove_cvref_t<decltype(graph.vertices())>, bool>);
     graph.neighbors(vertex);
+    requires nenumerable<decltype(graph.neighbors(vertex))>;
 };
+
+namespace ni {
+template <ngraph_like G> constexpr int ngraph_vertices(const G& graph) {
+    int vertices = nchecked_int(graph.vertices());
+    npre(vertices >= 0);
+    return vertices;
+}
+} // namespace ni
 
 template <class W = int> class ngraph_list {
     vector<vector<narc<W>>> adjacency_;
@@ -2045,6 +2347,8 @@ template <class W = int> class ngraph_list {
 
     void add(int from, int to, W weight = W{1}) {
         npre(0 <= from && from < vertices() && 0 <= to && to < vertices());
+        npre(arcs_ < INT_MAX);
+        npre(adjacency_[from].size() < size_t(INT_MAX));
         adjacency_[from].push_back({to, move(weight)});
         ++arcs_;
     }
@@ -2062,7 +2366,7 @@ template <class W = int> class ngraph_list {
 };
 
 template <ngraph_like G> nvector<int> nbfs(const G& graph, int source) {
-    int vertices = graph.vertices();
+    int vertices = ni::ngraph_vertices(graph);
     npre(0 <= source && source < vertices);
     nvector<int> distance(vertices, npos);
     ndeque<int> queue;
@@ -2070,7 +2374,7 @@ template <ngraph_like G> nvector<int> nbfs(const G& graph, int source) {
     queue.pushr(source);
     while (!queue.empty()) {
         int vertex = queue.popl();
-        auto adjacency = graph.neighbors(vertex);
+        decltype(auto) adjacency = graph.neighbors(vertex);
         nfor(edge, adjacency) {
             int to = nedge_to(edge);
             npre(0 <= to && to < vertices);
@@ -2084,10 +2388,11 @@ template <ngraph_like G> nvector<int> nbfs(const G& graph, int source) {
 }
 
 template <class D = long long, ngraph_like G>
-    requires is_arithmetic_v<D>
-nvector<D> ndijkstra(const G& graph, int source, D infinity = ninf<D>) {
-    int vertices = graph.vertices();
+    requires is_arithmetic_v<D> && (!same_as<remove_cv_t<D>, bool>)
+nvector<D> ndijkstra(const G& graph, int source, D infinity = nmin<D>{}.id()) {
+    int vertices = ni::ngraph_vertices(graph);
     npre(0 <= source && source < vertices);
+    npre(D{} <= infinity);
     nvector<D> distance(vertices, infinity);
     using state = pair<D, int>;
     priority_queue<state, vector<state>, greater<state>> queue;
@@ -2099,10 +2404,10 @@ nvector<D> ndijkstra(const G& graph, int source, D infinity = ninf<D>) {
         queue.pop();
         if (current != distance[vertex])
             continue;
-        auto adjacency = graph.neighbors(vertex);
+        decltype(auto) adjacency = graph.neighbors(vertex);
         nfor(edge, adjacency) {
             int to = nedge_to(edge);
-            D weight = D(nedge_weight(edge));
+            D weight = ni::nchecked_number<D>(nedge_weight(edge));
             npre(0 <= to && to < vertices);
             npre(!(weight < D{}));
             if (current <= infinity && weight <= infinity - current) {
@@ -2119,10 +2424,10 @@ nvector<D> ndijkstra(const G& graph, int source, D infinity = ninf<D>) {
 
 // ---- 41_graph_alg.hpp ----
 template <ngraph_like G> nmaybe<nvector<int>> ntoposort(const G& graph) {
-    int vertices = graph.vertices();
+    int vertices = ni::ngraph_vertices(graph);
     nvector<int> indegree(vertices, 0);
     for (int from = 0; from < vertices; ++from) {
-        auto adjacency = graph.neighbors(from);
+        decltype(auto) adjacency = graph.neighbors(from);
         nfor(edge, adjacency) {
             int to = nedge_to(edge);
             npre(0 <= to && to < vertices);
@@ -2141,7 +2446,7 @@ template <ngraph_like G> nmaybe<nvector<int>> ntoposort(const G& graph) {
     while (!queue.empty()) {
         int from = queue.popl();
         order.push(from);
-        auto adjacency = graph.neighbors(from);
+        decltype(auto) adjacency = graph.neighbors(from);
         nfor(edge, adjacency) {
             int to = nedge_to(edge);
             if (--indegree[to] == 0)
@@ -2152,14 +2457,16 @@ template <ngraph_like G> nmaybe<nvector<int>> ntoposort(const G& graph) {
 }
 
 template <ngraph_like G> npartition nscc(const G& graph) {
-    int vertices = graph.vertices();
+    int vertices = ni::ngraph_vertices(graph);
     auto forward = vector<vector<int>>(size_t(vertices));
     auto reverse = vector<vector<int>>(size_t(vertices));
     for (int from = 0; from < vertices; ++from) {
-        auto adjacency = graph.neighbors(from);
+        decltype(auto) adjacency = graph.neighbors(from);
         nfor(edge, adjacency) {
             int to = nedge_to(edge);
             npre(0 <= to && to < vertices);
+            npre(forward[from].size() < size_t(INT_MAX));
+            npre(reverse[to].size() < size_t(INT_MAX));
             forward[from].push_back(to);
             reverse[to].push_back(from);
         }
@@ -2211,6 +2518,60 @@ template <ngraph_like G> npartition nscc(const G& graph) {
     return npartition(move(component));
 }
 
+namespace ni {
+struct ntree_layout {
+    vector<vector<int>> adjacency;
+    nvector<int> parent, order;
+};
+
+template <ngraph_like G>
+ntree_layout nbuild_tree_layout(const G& graph, int root, bool require_symmetric) {
+    int vertices = ngraph_vertices(graph);
+    npre(vertices > 0 && 0 <= root && root < vertices);
+    ntree_layout result{vector<vector<int>>(size_t(vertices)), nvector<int>(vertices, npos), {}};
+
+    for (int from = 0; from < vertices; ++from) {
+        decltype(auto) edges = graph.neighbors(from);
+        nfor(edge, edges) {
+            int to = nedge_to(edge);
+            npre(0 <= to && to < vertices && to != from);
+            npre(result.adjacency[from].size() < size_t(INT_MAX));
+            result.adjacency[from].push_back(to);
+        }
+    }
+
+    result.order.reserve(vertices);
+    result.parent[root] = root;
+    result.order.push(root);
+    for (int position = 0; position < result.order.len(); ++position) {
+        int from = result.order[position];
+        for (int to : result.adjacency[from])
+            if (result.parent[to] == npos) {
+                result.parent[to] = from;
+                result.order.push(to);
+            }
+    }
+    npre(result.order.len() == vertices);
+
+    long long forward_arcs = 0, reverse_arcs = 0;
+    for (int from = 0; from < vertices; ++from)
+        for (int to : result.adjacency[from]) {
+            if (result.parent[to] == from)
+                ++forward_arcs;
+            else if (from != root && to == result.parent[from])
+                ++reverse_arcs;
+            else
+                npre(false);
+        }
+    npre(forward_arcs == vertices - 1LL);
+    if (require_symmetric)
+        npre(reverse_arcs == vertices - 1LL);
+    else
+        npre(reverse_arcs == 0 || reverse_arcs == vertices - 1LL);
+    return result;
+}
+} // namespace ni
+
 class nlca {
     int vertices_ = 0;
     vector<vector<int>> ancestor_;
@@ -2220,30 +2581,17 @@ class nlca {
     nlca() = default;
 
     template <ngraph_like G> explicit nlca(const G& graph, int root = 0)
-        : vertices_(graph.vertices()), depth_(vertices_, npos) {
-        npre(vertices_ > 0 && 0 <= root && root < vertices_);
+        : vertices_(ni::ngraph_vertices(graph)), depth_(vertices_, npos) {
+        auto layout = ni::nbuild_tree_layout(graph, root, false);
         int levels = max(1, int(bit_width(unsigned(vertices_))));
         ancestor_.assign(size_t(levels), vector<int>(size_t(vertices_), root));
-        ndeque<int> queue;
         depth_[root] = 0;
         ancestor_[0][root] = root;
-        queue.pushr(root);
-        int visited = 0;
-        while (!queue.empty()) {
-            int vertex = queue.popl();
-            ++visited;
-            auto adjacency = graph.neighbors(vertex);
-            nfor(edge, adjacency) {
-                int to = nedge_to(edge);
-                npre(0 <= to && to < vertices_);
-                if (depth_[to] == npos) {
-                    depth_[to] = depth_[vertex] + 1;
-                    ancestor_[0][to] = vertex;
-                    queue.pushr(to);
-                }
-            }
+        for (int position = 1; position < layout.order.len(); ++position) {
+            int vertex = layout.order[position], parent = layout.parent[vertex];
+            depth_[vertex] = depth_[parent] + 1;
+            ancestor_[0][vertex] = parent;
         }
-        npre(visited == vertices_);
         for (int level = 1; level < levels; ++level)
             for (int vertex = 0; vertex < vertices_; ++vertex)
                 ancestor_[level][vertex] = ancestor_[level - 1][ancestor_[level - 1][vertex]];
@@ -2282,7 +2630,9 @@ class nlca {
 
     int distance(int a, int b) const {
         int common = (*this)(a, b);
-        return depth_[a] + depth_[b] - 2 * depth_[common];
+        long long result = 1LL * depth_[a] + depth_[b] - 2LL * depth_[common];
+        npre(0 <= result && result <= INT_MAX);
+        return int(result);
     }
 
     int kth_on_path(int from, int to, int steps) const {
@@ -2290,9 +2640,10 @@ class nlca {
         int common = (*this)(from, to);
         int upward = depth_[from] - depth_[common];
         int downward = depth_[to] - depth_[common];
-        if (steps > upward + downward)
+        long long length = 1LL * upward + downward;
+        if (steps > length)
             return npos;
-        return steps <= upward ? jump(from, steps) : jump(to, upward + downward - steps);
+        return steps <= upward ? jump(from, steps) : jump(to, int(length - steps));
     }
 };
 
@@ -2300,40 +2651,13 @@ class nlca {
 template <ngraph_like G, class T, class Merge, class Vertex, class Lift>
     requires copyable<T>
 nvector<T> nreroot(const G& graph, T identity, Merge merge, Vertex vertex, Lift lift, int root = 0) {
-    int vertices = graph.vertices();
+    int vertices = ni::ngraph_vertices(graph);
     if (!vertices)
         return {};
-    npre(0 <= root && root < vertices);
-
-    auto adjacency = vector<vector<int>>(size_t(vertices));
-    long long arcs = 0;
-    for (int from = 0; from < vertices; ++from) {
-        auto edges = graph.neighbors(from);
-        nfor(edge, edges) {
-            int to = nedge_to(edge);
-            npre(0 <= to && to < vertices);
-            adjacency[from].push_back(to);
-            ++arcs;
-        }
-    }
-    npre(arcs == 2LL * (vertices - 1));
-
-    nvector<int> parent(vertices, npos), order;
-    order.reserve(vertices);
-    parent[root] = root;
-    order.push(root);
-    for (int position = 0; position < order.len(); ++position) {
-        int from = order[position];
-        for (int to : adjacency[from]) {
-            if (parent[to] == npos) {
-                parent[to] = from;
-                order.push(to);
-            } else {
-                npre(to == parent[from] || parent[to] == from);
-            }
-        }
-    }
-    npre(order.len() == vertices);
+    auto layout = ni::nbuild_tree_layout(graph, root, true);
+    auto& adjacency = layout.adjacency;
+    auto& parent = layout.parent;
+    auto& order = layout.order;
 
     nvector<T> down(vertices, identity), upward(vertices, identity), answer(vertices, identity);
     for (int position = vertices; position-- > 0;) {
@@ -2373,7 +2697,7 @@ nvector<T> nreroot(const G& graph, T identity, Merge merge, Vertex vertex, Lift 
 
 // ---- 43_graph_more.hpp ----
 template <ngraph_like G> nvector<int> n01bfs(const G& graph, int source) {
-    int vertices = graph.vertices();
+    int vertices = ni::ngraph_vertices(graph);
     npre(0 <= source && source < vertices);
     nvector<int> distance(vertices, npos);
     ndeque<int> queue;
@@ -2381,11 +2705,13 @@ template <ngraph_like G> nvector<int> n01bfs(const G& graph, int source) {
     queue.pushr(source);
     while (!queue.empty()) {
         int from = queue.popl();
-        auto adjacency = graph.neighbors(from);
+        decltype(auto) adjacency = graph.neighbors(from);
         nfor(edge, adjacency) {
             int to = nedge_to(edge);
-            int weight = int(nedge_weight(edge));
-            npre(0 <= to && to < vertices && (weight == 0 || weight == 1));
+            auto&& raw_weight = nedge_weight(edge);
+            npre(raw_weight == 0 || raw_weight == 1);
+            int weight = int(raw_weight);
+            npre(0 <= to && to < vertices);
             int candidate = distance[from] + weight;
             if (distance[to] == npos || candidate < distance[to]) {
                 distance[to] = candidate;
@@ -2402,9 +2728,9 @@ template <class W> struct nmst_result {
 };
 
 template <class D = long long, ngraph_like G>
-    requires is_arithmetic_v<D>
+    requires is_arithmetic_v<D> && (!same_as<remove_cv_t<D>, bool>)
 nmaybe<nmst_result<D>> nprim(const G& graph, int root = 0) {
-    int vertices = graph.vertices();
+    int vertices = ni::ngraph_vertices(graph);
     if (!vertices)
         return nmst_result<D>{};
     npre(0 <= root && root < vertices);
@@ -2423,22 +2749,22 @@ nmaybe<nmst_result<D>> nprim(const G& graph, int root = 0) {
         used[vertex] = true;
         ++visited;
         if (parent != npos) {
-            result.weight += weight;
+            result.weight = ni::nchecked_add(result.weight, weight);
             result.edges.push(pair<int, int>{parent, vertex});
         }
-        auto adjacency = graph.neighbors(vertex);
+        decltype(auto) adjacency = graph.neighbors(vertex);
         nfor(edge, adjacency) {
             int to = nedge_to(edge);
             npre(0 <= to && to < vertices);
             if (!used[to])
-                queue.push({D(nedge_weight(edge)), to, vertex});
+                queue.push({ni::nchecked_number<D>(nedge_weight(edge)), to, vertex});
         }
     }
     return visited == vertices ? nmaybe<nmst_result<D>>(move(result)) : nmaybe<nmst_result<D>>{};
 }
 
 template <class C>
-    requires is_arithmetic_v<C>
+    requires integral<C> && (!same_as<remove_cv_t<C>, bool>)
 class nmaxflow {
     struct edge {
         int to, reverse;
@@ -2448,7 +2774,7 @@ class nmaxflow {
     bool flowed_ = false;
 
     static size_t checked_vertices(int vertices) {
-        npre(vertices >= 0);
+        npre(0 <= vertices && vertices <= INT_MAX / 2);
         return size_t(vertices);
     }
 
@@ -2460,6 +2786,7 @@ class nmaxflow {
         npre(!flowed_);
         npre(0 <= from && from < vertices() && 0 <= to && to < vertices() && from != to);
         npre(!(capacity < C{}));
+        npre(graph_[to].size() < size_t(INT_MAX) && graph_[from].size() < size_t(INT_MAX));
         int from_reverse = int(graph_[to].size());
         int to_reverse = int(graph_[from].size());
         graph_[from].push_back({to, from_reverse, capacity});
@@ -2486,6 +2813,8 @@ class nmaxflow {
             C sent = min(excess[from], arc.capacity);
             if (!(C{} < sent) || height[from] != height[arc.to] + 1)
                 return false;
+            npre(graph_[arc.to][arc.reverse].capacity <= numeric_limits<C>::max() - sent);
+            npre(excess[arc.to] <= numeric_limits<C>::max() - sent);
             arc.capacity -= sent;
             graph_[arc.to][arc.reverse].capacity += sent;
             excess[from] -= sent;
@@ -2499,6 +2828,8 @@ class nmaxflow {
             C sent = arc.capacity;
             if (!(C{} < sent))
                 continue;
+            npre(graph_[arc.to][arc.reverse].capacity <= numeric_limits<C>::max() - sent);
+            npre(excess[arc.to] <= numeric_limits<C>::max() - sent);
             arc.capacity = C{};
             graph_[arc.to][arc.reverse].capacity += sent;
             excess[arc.to] += sent;
@@ -2553,11 +2884,11 @@ struct nbipartite_matching {
 };
 
 template <ngraph_like G> nbipartite_matching nhopcroft_karp(const G& graph, int right_vertices) {
-    int left_vertices = graph.vertices();
+    int left_vertices = ni::ngraph_vertices(graph);
     npre(right_vertices >= 0);
     nvector<nvector<int>> adjacency(left_vertices);
     for (int left = 0; left < left_vertices; ++left) {
-        auto edges = graph.neighbors(left);
+        decltype(auto) edges = graph.neighbors(left);
         nfor(edge, edges) {
             int right = nedge_to(edge);
             npre(0 <= right && right < right_vertices);
@@ -2576,7 +2907,7 @@ template <ngraph_like G> nbipartite_matching nhopcroft_karp(const G& graph, int 
                 distance[left] = 0;
                 queue.pushr(left);
             }
-        int shortest = ninf<int>;
+        long long shortest = numeric_limits<long long>::max();
         while (!queue.empty()) {
             int left = queue.popl();
             if (distance[left] + 1 > shortest)
@@ -2591,7 +2922,7 @@ template <ngraph_like G> nbipartite_matching nhopcroft_karp(const G& graph, int 
                 }
             }
         }
-        if (shortest == ninf<int>)
+        if (shortest == numeric_limits<long long>::max())
             break;
         for (int left = 0; left < left_vertices; ++left)
             next[left] = 0;
@@ -2641,7 +2972,10 @@ template <ngraph_like G> nbipartite_matching nhopcroft_karp(const G& graph, int 
 }
 
 // ---- 50_integer.hpp ----
-template <integral T> constexpr make_unsigned_t<T> nmag(T value) {
+template <class T>
+concept ninteger = integral<T> && (!same_as<remove_cv_t<T>, bool>);
+
+template <ninteger T> constexpr make_unsigned_t<T> nmag(T value) {
     using U = make_unsigned_t<T>;
     U encoded = U(value);
     if constexpr (is_signed_v<T>)
@@ -2650,9 +2984,9 @@ template <integral T> constexpr make_unsigned_t<T> nmag(T value) {
         return encoded;
 }
 
-template <integral T> constexpr make_unsigned_t<T> nabs(T value) { return nmag(value); }
+template <ninteger T> constexpr make_unsigned_t<T> nabs(T value) { return nmag(value); }
 
-template <integral T> constexpr make_unsigned_t<T> ngcd(T a, T b) {
+template <ninteger T> constexpr make_unsigned_t<T> ngcd(T a, T b) {
     using U = make_unsigned_t<T>;
     U x = nmag(a), y = nmag(b);
     while (y) {
@@ -2663,7 +2997,7 @@ template <integral T> constexpr make_unsigned_t<T> ngcd(T a, T b) {
     return x;
 }
 
-template <integral T> constexpr make_unsigned_t<T> nlcm(T a, T b) {
+template <ninteger T> constexpr make_unsigned_t<T> nlcm(T a, T b) {
     using U = make_unsigned_t<T>;
     U x = nmag(a), y = nmag(b);
     if (!x || !y)
@@ -2697,12 +3031,16 @@ template <signed_integral T> constexpr T nmod(T value, T modulus) {
     return remainder < 0 ? remainder + modulus : remainder;
 }
 
-template <integral T> struct nextgcd_result {
+template <ninteger T>
+    requires(sizeof(T) <= sizeof(uint64_t))
+struct nextgcd_result {
     make_unsigned_t<T> gcd;
     __int128_t x, y;
 };
 
-template <integral T> constexpr nextgcd_result<T> nextgcd(T a, T b) {
+template <ninteger T>
+    requires(sizeof(T) <= sizeof(uint64_t))
+constexpr nextgcd_result<T> nextgcd(T a, T b) {
     using U = make_unsigned_t<T>;
     U old_remainder = nmag(a), remainder = nmag(b);
     __int128_t old_x = 1, x = 0, old_y = 0, y = 1;
@@ -2877,6 +3215,13 @@ class nmodint {
 };
 
 template <uint64_t Modulus> inline constexpr bool nadd_group<nmodint<Modulus>> = true;
+template <uint64_t Modulus> inline constexpr bool nexact_field<nmodint<Modulus>> = nisprime(Modulus);
+template <uint64_t Modulus>
+inline constexpr bool nsemiring_laws<nadd<nmodint<Modulus>>, nmul<nmodint<Modulus>>,
+                                     nmodint<Modulus>> = true;
+template <uint64_t Modulus>
+inline constexpr bool naction_laws<naddsum_action<nmodint<Modulus>>, nmodint<Modulus>,
+                                   nmodint<Modulus>> = true;
 
 template <class Mint> class ncomb {
     nvector<Mint> factorial_, inverse_factorial_;
@@ -2918,7 +3263,9 @@ template <class Mint> class ncomb {
 };
 
 // ---- 52_comb.hpp ----
-template <unsigned_integral T> class nsubmask_range {
+template <unsigned_integral T>
+    requires(!same_as<remove_cv_t<T>, bool>)
+class nsubmask_range {
     T mask_{};
 
   public:
@@ -2950,7 +3297,11 @@ template <unsigned_integral T> class nsubmask_range {
     constexpr cursor enumerate() const { return {mask_, mask_}; }
 };
 
-template <unsigned_integral T> constexpr auto nsubmasks(T mask) { return nsubmask_range<T>(mask); }
+template <unsigned_integral T>
+    requires(!same_as<remove_cv_t<T>, bool>)
+constexpr auto nsubmasks(T mask) {
+    return nsubmask_range<T>(mask);
+}
 
 namespace ni {
 template <class A> constexpr void nsubset_extent(const A& a) {
@@ -2968,8 +3319,10 @@ template <nindexed A> auto nindex_copy(const A& source) {
 } // namespace ni
 
 template <class A>
-    requires nreference_indexed<A> && requires(nindex_reference_t<A> x, nindex_value_t<A> y) { x += y; }
-void nzeta_subset(A& a) {
+    requires nviewable_indexed<A&&> && nreference_indexed<remove_reference_t<A>> &&
+             requires(nindex_reference_t<remove_reference_t<A>> x,
+                      nindex_value_t<remove_reference_t<A>> y) { x += y; }
+void nzeta_subset(A&& a) {
     ni::nsubset_extent(a);
     for (int bit = 1; bit < nlen(a); bit <<= 1)
         for (int mask = 0; mask < nlen(a); ++mask)
@@ -2978,8 +3331,10 @@ void nzeta_subset(A& a) {
 }
 
 template <class A>
-    requires nreference_indexed<A> && requires(nindex_reference_t<A> x, nindex_value_t<A> y) { x -= y; }
-void nmobius_subset(A& a) {
+    requires nviewable_indexed<A&&> && nreference_indexed<remove_reference_t<A>> &&
+             requires(nindex_reference_t<remove_reference_t<A>> x,
+                      nindex_value_t<remove_reference_t<A>> y) { x -= y; }
+void nmobius_subset(A&& a) {
     ni::nsubset_extent(a);
     for (int bit = 1; bit < nlen(a); bit <<= 1)
         for (int mask = 0; mask < nlen(a); ++mask)
@@ -2988,8 +3343,10 @@ void nmobius_subset(A& a) {
 }
 
 template <class A>
-    requires nreference_indexed<A> && requires(nindex_reference_t<A> x, nindex_value_t<A> y) { x += y; }
-void nzeta_superset(A& a) {
+    requires nviewable_indexed<A&&> && nreference_indexed<remove_reference_t<A>> &&
+             requires(nindex_reference_t<remove_reference_t<A>> x,
+                      nindex_value_t<remove_reference_t<A>> y) { x += y; }
+void nzeta_superset(A&& a) {
     ni::nsubset_extent(a);
     for (int bit = 1; bit < nlen(a); bit <<= 1)
         for (int mask = 0; mask < nlen(a); ++mask)
@@ -2998,8 +3355,10 @@ void nzeta_superset(A& a) {
 }
 
 template <class A>
-    requires nreference_indexed<A> && requires(nindex_reference_t<A> x, nindex_value_t<A> y) { x -= y; }
-void nmobius_superset(A& a) {
+    requires nviewable_indexed<A&&> && nreference_indexed<remove_reference_t<A>> &&
+             requires(nindex_reference_t<remove_reference_t<A>> x,
+                      nindex_value_t<remove_reference_t<A>> y) { x -= y; }
+void nmobius_superset(A&& a) {
     ni::nsubset_extent(a);
     for (int bit = 1; bit < nlen(a); bit <<= 1)
         for (int mask = 0; mask < nlen(a); ++mask)
@@ -3008,12 +3367,14 @@ void nmobius_superset(A& a) {
 }
 
 template <class A>
-    requires nreference_indexed<A> && requires(nindex_value_t<A> x, nindex_reference_t<A> y, int n) {
+    requires nviewable_indexed<A&&> && nreference_indexed<remove_reference_t<A>> &&
+             requires(nindex_value_t<remove_reference_t<A>> x,
+                      nindex_reference_t<remove_reference_t<A>> y, int n) {
         y = x + x;
         y = x - x;
         y /= n;
     }
-void nfwht_xor(A& a, bool inverse = false) {
+void nfwht_xor(A&& a, bool inverse = false) {
     ni::nsubset_extent(a);
     for (int width = 1; width < nlen(a); width <<= 1)
         for (int first = 0; first < nlen(a); first += width << 1)
@@ -3161,7 +3522,7 @@ concept nmatrix_like = requires(const A& matrix, int row, int column) {
 };
 
 template <class T, class Add = nadd<T>, class Mul = nmul<T>>
-    requires nmonoid<Add, T> && nmonoid<Mul, T>
+    requires nsemiring<Add, Mul, T>
 nmatrix<T> nmatrix_identity(int n, Add add = {}, Mul multiply = {}) {
     npre(n >= 0);
     nmatrix<T> result(n, n, add.id());
@@ -3172,9 +3533,11 @@ nmatrix<T> nmatrix_identity(int n, Add add = {}, Mul multiply = {}) {
 
 template <nmatrix_like A, nmatrix_like B, class Add = nadd<remove_cvref_t<decltype(declval<const A&>()(0, 0))>>,
           class Mul = nmul<remove_cvref_t<decltype(declval<const A&>()(0, 0))>>>
+    requires nsemiring<Add, Mul, remove_cvref_t<decltype(declval<const A&>()(0, 0))>> &&
+             same_as<remove_cvref_t<decltype(declval<const A&>()(0, 0))>,
+                     remove_cvref_t<decltype(declval<const B&>()(0, 0))>>
 auto nmatmul(const A& a, const B& b, Add add = {}, Mul multiply = {}) {
     using T = remove_cvref_t<decltype(a(0, 0))>;
-    static_assert(nmonoid<Add, T> && nmonoid<Mul, T>);
     npre(a.cols() == b.rows());
     nmatrix<T> result(a.rows(), b.cols(), add.id());
     for (int i = 0; i < a.rows(); ++i)
@@ -3185,6 +3548,7 @@ auto nmatmul(const A& a, const B& b, Add add = {}, Mul multiply = {}) {
 }
 
 template <class T, class Add = nadd<T>, class Mul = nmul<T>>
+    requires nsemiring<Add, Mul, T>
 nmatrix<T> nmatpow(nmatrix<T> base, uint64_t exponent, Add add = {}, Mul multiply = {}) {
     npre(base.rows() == base.cols());
     auto result = nmatrix_identity<T>(base.rows(), add, multiply);
@@ -3198,7 +3562,7 @@ nmatrix<T> nmatpow(nmatrix<T> base, uint64_t exponent, Add add = {}, Mul multipl
     return result;
 }
 
-template <class T> int nrref(nmatrix<T>& matrix, nvector<int>* pivot_columns = nullptr) {
+template <nexact_field_element T> int nrref(nmatrix<T>& matrix, nvector<int>* pivot_columns = nullptr) {
     if (pivot_columns)
         pivot_columns->clear();
     int row = 0;
@@ -3227,7 +3591,7 @@ template <class T> int nrref(nmatrix<T>& matrix, nvector<int>* pivot_columns = n
     return row;
 }
 
-template <class T> T ndeterminant(nmatrix<T> matrix) {
+template <nexact_field_element T> T ndeterminant(nmatrix<T> matrix) {
     npre(matrix.rows() == matrix.cols());
     T determinant{1};
     for (int column = 0; column < matrix.cols(); ++column) {
@@ -3257,9 +3621,11 @@ template <class T> struct nlinear_solution {
     nvector<nvector<T>> basis;
 };
 
-template <class T, nindexed B> nmaybe<nlinear_solution<T>> nlinear_solve(nmatrix<T> coefficients, const B& values) {
+template <nexact_field_element T, nindexed B>
+nmaybe<nlinear_solution<T>> nlinear_solve(nmatrix<T> coefficients, const B& values) {
     npre(coefficients.rows() == nlen(values));
     int equations = coefficients.rows(), variables = coefficients.cols();
+    npre(variables < INT_MAX);
     nmatrix<T> augmented(equations, variables + 1);
     for (int i = 0; i < equations; ++i) {
         for (int j = 0; j < variables; ++j)
@@ -3380,6 +3746,7 @@ template <nindexed A, nindexed B> auto nconv_naive(const A& a, const B& b) {
 
 template <nindexed A, nindexed B>
     requires ni::nstatic_modular<nindex_value_t<const A>> &&
+             nexact_field<nindex_value_t<const A>> &&
              same_as<nindex_value_t<const A>, nindex_value_t<const B>>
 auto nconv_ntt(const A& a, const B& b) {
     using mint = nindex_value_t<const A>;
@@ -3405,7 +3772,7 @@ auto nconv_ntt(const A& a, const B& b) {
 template <nindexed A, nindexed B> auto nconv_auto(const A& a, const B& b) {
     using T = nindex_value_t<const A>;
     static_assert(same_as<T, nindex_value_t<const B>>);
-    if constexpr (ni::nstatic_modular<T>) {
+    if constexpr (ni::nstatic_modular<T> && nexact_field<T>) {
         if (nlen(a) && nlen(b) && min(nlen(a), nlen(b)) >= 32) {
             npre(nlen(a) <= INT_MAX - nlen(b) + 1);
             long long size = 1LL * nlen(a) + nlen(b) - 1;
@@ -3430,7 +3797,9 @@ template <nindexed A> auto npoly_derivative(const A& polynomial) {
     return result;
 }
 
-template <nindexed A> auto npoly_integral(const A& polynomial) {
+template <nindexed A>
+    requires floating_point<nindex_value_t<const A>> || nexact_field_element<nindex_value_t<const A>>
+auto npoly_integral(const A& polynomial) {
     using T = nindex_value_t<const A>;
     npre(nlen(polynomial) < INT_MAX);
     nvector<T> result(nlen(polynomial) + 1);
@@ -3447,7 +3816,9 @@ template <nindexed A, class X> auto npoly_evaluate(const A& polynomial, const X&
     return result;
 }
 
-template <nindexed A> auto nfps_inverse(const A& series, int terms) {
+template <nindexed A>
+    requires floating_point<nindex_value_t<const A>> || nexact_field_element<nindex_value_t<const A>>
+auto nfps_inverse(const A& series, int terms) {
     using T = nindex_value_t<const A>;
     npre(terms >= 0);
     if (!terms)
@@ -3507,6 +3878,7 @@ template <nindexed Text, nindexed Pattern> nvector<int> nkmp_find(const Text& te
     int n = nlen(text), m = nlen(pattern);
     nvector<int> result;
     if (!m) {
+        npre(n < INT_MAX);
         result.reserve(n + 1);
         for (int i = 0; i <= n; ++i)
             result.push(i);
@@ -3520,7 +3892,7 @@ template <nindexed Text, nindexed Pattern> nvector<int> nkmp_find(const Text& te
         if (text[i] == pattern[matched])
             ++matched;
         if (matched == m) {
-            result.push(i + 1 - m);
+            result.push(i - m + 1);
             matched = prefix[matched - 1];
         }
     }
@@ -3537,7 +3909,8 @@ class npalindrome_index {
         : odd_(nlen(sequence), 0), even_(nlen(sequence), 0) {
         int n = nlen(sequence);
         for (int i = 0, left = 0, right = -1; i < n; ++i) {
-            int radius = i > right ? 1 : min(odd_[left + right - i], right - i + 1);
+            int mirror = i > right ? 0 : int(1LL * left + right - i);
+            int radius = i > right ? 1 : min(odd_[mirror], right - i + 1);
             while (0 <= i - radius && i + radius < n && sequence[i - radius] == sequence[i + radius])
                 ++radius;
             odd_[i] = radius;
@@ -3547,7 +3920,8 @@ class npalindrome_index {
             }
         }
         for (int i = 0, left = 0, right = -1; i < n; ++i) {
-            int radius = i > right ? 0 : min(even_[left + right - i + 1], right - i + 1);
+            int mirror = i > right ? 0 : int(1LL * left + right - i + 1);
+            int radius = i > right ? 0 : min(even_[mirror], right - i + 1);
             while (0 <= i - radius - 1 && i + radius < n &&
                    sequence[i - radius - 1] == sequence[i + radius])
                 ++radius;
@@ -3573,7 +3947,7 @@ class npalindrome_index {
         int length = right - left;
         if (!length)
             return true;
-        int center = (left + right) / 2;
+        int center = left + (right - left) / 2;
         return length & 1 ? odd_[center] >= length / 2 + 1 : even_[center] >= length / 2;
     }
 };
@@ -3595,15 +3969,15 @@ template <nindexed A, class C = nless<>> nvector<int> nsuffix_array(const A& seq
         nsort(suffix, [&](int a, int b) {
             if (rank[a] != rank[b])
                 return rank[a] < rank[b];
-            int rank_a = a + length < n ? rank[a + length] : npos;
-            int rank_b = b + length < n ? rank[b + length] : npos;
+            int rank_a = 1LL * a + length < n ? rank[a + length] : npos;
+            int rank_b = 1LL * b + length < n ? rank[b + length] : npos;
             return rank_a < rank_b;
         });
         next_rank[suffix[0]] = 0;
         for (int i = 1; i < n; ++i) {
             int a = suffix[i - 1], b = suffix[i];
-            pair<int, int> key_a{rank[a], a + length < n ? rank[a + length] : npos};
-            pair<int, int> key_b{rank[b], b + length < n ? rank[b + length] : npos};
+            pair<int, int> key_a{rank[a], 1LL * a + length < n ? rank[a + length] : npos};
+            pair<int, int> key_b{rank[b], 1LL * b + length < n ? rank[b + length] : npos};
             next_rank[b] = next_rank[a] + int(key_a != key_b);
         }
         swap(rank, next_rank);
@@ -3617,8 +3991,11 @@ template <nindexed A> nvector<int> nlcp_array(const A& sequence, const nvector<i
     int n = nlen(sequence);
     npre(suffix.len() == n);
     nvector<int> rank(n), lcp(n, 0);
+    nvector<unsigned char> seen(n, 0);
     for (int i = 0; i < n; ++i) {
         npre(0 <= suffix[i] && suffix[i] < n);
+        npre(!seen[suffix[i]]);
+        seen[suffix[i]] = 1;
         rank[suffix[i]] = i;
     }
     int common = 0;
@@ -3638,6 +4015,18 @@ template <nindexed A> nvector<int> nlcp_array(const A& sequence, const nvector<i
 }
 
 // ---- 61_automata.hpp ----
+namespace ni {
+template <class A>
+concept nautomaton_sequence = nindexed<A> && integral<nindex_value_t<const A>>;
+
+template <int Alphabet, integral I> constexpr int nautomaton_symbol(I value) {
+    if constexpr (signed_integral<I>)
+        if (value < 0)
+            return npos;
+    return __uint128_t(value) < __uint128_t(Alphabet) ? int(value) : npos;
+}
+} // namespace ni
+
 template <int Alphabet>
     requires(Alphabet > 0)
 class ntrie {
@@ -3651,12 +4040,13 @@ class ntrie {
   public:
     int len() const noexcept { return nodes_.len(); }
 
-    template <nindexed A> int add(const A& sequence) {
+    template <ni::nautomaton_sequence A> int add(const A& sequence) {
         int vertex = 0;
+        npre(nodes_[vertex].passing < INT_MAX);
         ++nodes_[vertex].passing;
         for (int i = 0; i < nlen(sequence); ++i) {
-            int symbol = int(sequence[i]);
-            npre(0 <= symbol && symbol < Alphabet);
+            int symbol = ni::nautomaton_symbol<Alphabet>(sequence[i]);
+            npre(symbol != npos);
             int next = nodes_[vertex].next[symbol];
             if (next == npos) {
                 next = nodes_.len();
@@ -3664,27 +4054,29 @@ class ntrie {
                 nodes_.push(vertex, symbol);
             }
             vertex = next;
+            npre(nodes_[vertex].passing < INT_MAX);
             ++nodes_[vertex].passing;
         }
+        npre(nodes_[vertex].terminal < INT_MAX);
         ++nodes_[vertex].terminal;
         return vertex;
     }
 
-    template <nindexed A> int find(const A& sequence, int fallback = npos) const {
+    template <ni::nautomaton_sequence A> int find(const A& sequence, int fallback = npos) const {
         int vertex = 0;
         for (int i = 0; i < nlen(sequence); ++i) {
-            int symbol = int(sequence[i]);
-            if (symbol < 0 || symbol >= Alphabet || nodes_[vertex].next[symbol] == npos)
+            int symbol = ni::nautomaton_symbol<Alphabet>(sequence[i]);
+            if (symbol == npos || nodes_[vertex].next[symbol] == npos)
                 return fallback;
             vertex = nodes_[vertex].next[symbol];
         }
         return vertex;
     }
-    template <nindexed A> int count(const A& sequence) const {
+    template <ni::nautomaton_sequence A> int count(const A& sequence) const {
         int vertex = find(sequence);
         return vertex == npos ? 0 : nodes_[vertex].terminal;
     }
-    template <nindexed A> int count_prefix(const A& prefix) const {
+    template <ni::nautomaton_sequence A> int count_prefix(const A& prefix) const {
         int vertex = find(prefix);
         return vertex == npos ? 0 : nodes_[vertex].passing;
     }
@@ -3715,12 +4107,12 @@ class nac {
     int len() const noexcept { return nodes_.len(); }
     int patterns() const noexcept { return patterns_; }
 
-    template <nindexed A> int add(const A& pattern) {
-        npre(!built_ && nlen(pattern) > 0);
+    template <ni::nautomaton_sequence A> int add(const A& pattern) {
+        npre(!built_ && nlen(pattern) > 0 && patterns_ < INT_MAX);
         int vertex = 0;
         for (int i = 0; i < nlen(pattern); ++i) {
-            int symbol = int(pattern[i]);
-            npre(0 <= symbol && symbol < Alphabet);
+            int symbol = ni::nautomaton_symbol<Alphabet>(pattern[i]);
+            npre(symbol != npos);
             int next = nodes_[vertex].next[symbol];
             if (next == npos) {
                 next = nodes_.len();
@@ -3769,12 +4161,12 @@ class nac {
     }
 
     // Callback receives the inclusive text position and the pattern id.
-    template <nindexed A, class F> void match(const A& text, F callback) const {
+    template <ni::nautomaton_sequence A, class F> void match(const A& text, F&& callback) const {
         npre(built_);
         int state = 0;
         for (int position = 0; position < nlen(text); ++position) {
-            int symbol = int(text[position]);
-            npre(0 <= symbol && symbol < Alphabet);
+            int symbol = ni::nautomaton_symbol<Alphabet>(text[position]);
+            npre(symbol != npos);
             state = nodes_[state].next[symbol];
             for (int vertex = state; vertex != npos; vertex = nodes_[vertex].output)
                 for (int i = 0; i < nodes_[vertex].patterns.len(); ++i)
@@ -3782,7 +4174,7 @@ class nac {
         }
     }
 
-    template <nindexed A> long long count(const A& text) const {
+    template <ni::nautomaton_sequence A> long long count(const A& text) const {
         long long result = 0;
         match(text, [&](int, int) { ++result; });
         return result;
@@ -3790,6 +4182,16 @@ class nac {
 };
 
 // ---- 70_geom.hpp ----
+namespace ni {
+template <class T> constexpr nwide_t<T> ngeom_widen(const T& value) {
+    using W = nwide_t<T>;
+    if constexpr (is_arithmetic_v<T>)
+        return nchecked_number<W>(value);
+    else
+        return W(value);
+}
+} // namespace ni
+
 template <class T> struct npoint {
     T x{}, y{};
 
@@ -3815,26 +4217,29 @@ template <class T> struct npoint {
 };
 
 template <class T> constexpr nwide_t<T> ndot(const npoint<T>& a, const npoint<T>& b) {
-    using W = nwide_t<T>;
-    return W(a.x) * W(b.x) + W(a.y) * W(b.y);
+    return ni::nchecked_add(ni::nchecked_mul(ni::ngeom_widen(a.x), ni::ngeom_widen(b.x)),
+                            ni::nchecked_mul(ni::ngeom_widen(a.y), ni::ngeom_widen(b.y)));
 }
 
 template <class T> constexpr nwide_t<T> ncross(const npoint<T>& a, const npoint<T>& b) {
-    using W = nwide_t<T>;
-    return W(a.x) * W(b.y) - W(a.y) * W(b.x);
+    return ni::nchecked_sub(ni::nchecked_mul(ni::ngeom_widen(a.x), ni::ngeom_widen(b.y)),
+                            ni::nchecked_mul(ni::ngeom_widen(a.y), ni::ngeom_widen(b.x)));
 }
 
 template <class T> constexpr nwide_t<T> norient(const npoint<T>& a, const npoint<T>& b, const npoint<T>& c) {
     using W = nwide_t<T>;
-    W abx = W(b.x) - W(a.x), aby = W(b.y) - W(a.y);
-    W acx = W(c.x) - W(a.x), acy = W(c.y) - W(a.y);
-    return abx * acy - aby * acx;
+    W abx = ni::nchecked_sub(ni::ngeom_widen(b.x), ni::ngeom_widen(a.x));
+    W aby = ni::nchecked_sub(ni::ngeom_widen(b.y), ni::ngeom_widen(a.y));
+    W acx = ni::nchecked_sub(ni::ngeom_widen(c.x), ni::ngeom_widen(a.x));
+    W acy = ni::nchecked_sub(ni::ngeom_widen(c.y), ni::ngeom_widen(a.y));
+    return ni::nchecked_sub(ni::nchecked_mul(abx, acy), ni::nchecked_mul(aby, acx));
 }
 
 template <class T> constexpr nwide_t<T> ndist2(const npoint<T>& a, const npoint<T>& b) {
     using W = nwide_t<T>;
-    W dx = W(a.x) - W(b.x), dy = W(a.y) - W(b.y);
-    return dx * dx + dy * dy;
+    W dx = ni::nchecked_sub(ni::ngeom_widen(a.x), ni::ngeom_widen(b.x));
+    W dy = ni::nchecked_sub(ni::ngeom_widen(a.y), ni::ngeom_widen(b.y));
+    return ni::nchecked_add(ni::nchecked_mul(dx, dx), ni::nchecked_mul(dy, dy));
 }
 
 template <class T> constexpr bool non_segment(const npoint<T>& point, const npoint<T>& a, const npoint<T>& b) {
@@ -3882,6 +4287,7 @@ template <nindexed A> auto nconvex_hull(const A& source, bool keep_collinear = f
         return keep_collinear ? points : nvector<P>{points.front(), points.back()};
 
     nvector<P> hull;
+    npre(points.len() <= INT_MAX / 2);
     hull.reserve(2 * points.len());
     for (int i = 0; i < points.len(); ++i) {
         while (hull.len() >= 2) {
@@ -3914,7 +4320,10 @@ template <nindexed A> auto npolygon_area2(const A& polygon) {
     W area = 0;
     for (int i = 0; i < nlen(polygon); ++i) {
         int next = i + 1 == nlen(polygon) ? 0 : i + 1;
-        area += W(polygon[i].x) * W(polygon[next].y) - W(polygon[i].y) * W(polygon[next].x);
+        W term = ni::nchecked_sub(
+            ni::nchecked_mul(ni::ngeom_widen(polygon[i].x), ni::ngeom_widen(polygon[next].y)),
+            ni::nchecked_mul(ni::ngeom_widen(polygon[i].y), ni::ngeom_widen(polygon[next].x)));
+        area = ni::nchecked_add(area, term);
     }
     return area;
 }
@@ -3962,7 +4371,8 @@ template <class T> struct nline_function {
     T slope{}, intercept{};
     using value_type = nwide_t<T>;
     constexpr value_type operator()(T x) const {
-        return value_type(slope) * value_type(x) + value_type(intercept);
+        return ni::nchecked_add(ni::nchecked_mul(ni::ngeom_widen(slope), ni::ngeom_widen(x)),
+                                ni::ngeom_widen(intercept));
     }
 };
 
@@ -4069,11 +4479,14 @@ template <signed_integral T, class Better = nless<nwide_t<T>>> class nlichao {
 template <signed_integral I, class F, class Better = nless<>>
 I nunimodal_arg(I first, I last, F function, Better better = {}) {
     npre(first < last);
-    while (__int128_t(last) - first > 4) {
-        I third = I((__int128_t(last) - first) / 3);
+    auto distance = [](I left, I right) { return __uint128_t(right) - __uint128_t(left); };
+    while (distance(first, last) > 4) {
+        I third = I(distance(first, last) / 3);
         I left = I(__int128_t(first) + third);
         I right = I(__int128_t(last) - 1 - third);
-        if (invoke(better, invoke(function, right), invoke(function, left)))
+        auto left_value = invoke(function, left);
+        auto right_value = invoke(function, right);
+        if (invoke(better, right_value, left_value))
             first = left + 1;
         else
             last = right + 1;
@@ -4093,7 +4506,9 @@ I nunimodal_arg(I first, I last, F function, Better better = {}) {
 // ---- 80_io.hpp ----
 namespace ni {
 template <class T>
-inline constexpr bool nio_integer = is_integral_v<T> || same_as<T, __int128_t> || same_as<T, __uint128_t>;
+inline constexpr bool nio_integer =
+    (!same_as<remove_cv_t<T>, bool>) &&
+    (is_integral_v<T> || same_as<T, __int128_t> || same_as<T, __uint128_t>);
 
 template <class T> struct nio_unsigned_type {
     using type = make_unsigned_t<T>;
@@ -4153,6 +4568,7 @@ class ninput {
             magnitude = magnitude * 10 + digit;
             character = get();
         } while ('0' <= character && character <= '9');
+        npre(character == EOF || character <= ' ');
 
         if constexpr (is_signed_v<T> || same_as<T, __int128_t>) {
             __uint128_t positive_limit = __uint128_t(numeric_limits<T>::max());

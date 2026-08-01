@@ -1,3 +1,13 @@
+namespace ni {
+template <class T> constexpr nwide_t<T> ngeom_widen(const T& value) {
+    using W = nwide_t<T>;
+    if constexpr (is_arithmetic_v<T>)
+        return nchecked_number<W>(value);
+    else
+        return W(value);
+}
+} // namespace ni
+
 template <class T> struct npoint {
     T x{}, y{};
 
@@ -23,26 +33,29 @@ template <class T> struct npoint {
 };
 
 template <class T> constexpr nwide_t<T> ndot(const npoint<T>& a, const npoint<T>& b) {
-    using W = nwide_t<T>;
-    return W(a.x) * W(b.x) + W(a.y) * W(b.y);
+    return ni::nchecked_add(ni::nchecked_mul(ni::ngeom_widen(a.x), ni::ngeom_widen(b.x)),
+                            ni::nchecked_mul(ni::ngeom_widen(a.y), ni::ngeom_widen(b.y)));
 }
 
 template <class T> constexpr nwide_t<T> ncross(const npoint<T>& a, const npoint<T>& b) {
-    using W = nwide_t<T>;
-    return W(a.x) * W(b.y) - W(a.y) * W(b.x);
+    return ni::nchecked_sub(ni::nchecked_mul(ni::ngeom_widen(a.x), ni::ngeom_widen(b.y)),
+                            ni::nchecked_mul(ni::ngeom_widen(a.y), ni::ngeom_widen(b.x)));
 }
 
 template <class T> constexpr nwide_t<T> norient(const npoint<T>& a, const npoint<T>& b, const npoint<T>& c) {
     using W = nwide_t<T>;
-    W abx = W(b.x) - W(a.x), aby = W(b.y) - W(a.y);
-    W acx = W(c.x) - W(a.x), acy = W(c.y) - W(a.y);
-    return abx * acy - aby * acx;
+    W abx = ni::nchecked_sub(ni::ngeom_widen(b.x), ni::ngeom_widen(a.x));
+    W aby = ni::nchecked_sub(ni::ngeom_widen(b.y), ni::ngeom_widen(a.y));
+    W acx = ni::nchecked_sub(ni::ngeom_widen(c.x), ni::ngeom_widen(a.x));
+    W acy = ni::nchecked_sub(ni::ngeom_widen(c.y), ni::ngeom_widen(a.y));
+    return ni::nchecked_sub(ni::nchecked_mul(abx, acy), ni::nchecked_mul(aby, acx));
 }
 
 template <class T> constexpr nwide_t<T> ndist2(const npoint<T>& a, const npoint<T>& b) {
     using W = nwide_t<T>;
-    W dx = W(a.x) - W(b.x), dy = W(a.y) - W(b.y);
-    return dx * dx + dy * dy;
+    W dx = ni::nchecked_sub(ni::ngeom_widen(a.x), ni::ngeom_widen(b.x));
+    W dy = ni::nchecked_sub(ni::ngeom_widen(a.y), ni::ngeom_widen(b.y));
+    return ni::nchecked_add(ni::nchecked_mul(dx, dx), ni::nchecked_mul(dy, dy));
 }
 
 template <class T> constexpr bool non_segment(const npoint<T>& point, const npoint<T>& a, const npoint<T>& b) {
@@ -90,6 +103,7 @@ template <nindexed A> auto nconvex_hull(const A& source, bool keep_collinear = f
         return keep_collinear ? points : nvector<P>{points.front(), points.back()};
 
     nvector<P> hull;
+    npre(points.len() <= INT_MAX / 2);
     hull.reserve(2 * points.len());
     for (int i = 0; i < points.len(); ++i) {
         while (hull.len() >= 2) {
@@ -122,7 +136,10 @@ template <nindexed A> auto npolygon_area2(const A& polygon) {
     W area = 0;
     for (int i = 0; i < nlen(polygon); ++i) {
         int next = i + 1 == nlen(polygon) ? 0 : i + 1;
-        area += W(polygon[i].x) * W(polygon[next].y) - W(polygon[i].y) * W(polygon[next].x);
+        W term = ni::nchecked_sub(
+            ni::nchecked_mul(ni::ngeom_widen(polygon[i].x), ni::ngeom_widen(polygon[next].y)),
+            ni::nchecked_mul(ni::ngeom_widen(polygon[i].y), ni::ngeom_widen(polygon[next].x)));
+        area = ni::nchecked_add(area, term);
     }
     return area;
 }

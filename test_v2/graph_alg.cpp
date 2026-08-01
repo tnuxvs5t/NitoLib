@@ -50,4 +50,12 @@ int main() {
     ntest(lca.distance(3, 8) == 6);
     ntest(lca.jump(8, 2) == 5 && lca.jump(8, 5) == npos);
     ntest(lca.kth_on_path(3, 8, 0) == 3 && lca.kth_on_path(3, 8, 6) == 8);
+
+    ngraph_list<int> outward(5);
+    outward.add(0, 1);
+    outward.add(0, 2);
+    outward.add(1, 3);
+    outward.add(1, 4);
+    nlca directed_lca(outward);
+    ntest(directed_lca(3, 4) == 1 && directed_lca(2, 4) == 0);
 }

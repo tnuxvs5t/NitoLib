@@ -20,9 +20,9 @@ class nfenwick {
         for (int i = 0; i < size_; ++i)
             tree_[i + 1] = source[i];
         for (int i = 1; i <= size_; ++i) {
-            int parent = i + (i & -i);
+            long long parent = 1LL * i + (i & -i);
             if (parent <= size_)
-                tree_[parent] = operation_(tree_[parent], tree_[i]);
+                tree_[size_t(parent)] = operation_(tree_[size_t(parent)], tree_[i]);
         }
     }
 
@@ -34,8 +34,13 @@ class nfenwick {
 
     void add(int index, const T& delta) {
         npre(0 <= index && index < size_);
-        for (++index; index <= size_; index += index & -index)
+        for (++index; index <= size_;) {
             tree_[index] = operation_(tree_[index], delta);
+            long long next = 1LL * index + (index & -index);
+            if (next > size_)
+                break;
+            index = int(next);
+        }
     }
 
     T prefix(int right) const {
@@ -127,11 +132,12 @@ class nseg {
     T fold(int left, int right) const {
         npre(0 <= left && left <= right && right <= size_);
         T prefix = operation_.id(), suffix = operation_.id();
-        for (left += base_, right += base_; left < right; left >>= 1, right >>= 1) {
-            if (left & 1)
-                prefix = operation_(move(prefix), tree_[left++]);
-            if (right & 1)
-                suffix = operation_(tree_[--right], move(suffix));
+        long long first = 1LL * left + base_, last = 1LL * right + base_;
+        for (; first < last; first >>= 1, last >>= 1) {
+            if (first & 1)
+                prefix = operation_(move(prefix), tree_[size_t(first++)]);
+            if (last & 1)
+                suffix = operation_(tree_[size_t(--last)], move(suffix));
         }
         return operation_(move(prefix), move(suffix));
     }

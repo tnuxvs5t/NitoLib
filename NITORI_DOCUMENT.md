@@ -99,9 +99,11 @@ Nitori 公共 API 不提供 iterator。遍历使用 `nfor`/`nfori` 或显式游�
 - `nvector`、`ndeque`、`narray`、`nmatrix` 等拥有存储。
 - `nspan`、`nview`、`nall`、`nsub`、`nstride`、`nproject`、`nzip`、
   `nproduct`、`nwindows` 和 `ngraph_view` 借用 owner。
-- view 不延长 owner 生命周期。
+- 组合器对左值 owner 只保存引用；对 `nspan/nview/组合 view` 则复制或移动 view 包装，
+  让中间 view 可以安全嵌套，但仍不延长最底层 owner 的生命周期。
 - owner 发生扩容、销毁或破坏索引拓扑的修改后，旧 view 可能失效。
-- 会立即悬垂的临时 owner 借用被删除，例如 `nall(A&&) = delete`。
+- 会立即悬垂的临时 owning container 被 concept 拒绝，例如 `nall(nvector<int>{...})`；
+  临时 view 则可以安全进入下一层组合器。
 
 ### 2.3 命名
 
@@ -180,7 +182,7 @@ x.reset();
 ```cpp
 nchmin(a, candidate);  // 变小时赋值并返回 true
 nchmax(a, candidate);  // 变大时赋值并返回 true
-nlen(object);          // 优先 object.len()，否则 object.size()，结果检查为 int
+nlen(object);          // 优先 integral len()，否则 integral size()；转 int 前检查范围
 nbitceil(n);           // 至少为 1 的二次幂上取整，要求 0 <= n <= 2^30
 ```
 
@@ -209,17 +211,39 @@ enum class nlaw {
 | `nmonoid<O,T>` | 半群 + `op.id() -> T` |
 | `ngroup<O,T>` | 幺半群 + `op.inv(T) -> T` |
 | `ncommutative_monoid<O,T>` | 幺半群 + 交换律声明 |
-| `naction<A,S,F>` | tag 单位、组合及对区间聚合的作用 |
+| `nsemiring<Add,Mul,T>` | 两个接口合格的幺半群 + 显式 `nsemiring_laws` 声明 |
+| `nexact_field_element<T>` | `nexact_field<T>` 显式为真，且具备精确域运算接口 |
+| `naction<A,S,F>` | action 接口 + 显式 `naction_laws<A,S,F>` 声明 |
+
+`nexact_field<T>` 默认是 `false`。素数模 `nmodint<M>` 自动声明为真；合数模和普通
+整数不会冒充域。自定义有理数等精确域类型可显式特化：
+
+```cpp
+template<> inline constexpr bool nexact_field<rational> = true;
+```
+
+这仍是调用者的数学声明：concept 能检查运算接口，不能替你证明域公理。
+
+`nsemiring_laws<Add,Mul,T>` 显式声明加法交换、乘法结合、分配律与加法零吸收。
+内建非 bool 整数 `nadd/nmul`（在调用者保证不发生有符号溢出的域内）和所有
+`nmodint<M>` 默认声明；浮点与自定义操作默认不声明。自定义 min-plus 等半环应特化：
+
+```cpp
+template<> inline constexpr bool nsemiring_laws<my_add, my_multiply, state> = true;
+```
 
 ### 5.2 内建操作
 
 | 操作包 | 单位元 | 声明的定律 |
 |---|---|---|
-| `nadd<T>` | `T{}` | 结合、单位；当 `nadd_group<T>` 为真时再声明逆与交换 |
+| `nadd<T>` | `T{}` | 结合、单位；当 `nadd_group<T>` 为真时再声明逆与交换（`bool` 排除） |
 | `nmul<T>` | `T{1}` | 结合、单位 |
 | `nxor<T>` | `T{}` | 结合、单位、逆、交换 |
-| `nmin<T>` | `ninf<T>` | 结合、单位、交换、幂等 |
-| `nmax<T>` | `nninf<T>` | 结合、单位、交换、幂等 |
+| `nmin<T>` | 类型的真实上界；浮点为 `+infinity` | 结合、单位、交换、幂等 |
+| `nmax<T>` | 类型的真实下界；浮点为 `-infinity` | 结合、单位、交换、幂等 |
+
+`ninf/nninf` 是为安全加减保留余量的算法哨兵，不能充当 `nmin/nmax` 的数学单位元；
+两者故意是不同概念。
 
 `naddsum_action<T>` 实现“区间加、区间和”：
 
@@ -228,6 +252,10 @@ tag_id()                       // 0
 compose(newer, older)          // older 后执行 newer
 apply(sum, delta, length)      // sum + delta*length
 ```
+
+内建 action 定律只为非 `bool` 整数和 `nmodint<M>` 声明；有符号整数仍要求调用者
+保证运算不溢出。其他标量即使接口可编译，也必须由调用者显式声明
+`naction_laws`，不能从运算符长相推断代数定律。
 
 ### 5.3 自定义非交换幺半群
 
@@ -254,10 +282,13 @@ struct action {
     F compose(const F& newer, const F& older) const;
     S apply(S aggregate, const F& tag, int length) const;
 };
+
+template<> inline constexpr bool naction_laws<action, S, F> = true;
 ```
 
 `compose(newer, older)` 表示原有 `older` 后再追加 `newer`。顺序错误是 lazy segment
-tree 最常见的隐蔽 WA。
+tree 最常见的隐蔽 WA。`naction_laws` 声明 tag 单位、compose 结合与单位，以及
+`apply` 对聚合和区间拼接的兼容性；concept 只能检查声明和接口，不能证明这些等式。
 
 ---
 
@@ -302,6 +333,8 @@ nsort(odd_positions);
 | `nswappable_indexed<A>` | 元素是可写且可交换的 lvalue |
 | `ncontiguous_indexed<A>` | 另外提供 contiguous `data()` |
 | `nresizable<A>` | 提供 `resize(int)` |
+| `nview_object<A>` | 类型显式携带安全可传递的 view 包装 |
+| `nviewable_indexed<A>` | indexed 左值 owner，或可复制/移动进组合器的 view |
 
 算法只要求实际需要的能力。例如 `nfind` 只需要索引读取，`nsort` 需要可交换引用，
 `nunique` 还需要 resize。
@@ -314,9 +347,25 @@ auto middle = nsub(a, 2, 7);           // [2,7)
 auto every_second = nstride(a, 0, 5, 2);
 auto backwards = nreverse(a);
 auto keys = nproject(items, [](item& x) -> int& { return x.key; });
+
+auto nested = nreverse(nsub(a, 2, 7));
+auto paired = nzip(nsub(a, 0, 3), nreverse(nsub(b, 1, 4)));
+auto window = nwindows(nsub(a, 1, 8), 3)[1];
 ```
 
 `nstride(a, first, count, step)` 的 `count` 是元素数，不是终点；`step` 可为负。
+组合结果按值携带中间 view，因此上例不会借用已经销毁的包装对象；它们仍借用 `a/b`
+本体，所以 owner 必须继续存活且索引拓扑稳定。
+
+原地算法接受左值 owner，也接受临时 view，因此无需为每一层机械命名：
+
+```cpp
+nsort(nreverse(nsub(a, 2, 7)));
+nreverse_inplace(nsub(a, 0, 4));
+nzeta_subset(nsub(table, offset, offset + (1 << bits)));
+```
+
+同样的调用若把临时 owning container 放在最底层会在编译期拒绝。
 
 ### 6.5 矩阵列和对角线就是普通 view
 
@@ -352,6 +401,8 @@ while (e.ok()) {
 
 具有自定义 `enumerate()` 的对象优先使用它；普通 `nindexed` 左值使用借用索引游标；
 可拥有的临时 indexed 对象由游标接管，避免立即悬垂。
+`nenumerator_t<A>` 是产生的游标类型，`nenumerable<A>` 检查 `ok/val/idx/next`
+完整协议；`ngraph_like` 等高层 capability 会在入口处使用它，而不是等模板深处才报错。
 
 ### 7.2 循环宏
 
@@ -380,7 +431,8 @@ nrrep(i, count)  // i = count-1, ..., 1, 0
 ```
 
 仅接受有符号整数。正 step 枚举 `< last`，负 step 枚举 `> last`，step 不能为零。
-`nrep/nrrep` 的循环变量固定为 `int`，`count` 只求值一次；非正次数为空，
+任何 `nrange` 的元素总数都必须能放入 `int`；构造时即验证，不能靠提前 `break`
+绕过游标编号溢出。`nrep/nrrep` 的循环变量固定为 `int`，`count` 只求值一次；非正次数为空，
 正次数必须不超过 `INT_MAX`。两者的 `break/continue` 都是普通单循环语义。
 
 ### 7.4 zip、笛卡尔积和窗口
@@ -392,7 +444,8 @@ auto w = nwindows(a, 3, 2);   // 宽 3、起点步长 2 的 nsub 视图序列
 ```
 
 `nproduct` 的总元素数必须能放入 `int`。`nwindows` 要求 `width >= 0`、`step > 0`；
-宽度超过 owner 长度时为空，宽度为零时有 `len(owner)+1` 个空窗口。
+宽度超过 owner 长度时为空，宽度为零时有 `len(owner)+1` 个空窗口；若该数量超过
+`INT_MAX`，构造失败而不是发生有符号溢出。
 
 ---
 
@@ -432,13 +485,15 @@ cube.dim(axis, fallback);
 cube.shape();
 ```
 
-存储为 row-major 连续数组，总体积必须能放入 `int`。
+存储为 row-major 连续数组。每一维都必须非负，即使其他维为零也不会跳过检查；
+总体积必须能放入 `int`。可变参数坐标只接受整数，并在转成 `int` 前验证表示范围，
+不会把超大 `long long` 静默截断成另一个合法坐标。
 
 ### 8.4 通用序列算法
 
 | API | 前提 | 复杂度 |
 |---|---|---|
-| `nsort(a,cmp)` | `nswappable_indexed`，cmp 为严格弱序 | `O(n log n)`；连续走 `std::sort`，否则 heapsort |
+| `nsort(a,cmp)` | viewable + `nswappable_indexed`，cmp 为严格弱序 | `O(n log n)`；连续走 `std::sort`，否则 heapsort |
 | `nreverse_inplace(a,l,r)` | 可交换；默认全区间 | `O(r-l)` |
 | `nfind(a,x,fallback)` | 可读 indexed | `O(n)` |
 | `nlower/nupper(a,x,cmp)` | 已按 cmp 排序 | `O(log n)` |
@@ -468,7 +523,8 @@ I nfirst_true(first, last, predicate); // [first,last) 中首个 true；全 fals
 I nlast_true(first, last, predicate);  // 最后 true；要求 first > lowest
 ```
 
-调用者保证谓词单调。`nlast_true` 返回 `first-1` 表示区间内没有 true。
+两者都要求 `first <= last`，调用者保证谓词单调。`nlast_true` 返回 `first-1`
+表示区间内没有 true。
 
 ### 9.3 `nrollback<T>`
 
@@ -600,7 +656,8 @@ nlazy_addsum<long long> seg(source);
 ### 10.4 聚合队列：`nqueue_agg<T,O>`
 
 保持队列顺序的双栈幺半群聚合：`push`、`front`、`pop`、`pop(fallback)`、
-`fold`、`len`、`empty`。摊还 `O(1)`，适合滑动窗口最值或非交换聚合。
+`fold`、`len`、`empty`。`front` 返回 `const T&`；缓存聚合要求已入队元素不可原地改写。
+全部操作摊还 `O(1)`，适合滑动窗口最值或非交换聚合。
 
 ### 10.5 DSU
 
@@ -662,6 +719,8 @@ nrun_mo(queries, universe, add, remove, answer); // 左右操作相同
 ```
 
 每个查询必须满足 `0 <= left <= right <= universe`。`answer` 接收 query 的 `id`。
+调度器按引用转发回调，不复制回调状态；简化重载的左右移动会调用同一个 `add/remove`
+对象，也支持不可复制 functor。
 
 ---
 
@@ -669,7 +728,9 @@ nrun_mo(queries, universe, add, remove, answer); // 左右操作相同
 
 ### 11.1 统一图协议
 
-边可以是整数目的点，或具有 `.to` 和可选 `.weight` 的对象。
+边可以是整数目的点，或具有 integral `.to` 和可选 arithmetic `.weight` 的对象。
+目的点转成 `int`、权值转成算法指定类型时都会先检查表示范围；窄化不会靠回绕
+伪装成另一个合法顶点或权值。
 
 ```cpp
 template<class W=int> struct narc { int to; W weight; };
@@ -681,10 +742,11 @@ nedge_weight(edge); // integral edge 的默认权为 1
 
 ```cpp
 graph.vertices();
-graph.neighbors(vertex); // 返回任意可枚举邻接对象
+graph.neighbors(vertex); // 返回任意可枚举邻接对象，可按值或按引用
 ```
 
-概念名：`ngraph_like<G>`。
+`vertices()` 必须返回 integral；算法在转成 `int` 前验证表示范围。概念名：
+`ngraph_like<G>`。
 
 ### 11.2 显式和隐式图
 
@@ -704,7 +766,8 @@ auto grid_graph = ngraph_view(rows * cols, [&](int v) {
 });
 ```
 
-算法依赖 `ngraph_like`，不依赖 `ngraph_list`。
+算法依赖 `ngraph_like`，不依赖 `ngraph_list`。算法保留 `neighbors` 的返回类别：按引用
+返回的邻接对象不会被隐式复制，按值生成的临时邻接对象则存活到本次遍历结束。
 
 ### 11.3 遍历与最短路
 
@@ -712,7 +775,11 @@ auto grid_graph = ngraph_view(rows * cols, [&](int v) {
 |---|---|---|---|
 | `nbfs(g,s)` | 无权图 | `npos` 表示不可达的距离 | `O(V+E)` |
 | `n01bfs(g,s)` | 权仅 0/1 | `npos` 表示不可达 | `O(V+E)` |
-| `ndijkstra<D>(g,s,inf)` | 权非负，和不溢出 | 距离向量 | `O((V+E)logV)` |
+| `ndijkstra<D>(g,s,inf)` | 权非负，距离严格小于 `inf` 且和不溢出 | 距离向量 | `O((V+E)logV)` |
+
+`ndijkstra` 的默认 `inf` 使用 `D` 的真实顺序上界（浮点为正无穷），而不是保留余量的
+`ninf<D>`。`inf` 本身必须非负且不能为 NaN；若合法最短路可能等于该哨兵，请改用
+更宽的距离类型或显式策略。
 
 ### 11.4 DAG、SCC 与 LCA
 
@@ -721,7 +788,12 @@ auto order = ntoposort(g); // 有环返回空 nmaybe
 auto components = nscc(g); // npartition，迭代 Kosaraju
 ```
 
-`nlca tree(g, root)` 要求从 root 可达全部顶点，通常输入无向树：
+`nlca tree(g, root)` 要求图严格描述一棵以 root 为根的树，接受两种且仅两种存储：
+
+- 每个父到子恰好一条弧，共 `V-1` 条；
+- 每条树边恰好一对反向弧，共 `2(V-1)` 条。
+
+普通连通图、额外边、自环、漏反向或重复弧不会被静默解释成某棵 BFS 树。
 
 ```cpp
 tree.depth(v);
@@ -752,8 +824,9 @@ auto answer = nreroot(
 - `vertex(aggregate, v)`：把所有邻边贡献转成以 `v` 为根的状态。
 - `lift(state, from, to)`：把 `from` 的状态变成对 `to` 的边贡献。
 
-输入必须是双向存储的树，弧数严格为 `2(V-1)`，连通且无额外环。复杂度 `O(V+E)`
-次回调，prefix/suffix 保持 merge 顺序。
+输入必须是双向存储的树：每条无向边必须恰好提供一对反向弧，弧数严格为
+`2(V-1)`，连通、无自环且无额外环。checked profile 会验证这套树拓扑契约；仅满足
+弧数而方向或重数错误也会失败。复杂度 `O(V+E)` 次回调，prefix/suffix 保持 merge 顺序。
 
 ### 11.6 Prim MST
 
@@ -765,7 +838,8 @@ if (mst) {
 }
 ```
 
-无连通生成树返回空。无向边必须以对称弧提供。复杂度 `O(E log E)`。
+无连通生成树返回空。无向边必须以对称弧提供；边权转换和总权累加必须能由 `D`
+表示，checked profile 会验证。复杂度 `O(E log E)`。
 
 ### 11.7 最大流
 
@@ -776,8 +850,10 @@ auto value = flow.flow(source, sink);
 auto side = flow.mincut(source); // 残量图中 source 可达标记
 ```
 
-容量非负，`source != sink`。对象只允许调用一次 `flow`，之后不能继续 `add`。
-实现为非递归 push-relabel；基础最坏界 `O(V^3)`。
+容量类型必须是排除 `bool` 的整数，容量非负，`source != sink`，顶点数不超过
+`INT_MAX/2`。总流量与残量加法必须能由容量类型表示，checked profile 会在累加前验证。
+对象只允许调用一次 `flow`，之后不能继续 `add`。实现为非递归 push-relabel；
+基础最坏界 `O(V^3)`。
 
 ### 11.8 二分图最大匹配
 
@@ -798,6 +874,8 @@ result.right[v];  // 匹配的左点或 npos
 
 ### 12.1 整数基础
 
+`ninteger<T>` 表示排除 `bool` 的整数类型，并包含 GNU++20 下的 128-bit 整数。
+
 | API | 语义 |
 |---|---|
 | `nmag/nabs` | 无符号绝对值，能表示有符号最低值的幅度 |
@@ -805,7 +883,7 @@ result.right[v];  // 匹配的左点或 npos
 | `nlcm` | 检查无符号结果溢出 |
 | `nfloor_div/nceil_div` | 数学向下/向上整除，除数不可零 |
 | `nmod(value,modulus)` | 规范到 `[0,modulus)`，modulus > 0 |
-| `nextgcd(a,b)` | `{gcd,x,y}`，满足 `ax+by=gcd`，系数为 `__int128_t` |
+| `nextgcd(a,b)` | 至多 64-bit 输入；`{gcd,x,y}` 满足 `ax+by=gcd`，系数为 `__int128_t` |
 | `nmulmod` | uint64 乘法模，内部 `__uint128_t` |
 | `npowmod` | uint64 模快速幂 |
 | `nisprime` | 对全部 uint64 确定性的 Miller–Rabin bases |
@@ -895,7 +973,8 @@ auto p = nmatpow(square, exponent, add, multiply);
 ```
 
 默认使用 `nadd<T>` 与 `nmul<T>`。乘法要求维度相容；朴素乘法 `O(r*k*c)`，快速幂
-为 `O(n^3 log exponent)`。自定义操作包必须真实构成所需半环语义，concept 只检查幺半群接口。
+为 `O(n^3 log exponent)`。操作包必须满足 `nsemiring`，包括显式的跨操作定律声明；
+concept 仍不能替调用者证明声明为真。
 
 ### 13.3 RREF、行列式与线性方程
 
@@ -912,9 +991,10 @@ auto solution = nlinear_solve(A, b);
 - 有解：`particular` 为特解，`basis` 为齐次解空间基。
 - 任意解形如 `particular + Σ c_i*basis[i]`。
 
-这些算法要求系数类型形成“精确可判零的域”：`T{}` 是零、`T{1}` 是一、非零 pivot
-可除。浮点数的精确 `== 0` 通常不适合直接使用；优先模素数域或自行实现带 eps 的算法。
-复杂度为三次量级。
+这些算法要求 `nexact_field_element<T>`：`T{}` 是零、`T{1}` 是一、非零 pivot 可除。
+素数模 `nmodint` 自动满足；普通整数、合数模和浮点数默认在编译期拒绝。整数行列式
+不能把截断除法塞进高斯消元，应另用 Bareiss 等整环算法；浮点线性代数应另行设计
+带 eps 与选主元策略的数值接口。复杂度为三次量级。
 
 ### 13.4 卷积
 
@@ -925,7 +1005,7 @@ auto c = nconv_auto(a, b);  // 根据真实 NTT 前提选择
 auto c = nconv(a, b);       // 当前默认转发到 auto
 ```
 
-NTT 前提：
+NTT 前提（素数模由 `nexact_field` 在编译期约束）：
 
 - 系数类型是 `nmodint<M>`。
 - `M` 为不超过 `UINT32_MAX` 的质数。
@@ -945,6 +1025,8 @@ auto y = npoly_evaluate(a, x);    // Horner
 auto inv = nfps_inverse(a, terms);// a[0] 非零且可逆
 ```
 
+`npoly_integral` 与 `nfps_inverse` 接受浮点或 `nexact_field_element`，不会让普通整数
+静默执行截断除法；合数模即使个别元素可逆，也不冒充全域。
 FPS 逆使用 Newton 迭代，复杂度由 `nconv` 后端决定；NTT 可用时约为 `O(M(n)log n)`。
 
 ---
@@ -983,10 +1065,12 @@ auto lcp = nlcp_array(sequence, sa);
 
 `lcp[i]` 是 `sa[i-1]` 与 `sa[i]` 的 LCP，`lcp[0]=0`。当前 suffix array 使用倍增排序，
 复杂度 `O(n log^2 n)`（每轮比较排序 `O(n log n)`，轮数 `O(log n)`）；LCP 为 `O(n)`。
+传给 `nlcp_array` 的 suffix 必须是 `[0,n)` 的排列，范围与重复项都会验证。
 
 ### 14.4 `ntrie<Alphabet>`
 
-输入符号必须可转为 `[0,Alphabet)` 的整数。字符可用 `nproject` 映射：
+输入元素类型必须是 integral，符号值必须位于 `[0,Alphabet)`；范围判断发生在转成
+`int` 之前，不会让超大整数截断成合法符号。字符可用 `nproject` 映射：
 
 ```cpp
 string text = "apple";
@@ -1016,7 +1100,8 @@ long long total = ac.count(text);
 int next_state = ac.step(state, symbol);
 ```
 
-构建/扫描线性于节点与文本，另加实际报告匹配数。
+构建/扫描线性于节点与文本，另加实际报告匹配数。`match` 按引用转发 callback，
+不会复制其内部状态，也支持不可复制 functor。
 
 ---
 
@@ -1037,8 +1122,10 @@ non_segment(p,a,b);   // 含端点
 nsegment_intersect(a,b,c,d);
 ```
 
-integral 坐标的乘积使用 `__int128_t`。`non_segment` 名字读作“n-on-segment”，不是
-英文否定词 `non`。
+integral 坐标的差、乘积与累加使用 `__int128_t`，并在转换和运算前验证结果可表示；
+极端 64-bit 坐标若需要超过 128-bit 的叉积/距离会触发契约，超出 signed 128-bit
+输入域的更宽无符号坐标也会被拒绝，而不是先窄化或发生有符号 UB。
+`non_segment` 名字读作“n-on-segment”，不是英文否定词 `non`。
 
 ### 15.2 凸包和多边形
 
@@ -1071,7 +1158,7 @@ auto y = minimum.query(x);               // 无覆盖线时为空
 nlichao<long long, ngreater<__int128_t>> maximum(left, right);
 ```
 
-`nline_function<T>` 保存 slope/intercept；integral 求值扩为 `__int128_t`。
+`nline_function<T>` 保存 slope/intercept；integral 求值扩为 `__int128_t` 并检查乘加范围。
 整条线插入和查询 `O(log(domain width))`，线段插入 `O(log^2(domain width))`，节点按需创建。
 
 ### 15.5 离散单峰搜索
@@ -1082,7 +1169,8 @@ auto argmax = nunimodal_arg(first, last, function, ngreater<>{});
 ```
 
 搜索整数 `[first,last)`，要求非空且目标相对比较器单峰。返回一个最优位置，约
-`O(log range)` 次求值，尾部至多四点暴力。
+`O(log range)` 次求值，尾部至多四点暴力。每轮固定先求左探针、再求右探针，
+不依赖函数实参的未指定求值顺序。
 
 ---
 
@@ -1101,8 +1189,8 @@ bool ok = nin.read(n);          // EOF 返回 false
 bool all = nread(n, x, s, c);   // 任一 EOF 返回 false
 ```
 
-支持全部 integral 以及 `__int128_t`/`__uint128_t`。整数溢出、负数读入无符号类型、
-数字 token 非法都会触发前置条件。
+支持除 `bool` 外的 integral 以及 `__int128_t`/`__uint128_t`；`char` 使用字符重载。
+整数溢出、负数读入无符号类型、数字后紧跟非空白字符等非法 token 都会触发前置条件。
 
 可为测试或文件构造：
 
@@ -1335,17 +1423,17 @@ nchmin nchmax nlen nbitceil nless ngreater nequal
 ### 代数
 
 ```text
-nlaw nhas_law ndeclares nsemigroup nmonoid ngroup ncommutative_monoid naction
-nadd_group nadd nmul nxor nmin nmax naddsum_action
+nlaw nhas_law ndeclares nsemigroup nmonoid ngroup ncommutative_monoid nsemiring_laws nsemiring
+nexact_field nexact_field_element naction_laws naction nadd_group nadd nmul nxor nmin nmax naddsum_action
 ```
 
 ### 引用、枚举与序列
 
 ```text
 nspan nview nindexed nindex_reference_t nindex_value_t
-nreference_indexed nswappable_indexed ncontiguous_indexed nresizable
+nreference_indexed nswappable_indexed ncontiguous_indexed nresizable nview_object nviewable_indexed
 nall nsub nstride
-nrange_t nrange nrep nrrep nenumerate nfor nfori nreverse nproject
+nrange_t nrange nrep nrrep nenumerator_t nenumerable nenumerate nfor nfori nreverse nproject
 nzip_view nzip nproduct_view nproduct nwindow_view nwindows
 nvector ndeque narray
 nsort nreverse_inplace nfind nlower nupper nfold nunique_compact nunique
@@ -1380,7 +1468,7 @@ nbipartite_matching nhopcroft_karp
 ### 整数、组合、线性代数与多项式
 
 ```text
-nmag nabs ngcd nlcm nfloor_div nceil_div nmod
+ninteger nmag nabs ngcd nlcm nfloor_div nceil_div nmod
 nextgcd_result nextgcd nmulmod npowmod nisprime nprimes
 nmodint ncomb
 nsubmask_range nsubmasks

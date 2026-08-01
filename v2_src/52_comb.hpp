@@ -1,4 +1,6 @@
-template <unsigned_integral T> class nsubmask_range {
+template <unsigned_integral T>
+    requires(!same_as<remove_cv_t<T>, bool>)
+class nsubmask_range {
     T mask_{};
 
   public:
@@ -30,7 +32,11 @@ template <unsigned_integral T> class nsubmask_range {
     constexpr cursor enumerate() const { return {mask_, mask_}; }
 };
 
-template <unsigned_integral T> constexpr auto nsubmasks(T mask) { return nsubmask_range<T>(mask); }
+template <unsigned_integral T>
+    requires(!same_as<remove_cv_t<T>, bool>)
+constexpr auto nsubmasks(T mask) {
+    return nsubmask_range<T>(mask);
+}
 
 namespace ni {
 template <class A> constexpr void nsubset_extent(const A& a) {
@@ -48,8 +54,10 @@ template <nindexed A> auto nindex_copy(const A& source) {
 } // namespace ni
 
 template <class A>
-    requires nreference_indexed<A> && requires(nindex_reference_t<A> x, nindex_value_t<A> y) { x += y; }
-void nzeta_subset(A& a) {
+    requires nviewable_indexed<A&&> && nreference_indexed<remove_reference_t<A>> &&
+             requires(nindex_reference_t<remove_reference_t<A>> x,
+                      nindex_value_t<remove_reference_t<A>> y) { x += y; }
+void nzeta_subset(A&& a) {
     ni::nsubset_extent(a);
     for (int bit = 1; bit < nlen(a); bit <<= 1)
         for (int mask = 0; mask < nlen(a); ++mask)
@@ -58,8 +66,10 @@ void nzeta_subset(A& a) {
 }
 
 template <class A>
-    requires nreference_indexed<A> && requires(nindex_reference_t<A> x, nindex_value_t<A> y) { x -= y; }
-void nmobius_subset(A& a) {
+    requires nviewable_indexed<A&&> && nreference_indexed<remove_reference_t<A>> &&
+             requires(nindex_reference_t<remove_reference_t<A>> x,
+                      nindex_value_t<remove_reference_t<A>> y) { x -= y; }
+void nmobius_subset(A&& a) {
     ni::nsubset_extent(a);
     for (int bit = 1; bit < nlen(a); bit <<= 1)
         for (int mask = 0; mask < nlen(a); ++mask)
@@ -68,8 +78,10 @@ void nmobius_subset(A& a) {
 }
 
 template <class A>
-    requires nreference_indexed<A> && requires(nindex_reference_t<A> x, nindex_value_t<A> y) { x += y; }
-void nzeta_superset(A& a) {
+    requires nviewable_indexed<A&&> && nreference_indexed<remove_reference_t<A>> &&
+             requires(nindex_reference_t<remove_reference_t<A>> x,
+                      nindex_value_t<remove_reference_t<A>> y) { x += y; }
+void nzeta_superset(A&& a) {
     ni::nsubset_extent(a);
     for (int bit = 1; bit < nlen(a); bit <<= 1)
         for (int mask = 0; mask < nlen(a); ++mask)
@@ -78,8 +90,10 @@ void nzeta_superset(A& a) {
 }
 
 template <class A>
-    requires nreference_indexed<A> && requires(nindex_reference_t<A> x, nindex_value_t<A> y) { x -= y; }
-void nmobius_superset(A& a) {
+    requires nviewable_indexed<A&&> && nreference_indexed<remove_reference_t<A>> &&
+             requires(nindex_reference_t<remove_reference_t<A>> x,
+                      nindex_value_t<remove_reference_t<A>> y) { x -= y; }
+void nmobius_superset(A&& a) {
     ni::nsubset_extent(a);
     for (int bit = 1; bit < nlen(a); bit <<= 1)
         for (int mask = 0; mask < nlen(a); ++mask)
@@ -88,12 +102,14 @@ void nmobius_superset(A& a) {
 }
 
 template <class A>
-    requires nreference_indexed<A> && requires(nindex_value_t<A> x, nindex_reference_t<A> y, int n) {
+    requires nviewable_indexed<A&&> && nreference_indexed<remove_reference_t<A>> &&
+             requires(nindex_value_t<remove_reference_t<A>> x,
+                      nindex_reference_t<remove_reference_t<A>> y, int n) {
         y = x + x;
         y = x - x;
         y /= n;
     }
-void nfwht_xor(A& a, bool inverse = false) {
+void nfwht_xor(A&& a, bool inverse = false) {
     ni::nsubset_extent(a);
     for (int width = 1; width < nlen(a); width <<= 1)
         for (int first = 0; first < nlen(a); first += width << 1)
