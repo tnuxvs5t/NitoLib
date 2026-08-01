@@ -1,0 +1,336 @@
+template <class T> class nvector {
+    vector<T> storage_;
+
+    static size_t checked_size(int n) {
+        npre(n >= 0);
+        return size_t(n);
+    }
+
+  public:
+    using value_type = T;
+
+    nvector() = default;
+    explicit nvector(int n) : storage_(checked_size(n)) {}
+    nvector(int n, const T& value) : storage_(checked_size(n), value) {}
+    nvector(initializer_list<T> values) : storage_(values) {}
+
+    int len() const noexcept {
+        npre(storage_.size() <= size_t(INT_MAX));
+        return int(storage_.size());
+    }
+    int cap() const noexcept {
+        npre(storage_.capacity() <= size_t(INT_MAX));
+        return int(storage_.capacity());
+    }
+    bool empty() const noexcept { return storage_.empty(); }
+    T* data() noexcept { return storage_.data(); }
+    const T* data() const noexcept { return storage_.data(); }
+
+    T& operator[](int i) {
+        npre(0 <= i && i < len());
+        return storage_[i];
+    }
+    const T& operator[](int i) const {
+        npre(0 <= i && i < len());
+        return storage_[i];
+    }
+    T* get(int i) noexcept { return 0 <= i && i < len() ? addressof(storage_[i]) : nullptr; }
+    const T* get(int i) const noexcept { return 0 <= i && i < len() ? addressof(storage_[i]) : nullptr; }
+    T get(int i, T fallback) const { return 0 <= i && i < len() ? storage_[i] : move(fallback); }
+
+    void reserve(int n) {
+        npre(n >= 0);
+        storage_.reserve(size_t(n));
+    }
+    void resize(int n) {
+        npre(n >= 0);
+        storage_.resize(size_t(n));
+    }
+    void resize(int n, const T& value) {
+        npre(n >= 0);
+        storage_.resize(size_t(n), value);
+    }
+    void clear() noexcept { storage_.clear(); }
+
+    template <class... A> T& push(A&&... args) { return storage_.emplace_back(forward<A>(args)...); }
+    T pop() {
+        npre(!empty());
+        T value = move(storage_.back());
+        storage_.pop_back();
+        return value;
+    }
+    T pop(T fallback) { return empty() ? move(fallback) : pop(); }
+
+    T& front() {
+        npre(!empty());
+        return storage_.front();
+    }
+    const T& front() const {
+        npre(!empty());
+        return storage_.front();
+    }
+    T& back() {
+        npre(!empty());
+        return storage_.back();
+    }
+    const T& back() const {
+        npre(!empty());
+        return storage_.back();
+    }
+
+    friend bool operator==(const nvector&, const nvector&) = default;
+};
+
+template <class T> class ndeque {
+    deque<T> storage_;
+
+  public:
+    using value_type = T;
+
+    ndeque() = default;
+    ndeque(initializer_list<T> values) : storage_(values) {}
+
+    int len() const noexcept {
+        npre(storage_.size() <= size_t(INT_MAX));
+        return int(storage_.size());
+    }
+    bool empty() const noexcept { return storage_.empty(); }
+
+    T& operator[](int i) {
+        npre(0 <= i && i < len());
+        return storage_[i];
+    }
+    const T& operator[](int i) const {
+        npre(0 <= i && i < len());
+        return storage_[i];
+    }
+    T* get(int i) noexcept { return 0 <= i && i < len() ? addressof(storage_[i]) : nullptr; }
+    const T* get(int i) const noexcept { return 0 <= i && i < len() ? addressof(storage_[i]) : nullptr; }
+    T get(int i, T fallback) const { return 0 <= i && i < len() ? storage_[i] : move(fallback); }
+
+    template <class... A> T& pushr(A&&... args) { return storage_.emplace_back(forward<A>(args)...); }
+    template <class... A> T& pushl(A&&... args) { return storage_.emplace_front(forward<A>(args)...); }
+    T popr() {
+        npre(!empty());
+        T value = move(storage_.back());
+        storage_.pop_back();
+        return value;
+    }
+    T popl() {
+        npre(!empty());
+        T value = move(storage_.front());
+        storage_.pop_front();
+        return value;
+    }
+    T popr(T fallback) { return empty() ? move(fallback) : popr(); }
+    T popl(T fallback) { return empty() ? move(fallback) : popl(); }
+
+    T& front() {
+        npre(!empty());
+        return storage_.front();
+    }
+    const T& front() const {
+        npre(!empty());
+        return storage_.front();
+    }
+    T& back() {
+        npre(!empty());
+        return storage_.back();
+    }
+    const T& back() const {
+        npre(!empty());
+        return storage_.back();
+    }
+    void clear() noexcept { storage_.clear(); }
+};
+
+template <class T, int Rank>
+    requires(Rank > 0)
+class narray {
+    array<int, Rank> shape_{};
+    vector<T> storage_;
+
+    static int volume(const array<int, Rank>& shape) {
+        long long product = 1;
+        for (int extent : shape) {
+            npre(extent >= 0);
+            if (extent == 0)
+                return 0;
+            npre(product <= INT_MAX / extent);
+            product *= extent;
+        }
+        return int(product);
+    }
+
+  public:
+    using value_type = T;
+    using coord_type = array<int, Rank>;
+
+    narray() = default;
+    explicit narray(coord_type shape) : shape_(shape), storage_(size_t(volume(shape))) {}
+    narray(coord_type shape, const T& value) : shape_(shape), storage_(size_t(volume(shape)), value) {}
+
+    static constexpr int rank() noexcept { return Rank; }
+    int len() const noexcept { return int(storage_.size()); }
+    bool empty() const noexcept { return storage_.empty(); }
+    int dim(int axis, int fallback = npos) const noexcept {
+        return 0 <= axis && axis < Rank ? shape_[axis] : fallback;
+    }
+    nspan<const int> shape() const noexcept { return {shape_.data(), Rank}; }
+    T* data() noexcept { return storage_.data(); }
+    const T* data() const noexcept { return storage_.data(); }
+
+    int pos(const coord_type& coord, int fallback = npos) const {
+        int index = 0;
+        for (int axis = 0; axis < Rank; ++axis) {
+            if (coord[axis] < 0 || coord[axis] >= shape_[axis])
+                return fallback;
+            index = index * shape_[axis] + coord[axis];
+        }
+        return index;
+    }
+
+    T& operator[](int i) {
+        npre(0 <= i && i < len());
+        return storage_[i];
+    }
+    const T& operator[](int i) const {
+        npre(0 <= i && i < len());
+        return storage_[i];
+    }
+    T& operator()(const coord_type& coord) {
+        int i = pos(coord);
+        npre(i != npos);
+        return storage_[i];
+    }
+    const T& operator()(const coord_type& coord) const {
+        int i = pos(coord);
+        npre(i != npos);
+        return storage_[i];
+    }
+
+    template <class... I>
+        requires(sizeof...(I) == Rank && (convertible_to<I, int> && ...))
+    T& operator()(I... coord) {
+        return (*this)(coord_type{int(coord)...});
+    }
+    template <class... I>
+        requires(sizeof...(I) == Rank && (convertible_to<I, int> && ...))
+    const T& operator()(I... coord) const {
+        return (*this)(coord_type{int(coord)...});
+    }
+};
+
+namespace ni {
+template <class A, class C> void nheap_sift(A& a, int root, int count, C& compare) {
+    for (;;) {
+        int child = root * 2 + 1;
+        if (child >= count)
+            return;
+        if (child + 1 < count && compare(a[child], a[child + 1]))
+            ++child;
+        if (!compare(a[root], a[child]))
+            return;
+        ranges::swap(a[root], a[child]);
+        root = child;
+    }
+}
+
+template <class A, class C> void nheap_sort(A& a, C& compare) {
+    int n = nlen(a);
+    for (int root = n / 2; root-- > 0;)
+        nheap_sift(a, root, n, compare);
+    for (int count = n; count > 1;) {
+        ranges::swap(a[0], a[--count]);
+        nheap_sift(a, 0, count, compare);
+    }
+}
+} // namespace ni
+
+template <class A, class C = nless<>>
+    requires nswappable_indexed<A>
+void nsort(A& a, C compare = {}) {
+    int n = nlen(a);
+    if (n < 2)
+        return;
+    if constexpr (ncontiguous_indexed<A>)
+        sort(a.data(), a.data() + n, move(compare));
+    else
+        ni::nheap_sort(a, compare);
+}
+
+template <class A>
+    requires nswappable_indexed<A>
+void nreverse_inplace(A& a, int l = 0, int r = npos) {
+    if (r == npos)
+        r = nlen(a);
+    npre(0 <= l && l <= r && r <= nlen(a));
+    while (l < --r)
+        ranges::swap(a[l++], a[r]);
+}
+
+template <class A, class X> int nfind(const A& a, const X& value, int fallback = npos) {
+    for (int i = 0; i < nlen(a); ++i)
+        if (a[i] == value)
+            return i;
+    return fallback;
+}
+
+template <class A, class X, class C = nless<>> int nlower(const A& a, const X& value, C compare = {}) {
+    int l = 0, r = nlen(a);
+    while (l < r) {
+        int m = l + (r - l) / 2;
+        compare(a[m], value) ? l = m + 1 : r = m;
+    }
+    return l;
+}
+
+template <class A, class X, class C = nless<>> int nupper(const A& a, const X& value, C compare = {}) {
+    int l = 0, r = nlen(a);
+    while (l < r) {
+        int m = l + (r - l) / 2;
+        compare(value, a[m]) ? r = m : l = m + 1;
+    }
+    return l;
+}
+
+template <class A, class O = nadd<nindex_value_t<const A>>>
+    requires nmonoid<O, nindex_value_t<const A>>
+auto nfold(const A& a, int l, int r, O op = {}) {
+    using T = nindex_value_t<const A>;
+    npre(0 <= l && l <= r && r <= nlen(a));
+    T result = op.id();
+    for (int i = l; i < r; ++i)
+        result = op(move(result), a[i]);
+    return result;
+}
+
+template <class A, class O = nadd<nindex_value_t<const A>>>
+    requires nmonoid<O, nindex_value_t<const A>>
+auto nfold(const A& a, O op = {}) {
+    return nfold(a, 0, nlen(a), move(op));
+}
+
+template <class A, class E = nequal<>>
+    requires nreference_indexed<A> && (!is_const_v<remove_reference_t<nindex_reference_t<A>>>)
+int nunique_compact(A& a, E equal = {}) {
+    if (nlen(a) == 0)
+        return 0;
+    int kept = 1;
+    for (int i = 1; i < nlen(a); ++i)
+        if (!equal(a[kept - 1], a[i])) {
+            if (kept != i)
+                a[kept] = move(a[i]);
+            ++kept;
+        }
+    return kept;
+}
+
+template <class A, class E = nequal<>>
+    requires nresizable<A> && nreference_indexed<A> &&
+             (!is_const_v<remove_reference_t<nindex_reference_t<A>>>)
+int nunique(A& a, E equal = {}) {
+    int kept = nunique_compact(a, move(equal));
+    a.resize(kept);
+    return kept;
+}
