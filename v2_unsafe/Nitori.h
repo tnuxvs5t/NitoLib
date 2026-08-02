@@ -967,6 +967,47 @@ template <class T> class nvector {
     friend bool operator==(const nvector&, const nvector&) = default;
 };
 
+namespace ni {
+template <class T> struct nowned_value_impl {
+    using type = T;
+};
+
+template <class A, class B> struct nowned_value_impl<pair<A, B>> {
+    using type = pair<typename nowned_value_impl<remove_cvref_t<A>>::type,
+                      typename nowned_value_impl<remove_cvref_t<B>>::type>;
+};
+
+template <class... T> struct nowned_value_impl<tuple<T...>> {
+    using type = tuple<typename nowned_value_impl<remove_cvref_t<T>>::type...>;
+};
+
+template <class T>
+using nowned_value_t = typename nowned_value_impl<remove_cvref_t<T>>::type;
+
+template <class A, class = void> struct ncollect_value {
+    using cursor_type = nenumerator_t<A>;
+    using type = nowned_value_t<decltype(declval<cursor_type&>().val())>;
+};
+
+template <class A>
+struct ncollect_value<A, void_t<typename remove_cvref_t<A>::value_type>> {
+    using type = nowned_value_t<typename remove_cvref_t<A>::value_type>;
+};
+} // namespace ni
+
+template <class T = void, class A>
+    requires nenumerable<A&&>
+auto ncollect(A&& source) {
+    using inferred_type = typename ni::ncollect_value<A&&>::type;
+    using value_type = conditional_t<same_as<T, void>, inferred_type, ni::nowned_value_t<T>>;
+    nvector<value_type> result;
+    if constexpr (requires { nlen(source); })
+        result.reserve(nlen(source));
+    nfor(value, forward<A>(source))
+        result.push(forward<decltype(value)>(value));
+    return result;
+}
+
 template <class T> class ndeque {
     deque<T> storage_;
 
@@ -3308,14 +3349,6 @@ template <class A> constexpr void nsubset_extent(const A& a) {
     int n = nlen(a);
     npre(n > 0 && has_single_bit(unsigned(n)));
 }
-
-template <nindexed A> auto nindex_copy(const A& source) {
-    using T = nindex_value_t<const A>;
-    nvector<T> result(nlen(source));
-    for (int i = 0; i < nlen(source); ++i)
-        result[i] = source[i];
-    return result;
-}
 } // namespace ni
 
 template <class A>
@@ -3390,7 +3423,7 @@ void nfwht_xor(A&& a, bool inverse = false) {
 
 template <nindexed A, nindexed B> auto nconv_or(const A& a, const B& b) {
     npre(nlen(a) == nlen(b));
-    auto left = ni::nindex_copy(a), right = ni::nindex_copy(b);
+    auto left = ncollect(a), right = ncollect(b);
     nzeta_subset(left);
     nzeta_subset(right);
     for (int i = 0; i < left.len(); ++i)
@@ -3401,7 +3434,7 @@ template <nindexed A, nindexed B> auto nconv_or(const A& a, const B& b) {
 
 template <nindexed A, nindexed B> auto nconv_and(const A& a, const B& b) {
     npre(nlen(a) == nlen(b));
-    auto left = ni::nindex_copy(a), right = ni::nindex_copy(b);
+    auto left = ncollect(a), right = ncollect(b);
     nzeta_superset(left);
     nzeta_superset(right);
     for (int i = 0; i < left.len(); ++i)
@@ -3412,7 +3445,7 @@ template <nindexed A, nindexed B> auto nconv_and(const A& a, const B& b) {
 
 template <nindexed A, nindexed B> auto nconv_xor(const A& a, const B& b) {
     npre(nlen(a) == nlen(b));
-    auto left = ni::nindex_copy(a), right = ni::nindex_copy(b);
+    auto left = ncollect(a), right = ncollect(b);
     nfwht_xor(left);
     nfwht_xor(right);
     for (int i = 0; i < left.len(); ++i)

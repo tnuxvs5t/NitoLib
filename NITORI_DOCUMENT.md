@@ -382,6 +382,36 @@ auto upper = m.diagonal(1);   // offset > 0：主对角线上方
 
 这里没有 `sort_diagonal` 特例。`nsort` 只看到可交换索引引用。
 
+### 6.6 从 view 实例化独立 owner：`ncollect`
+
+复制 view 对象只复制“如何访问”的描述符，仍然别名同一个底层 owner：
+
+```cpp
+auto alias = view;             // alias[i] 与 view[i] 指向同一元素
+auto copy = ncollect(view);    // nvector<T>，逐元素独立复制
+auto wide = ncollect<long long>(span); // 显式指定目标值类型
+```
+
+`ncollect` 接受任意 `nenumerable`，按枚举顺序建立 `nvector`；若源提供 `nlen`，会先
+reserve。组合 view 可直接实例化，无需给中间层命名：
+
+```cpp
+auto reversed = ncollect(nreverse(nsub(a, l, r)));
+auto indices = ncollect(nrange(n));
+auto pairs = ncollect(nzip(a, b)); // nvector<pair<AValue,BValue>>，不是 pair 引用
+```
+
+结果的 `nvector` 存储独立，普通值元素不再别名源对象，修改结果不会写回 view；指针、
+`reference_wrapper` 等元素自身声明的引用语义仍会保留。复杂度 `O(n)`，额外空间
+`O(n)`。materialization 是一层的：若枚举元素本身仍是 view（例如 `nwindows` 的窗口），
+收集到的是这些 view 描述符；需要深层副本时，显式对每个窗口再次 `ncollect`：
+
+```cpp
+auto blocks = ncollect(nproject(nwindows(a, width), [](auto window) {
+    return ncollect(window);
+})); // nvector<nvector<T>>
+```
+
 ---
 
 ## 7. 枚举协议与组合视图
@@ -1432,7 +1462,7 @@ nexact_field nexact_field_element naction_laws naction nadd_group nadd nmul nxor
 ```text
 nspan nview nindexed nindex_reference_t nindex_value_t
 nreference_indexed nswappable_indexed ncontiguous_indexed nresizable nview_object nviewable_indexed
-nall nsub nstride
+nall nsub nstride ncollect
 nrange_t nrange nrep nrrep nenumerator_t nenumerable nenumerate nfor nfori nreverse nproject
 nzip_view nzip nproduct_view nproduct nwindow_view nwindows
 nvector ndeque narray

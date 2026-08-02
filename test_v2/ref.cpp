@@ -27,6 +27,21 @@ int main() {
     nsort(lambda);
     ntest(raw[0] == 1 && raw[2] == 2 && raw[4] == 9);
 
+    auto alias = lambda;
+    alias[0] = 42;
+    ntest(raw[0] == 42);
+    alias[0] = 1;
+
+    auto snapshot = ncollect(nreverse(lambda));
+    static_assert(same_as<decltype(snapshot), nvector<int>>);
+    ntest((snapshot == nvector<int>{9, 2, 1}));
+    snapshot[0] = -1;
+    ntest(raw[4] == 9);
+
+    auto wide = ncollect<long long>(all);
+    static_assert(same_as<decltype(wide), nvector<long long>>);
+    ntest(wide.len() == all.len() && wide[0] == raw[0]);
+
     const int frozen[]{3, 1, 2};
     nspan<const int> read_only(frozen);
     ntest(nfold(read_only) == 6);

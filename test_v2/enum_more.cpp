@@ -16,6 +16,26 @@ int main() {
     }
     ntest(a == nvector<int>({11, 22, 3}));
 
+    auto pairs = ncollect(nzip(a, b));
+    static_assert(same_as<decltype(pairs), nvector<pair<int, int>>>);
+    a[0] = 100;
+    b[0] = 200;
+    ntest((pairs[0] == pair<int, int>{11, 10}));
+    a[0] = 11;
+    b[0] = 10;
+
+    auto generated = ncollect(nrange(2, 10, 2));
+    static_assert(same_as<decltype(generated), nvector<int>>);
+    ntest((generated == nvector<int>{2, 4, 6, 8}));
+
+    nvector<int> tiles{1, 2, 3};
+    auto deep_windows = ncollect(nproject(nwindows(tiles, 2), [](auto window) {
+        return ncollect(window);
+    }));
+    static_assert(same_as<decltype(deep_windows), nvector<nvector<int>>>);
+    tiles[1] = 99;
+    ntest((deep_windows == nvector<nvector<int>>{{1, 2}, {2, 3}}));
+
     auto product = nproduct(a, b);
     nvector<int> sums;
     nfor(item, product) {

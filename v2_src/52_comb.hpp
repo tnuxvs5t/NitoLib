@@ -43,14 +43,6 @@ template <class A> constexpr void nsubset_extent(const A& a) {
     int n = nlen(a);
     npre(n > 0 && has_single_bit(unsigned(n)));
 }
-
-template <nindexed A> auto nindex_copy(const A& source) {
-    using T = nindex_value_t<const A>;
-    nvector<T> result(nlen(source));
-    for (int i = 0; i < nlen(source); ++i)
-        result[i] = source[i];
-    return result;
-}
 } // namespace ni
 
 template <class A>
@@ -125,7 +117,7 @@ void nfwht_xor(A&& a, bool inverse = false) {
 
 template <nindexed A, nindexed B> auto nconv_or(const A& a, const B& b) {
     npre(nlen(a) == nlen(b));
-    auto left = ni::nindex_copy(a), right = ni::nindex_copy(b);
+    auto left = ncollect(a), right = ncollect(b);
     nzeta_subset(left);
     nzeta_subset(right);
     for (int i = 0; i < left.len(); ++i)
@@ -136,7 +128,7 @@ template <nindexed A, nindexed B> auto nconv_or(const A& a, const B& b) {
 
 template <nindexed A, nindexed B> auto nconv_and(const A& a, const B& b) {
     npre(nlen(a) == nlen(b));
-    auto left = ni::nindex_copy(a), right = ni::nindex_copy(b);
+    auto left = ncollect(a), right = ncollect(b);
     nzeta_superset(left);
     nzeta_superset(right);
     for (int i = 0; i < left.len(); ++i)
@@ -147,7 +139,7 @@ template <nindexed A, nindexed B> auto nconv_and(const A& a, const B& b) {
 
 template <nindexed A, nindexed B> auto nconv_xor(const A& a, const B& b) {
     npre(nlen(a) == nlen(b));
-    auto left = ni::nindex_copy(a), right = ni::nindex_copy(b);
+    auto left = ncollect(a), right = ncollect(b);
     nfwht_xor(left);
     nfwht_xor(right);
     for (int i = 0; i < left.len(); ++i)

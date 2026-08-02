@@ -84,6 +84,47 @@ template <class T> class nvector {
     friend bool operator==(const nvector&, const nvector&) = default;
 };
 
+namespace ni {
+template <class T> struct nowned_value_impl {
+    using type = T;
+};
+
+template <class A, class B> struct nowned_value_impl<pair<A, B>> {
+    using type = pair<typename nowned_value_impl<remove_cvref_t<A>>::type,
+                      typename nowned_value_impl<remove_cvref_t<B>>::type>;
+};
+
+template <class... T> struct nowned_value_impl<tuple<T...>> {
+    using type = tuple<typename nowned_value_impl<remove_cvref_t<T>>::type...>;
+};
+
+template <class T>
+using nowned_value_t = typename nowned_value_impl<remove_cvref_t<T>>::type;
+
+template <class A, class = void> struct ncollect_value {
+    using cursor_type = nenumerator_t<A>;
+    using type = nowned_value_t<decltype(declval<cursor_type&>().val())>;
+};
+
+template <class A>
+struct ncollect_value<A, void_t<typename remove_cvref_t<A>::value_type>> {
+    using type = nowned_value_t<typename remove_cvref_t<A>::value_type>;
+};
+} // namespace ni
+
+template <class T = void, class A>
+    requires nenumerable<A&&>
+auto ncollect(A&& source) {
+    using inferred_type = typename ni::ncollect_value<A&&>::type;
+    using value_type = conditional_t<same_as<T, void>, inferred_type, ni::nowned_value_t<T>>;
+    nvector<value_type> result;
+    if constexpr (requires { nlen(source); })
+        result.reserve(nlen(source));
+    nfor(value, forward<A>(source))
+        result.push(forward<decltype(value)>(value));
+    return result;
+}
+
 template <class T> class ndeque {
     deque<T> storage_;
 
