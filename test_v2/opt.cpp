@@ -56,4 +56,19 @@ int main() {
               return (x - 4) * (x - 4);
           }) == 4);
     ntest(calls.len() >= 2 && calls[0] == 3 && calls[1] == 6);
+
+    nvector<long long> coordinates{-10, -3, 0, 4, 4, 11};
+    nlichao_static<long long> compressed(coordinates);
+    ntest(compressed.len() == 5 && compressed.hasx(4) && !compressed.hasx(5));
+    compressed.add(nline<long long>{2, 3});
+    compressed.add(nline<long long>{-1, 7});
+    ntest(compressed.get(-10).val() == -17);
+    ntest(compressed.get(11).val() == -4);
+    ntest(!compressed.get(5) && compressed(5, __int128_t(123)) == 123);
+
+    nlichao_static<long long> segmented(coordinates);
+    segmented.addseg(nline<long long>{1, 0}, -3, 11);
+    ntest(!segmented.get(-10));
+    ntest(segmented.get(-3).val() == -3 && segmented.get(4).val() == 4);
+    ntest(!segmented.get(11));
 }

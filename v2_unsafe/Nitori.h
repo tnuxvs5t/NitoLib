@@ -9623,6 +9623,127 @@ template <signed_integral T, class Better = nless<nwide_t<T>>> class nlichao {
     }
 };
 
+template <class T> struct nline {
+    T m{}, b{};
+    using value_type = nwide_t<T>;
+    constexpr value_type operator()(T x) const {
+        return ni::nchecked_add(ni::nchecked_mul(ni::ngeom_widen(m), ni::ngeom_widen(x)),
+                                ni::ngeom_widen(b));
+    }
+    constexpr operator nline_function<T>() const { return {m, b}; }
+    friend bool operator==(const nline&, const nline&) = default;
+};
+
+template <class T, class Better = nless<nwide_t<T>>>
+    requires is_arithmetic_v<T> && (!same_as<remove_cv_t<T>, bool>)
+class nlichao_static {
+  public:
+    using line_type = nline<T>;
+    using value_type = typename line_type::value_type;
+    nvector<T> x;
+
+  private:
+    struct node {
+        line_type line{};
+        bool used = false;
+    };
+    nvector<node> tree_;
+    [[no_unique_address]] Better better_;
+
+    void put(int vertex, int left, int right, line_type line) {
+        if (!tree_[vertex].used) {
+            tree_[vertex] = node{line, true};
+            return;
+        }
+        int middle = left + (right - left) / 2;
+        bool left_better = invoke(better_, line(x[left]), tree_[vertex].line(x[left]));
+        bool middle_better = invoke(better_, line(x[middle]), tree_[vertex].line(x[middle]));
+        if (middle_better)
+            swap(line, tree_[vertex].line);
+        if (right - left == 1)
+            return;
+        if (left_better != middle_better)
+            put(vertex * 2, left, middle, line);
+        else
+            put(vertex * 2 + 1, middle, right, line);
+    }
+    void put_segment(int vertex, int left, int right, int query_left, int query_right,
+                     line_type line) {
+        if (query_left <= left && right <= query_right) {
+            put(vertex, left, right, line);
+            return;
+        }
+        int middle = left + (right - left) / 2;
+        if (query_left < middle)
+            put_segment(vertex * 2, left, middle, query_left, query_right, line);
+        if (middle < query_right)
+            put_segment(vertex * 2 + 1, middle, right, query_left, query_right, line);
+    }
+
+  public:
+    nlichao_static() : tree_(1) {}
+
+    template <class A>
+        requires nenumerable<const A&>
+    explicit nlichao_static(const A& coordinates, Better better = {})
+        : x(ncollect<T>(coordinates)), better_(move(better)) {
+        nsort(x);
+        nunique(x);
+        npre(x.len() <= (INT_MAX - 1) / 4);
+        tree_.resize(max(1, 4 * x.len() + 1));
+    }
+    int len() const noexcept { return x.len(); }
+    bool empty() const noexcept { return x.empty(); }
+    bool hasx(const T& value) const {
+        int index = nlower(x, value);
+        return index < len() && !(value < x[index]) && !(x[index] < value);
+    }
+    void add(line_type line) {
+        if (!empty())
+            put(1, 0, len(), line);
+    }
+    void add(T slope, T intercept) { add(line_type{slope, intercept}); }
+    void addidx(line_type line, int left, int right) {
+        npre(0 <= left && left <= right && right <= len());
+        if (left < right)
+            put_segment(1, 0, len(), left, right, line);
+    }
+    void addseg(line_type line, T left, T right) {
+        addidx(line, nlower(x, left), nlower(x, right));
+    }
+    nmaybe<value_type> get(T value) const {
+        int index = nlower(x, value);
+        if (index == len() || value < x[index] || x[index] < value)
+            return {};
+        nmaybe<value_type> result;
+        for (int vertex = 1, left = 0, right = len();;) {
+            if (tree_[vertex].used) {
+                value_type candidate = tree_[vertex].line(value);
+                if (!result || invoke(better_, candidate, result.val()))
+                    result = candidate;
+            }
+            if (right - left == 1)
+                break;
+            int middle = left + (right - left) / 2;
+            if (index < middle) {
+                right = middle;
+                vertex *= 2;
+            } else {
+                left = middle;
+                vertex = vertex * 2 + 1;
+            }
+        }
+        return result;
+    }
+    value_type get(T value, value_type fallback) const {
+        auto result = get(value);
+        return result ? result.val() : move(fallback);
+    }
+    value_type operator()(T value, value_type fallback) const {
+        return get(value, move(fallback));
+    }
+};
+
 template <signed_integral I, class F, class Better = nless<>>
 I nunimodal_arg(I first, I last, F function, Better better = {}) {
     npre(first < last);
