@@ -18,6 +18,7 @@
 33_persistent.hpp
 34_wavelet.hpp
 35_offline.hpp
+36_classic.hpp
 40_graph.hpp
 41_graph_alg.hpp
 42_tree.hpp

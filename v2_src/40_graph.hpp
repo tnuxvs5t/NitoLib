@@ -467,6 +467,170 @@ template <ngraph_like G> ngraph_csr(const G&) -> ngraph_csr<ni::ngraph_weight_t<
 
 template <class W = int> using ngraph = ngraph_forward<W>;
 
+template <ngraph_like G> auto nvertices(const G& graph) {
+    return nrange(ni::ngraph_vertices(graph));
+}
+
+template <class G> class ngraph_arcs_view {
+    G* graph_;
+    using adjacency_type = decltype(declval<G&>().neighbors(0));
+    using inner_cursor = nenumerator_t<adjacency_type>;
+
+    struct cursor {
+        G* graph;
+        int vertex = 0, index = 0;
+        optional<inner_cursor> inner;
+
+        explicit cursor(G* graph) : graph(graph) { seek(); }
+        void seek() {
+            int vertices = ni::ngraph_vertices(*graph);
+            while (vertex < vertices) {
+                // Preserve the value category returned by neighbors(): a temporary adjacency
+                // is owned by its enumerator, while a reference remains borrowed from graph.
+                inner.emplace(nenumerate(graph->neighbors(vertex)));
+                if (inner->ok())
+                    return;
+                ++vertex;
+            }
+            inner.reset();
+        }
+        bool ok() const { return inner.has_value(); }
+        auto val() {
+            decltype(auto) raw = inner->val();
+            using weight_reference = decltype(nedge_weight(raw));
+            int id;
+            if constexpr (requires { raw.id; })
+                id = raw.id;
+            else
+                id = index;
+            return nedge<weight_reference>{vertex, nedge_to(raw), id, nedge_weight(raw)};
+        }
+        int idx() const { return index; }
+        void next() {
+            inner->next();
+            ++index;
+            if (!inner->ok()) {
+                ++vertex;
+                seek();
+            }
+        }
+    };
+
+  public:
+    explicit ngraph_arcs_view(G& graph) : graph_(addressof(graph)) {}
+    int len() const {
+        int result = 0;
+        for (int vertex = 0; vertex < ni::ngraph_vertices(*graph_); ++vertex) {
+            decltype(auto) adjacency = graph_->neighbors(vertex);
+            nfor(edge, adjacency) {
+                (void)edge;
+                npre(result < INT_MAX);
+                ++result;
+            }
+        }
+        return result;
+    }
+    bool empty() const {
+        for (int vertex = 0; vertex < ni::ngraph_vertices(*graph_); ++vertex) {
+            decltype(auto) adjacency = graph_->neighbors(vertex);
+            auto enumeration = nenumerate(adjacency);
+            if (enumeration.ok())
+                return false;
+        }
+        return true;
+    }
+    auto enumerate() const { return cursor(graph_); }
+};
+
+template <ngraph_like G> auto narcs(G& graph) { return ngraph_arcs_view<G>(graph); }
+template <ngraph_like G> auto narcs(const G& graph) { return ngraph_arcs_view<const G>(graph); }
+template <ngraph_like G> auto narcs(G&&) = delete;
+
+template <class D> struct npath_result {
+    nvector<D> d;
+    nvector<int> p;
+    D bad{};
+
+    int len() const noexcept { return d.len(); }
+    bool reach(int vertex) const {
+        return 0 <= vertex && vertex < len() && vertex < p.len() && p[vertex] != npos;
+    }
+    D dist(int vertex, D fallback) const { return reach(vertex) ? d[vertex] : move(fallback); }
+    const D& operator[](int vertex) const { return d[vertex]; }
+    nvector<int> path(int vertex) const {
+        nvector<int> result;
+        if (!reach(vertex))
+            return result;
+        for (;;) {
+            result.push(vertex);
+            if (p[vertex] == vertex)
+                break;
+            vertex = p[vertex];
+        }
+        nreverse_inplace(result);
+        return result;
+    }
+};
+
+template <ngraph_like G> npath_result<int> nbfs_path(const G& graph, int source) {
+    int vertices = ni::ngraph_vertices(graph);
+    npre(0 <= source && source < vertices);
+    npath_result<int> result{nvector<int>(vertices, npos), nvector<int>(vertices, npos), npos};
+    deque<int> queue;
+    result.d[source] = 0;
+    result.p[source] = source;
+    queue.push_back(source);
+    while (!queue.empty()) {
+        int from = queue.front();
+        queue.pop_front();
+        decltype(auto) adjacency = graph.neighbors(from);
+        nfor(edge, adjacency) {
+            int to = nedge_to(edge);
+            npre(0 <= to && to < vertices);
+            if (result.p[to] == npos) {
+                result.d[to] = result.d[from] + 1;
+                result.p[to] = from;
+                queue.push_back(to);
+            }
+        }
+    }
+    return result;
+}
+
+template <class D = long long, ngraph_like G>
+    requires is_arithmetic_v<D> && (!same_as<remove_cv_t<D>, bool>)
+npath_result<D> ndijkstra_path(const G& graph, int source, D infinity = nmin<D>{}.id()) {
+    int vertices = ni::ngraph_vertices(graph);
+    npre(0 <= source && source < vertices && D{} <= infinity);
+    npath_result<D> result{nvector<D>(vertices, infinity), nvector<int>(vertices, npos), infinity};
+    using state = pair<D, int>;
+    priority_queue<state, vector<state>, greater<state>> queue;
+    result.d[source] = D{};
+    result.p[source] = source;
+    queue.push({D{}, source});
+    while (!queue.empty()) {
+        auto [distance, from] = queue.top();
+        queue.pop();
+        if (distance != result.d[from])
+            continue;
+        decltype(auto) adjacency = graph.neighbors(from);
+        nfor(edge, adjacency) {
+            int to = nedge_to(edge);
+            D weight = ni::nchecked_number<D>(nedge_weight(edge));
+            npre(0 <= to && to < vertices && !(weight < D{}));
+            if (distance <= infinity && weight <= infinity - distance) {
+                D candidate = distance + weight;
+                if (candidate < result.d[to]) {
+                    result.d[to] = candidate;
+                    result.p[to] = from;
+                    queue.push({candidate, to});
+                }
+            }
+        }
+    }
+    return result;
+}
+
 template <ngraph_like G> nvector<int> nbfs(const G& graph, int source) {
     int vertices = ni::ngraph_vertices(graph);
     npre(0 <= source && source < vertices);

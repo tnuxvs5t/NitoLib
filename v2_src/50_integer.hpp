@@ -236,3 +236,219 @@ inline nvector<uint64_t> nfactor(uint64_t value) {
 }
 
 inline nvector<uint64_t> nfactor_rho(uint64_t value) { return nfactor(value); }
+
+template <signed_integral T = long long> class nfrac {
+    using W = nwide_t<T>;
+    using U = make_unsigned_t<W>;
+
+    static U magnitude(W value) {
+        U encoded = U(value);
+        return value < 0 ? U{} - encoded : encoded;
+    }
+    static U gcd_wide(U a, U b) {
+        while (b) {
+            U remainder = a % b;
+            a = b;
+            b = remainder;
+        }
+        return a;
+    }
+    static T narrow(W value) { return ni::nchecked_integral_cast<T>(value); }
+    void assign(W numerator, W denominator) {
+        npre(denominator != 0);
+        U divisor = gcd_wide(magnitude(numerator), magnitude(denominator));
+        numerator /= W(divisor);
+        denominator /= W(divisor);
+        if (denominator < 0) {
+            npre(numerator != numeric_limits<W>::lowest());
+            numerator = -numerator;
+            denominator = -denominator;
+        }
+        p = narrow(numerator);
+        q = narrow(denominator);
+    }
+
+  public:
+    T p = 0, q = 1;
+
+    constexpr nfrac() = default;
+    constexpr nfrac(T integer) : p(integer) {}
+    nfrac(T numerator, T denominator) { assign(W(numerator), W(denominator)); }
+
+    nfrac& operator+=(const nfrac& other) {
+        U divisor = gcd_wide(U(q), U(other.q));
+        W left_scale = W(other.q) / W(divisor);
+        W right_scale = W(q) / W(divisor);
+        W numerator;
+        npre(!__builtin_mul_overflow(W(p), left_scale, &numerator));
+        W addend;
+        npre(!__builtin_mul_overflow(W(other.p), right_scale, &addend));
+        npre(!__builtin_add_overflow(numerator, addend, &numerator));
+        W denominator;
+        npre(!__builtin_mul_overflow(right_scale, W(other.q), &denominator));
+        assign(numerator, denominator);
+        return *this;
+    }
+    nfrac& operator-=(const nfrac& other) { return *this += -other; }
+    nfrac& operator*=(const nfrac& other) {
+        U left_cancel = gcd_wide(magnitude(W(p)), U(other.q));
+        U right_cancel = gcd_wide(magnitude(W(other.p)), U(q));
+        W numerator, denominator;
+        npre(!__builtin_mul_overflow(W(p) / W(left_cancel), W(other.p) / W(right_cancel),
+                                     &numerator));
+        npre(!__builtin_mul_overflow(W(q) / W(right_cancel), W(other.q) / W(left_cancel),
+                                     &denominator));
+        assign(numerator, denominator);
+        return *this;
+    }
+    nmaybe<nfrac> trydiv(const nfrac& other) const {
+        if (!other.p)
+            return {};
+        nfrac result = *this;
+        result *= nfrac(other.q, other.p);
+        return result;
+    }
+    nfrac& operator/=(const nfrac& other) {
+        auto result = trydiv(other);
+        npre(result.ok());
+        return *this = move(result.val());
+    }
+    nfrac operator+() const { return *this; }
+    nfrac operator-() const {
+        npre(p != numeric_limits<T>::lowest());
+        return nfrac(T(-p), q);
+    }
+    friend nfrac operator+(nfrac left, const nfrac& right) { return left += right; }
+    friend nfrac operator-(nfrac left, const nfrac& right) { return left -= right; }
+    friend nfrac operator*(nfrac left, const nfrac& right) { return left *= right; }
+    friend nfrac operator/(nfrac left, const nfrac& right) { return left /= right; }
+    friend bool operator==(const nfrac&, const nfrac&) = default;
+    friend strong_ordering operator<=>(const nfrac& left, const nfrac& right) {
+        W a = W(left.p) * right.q;
+        W b = W(right.p) * left.q;
+        return a < b ? strong_ordering::less
+                     : a > b ? strong_ordering::greater : strong_ordering::equal;
+    }
+    T floor() const { return nfloor_div(p, q); }
+    T ceil() const { return nceil_div(p, q); }
+    explicit operator long double() const { return static_cast<long double>(p) / q; }
+    friend ostream& operator<<(ostream& output, const nfrac& value) {
+        return output << value.p << '/' << value.q;
+    }
+};
+
+struct ncongruence {
+    long long a = 0, m = 1;
+
+    ncongruence() = default;
+    ncongruence(long long residue, long long modulus) : m(modulus) {
+        npre(modulus > 0);
+        a = nmodulo(residue, modulus);
+    }
+    bool has(long long value) const { return (__int128_t(value) - a) % m == 0; }
+    nmaybe<long long> at(long long index) const {
+        __int128_t value = __int128_t(a) + __int128_t(index) * m;
+        if (value < numeric_limits<long long>::lowest() ||
+            value > numeric_limits<long long>::max())
+            return {};
+        return static_cast<long long>(value);
+    }
+    long long at(long long index, long long fallback) const {
+        auto result = at(index);
+        return result ? result.val() : fallback;
+    }
+    long long operator()(long long index) const {
+        auto result = at(index);
+        npre(result.ok());
+        return result.val();
+    }
+    friend bool operator==(const ncongruence&, const ncongruence&) = default;
+};
+
+inline nmaybe<ncongruence> ncrt(ncongruence left, ncongruence right) {
+    auto bezout = nextgcd(left.m, right.m);
+    __int128_t difference = __int128_t(right.a) - left.a;
+    if (difference % bezout.gcd)
+        return {};
+    __int128_t modulus = __int128_t(left.m / bezout.gcd) * right.m;
+    if (modulus > numeric_limits<long long>::max())
+        return {};
+    __int128_t quotient_modulus = right.m / bezout.gcd;
+    __int128_t multiplier = difference / bezout.gcd * bezout.x % quotient_modulus;
+    __int128_t residue = (__int128_t(left.a) + __int128_t(left.m) * multiplier) % modulus;
+    if (residue < 0)
+        residue += modulus;
+    return ncongruence(static_cast<long long>(residue), static_cast<long long>(modulus));
+}
+
+inline ncongruence ncrt(ncongruence left, ncongruence right, ncongruence fallback) {
+    auto result = ncrt(left, right);
+    return result ? result.val() : move(fallback);
+}
+
+class nprime_table {
+    static int checked_limit(int limit) {
+        npre(0 <= limit && limit < INT_MAX);
+        return limit;
+    }
+
+  public:
+    int n = 0;
+    nvector<int> p, lp, phi, mu;
+
+    nprime_table() = default;
+    explicit nprime_table(int limit)
+        : n(checked_limit(limit)), lp(n + 1, 0), phi(n + 1, 0), mu(n + 1, 0) {
+        if (limit >= 1)
+            phi[1] = mu[1] = 1;
+        for (int value = 2; value <= limit; ++value) {
+            if (!lp[value]) {
+                lp[value] = value;
+                p.push(value);
+                phi[value] = value - 1;
+                mu[value] = -1;
+            }
+            for (int index = 0; index < p.len(); ++index) {
+                int prime = p[index];
+                if (prime > lp[value] || 1LL * value * prime > limit)
+                    break;
+                int product = value * prime;
+                lp[product] = prime;
+                if (prime == lp[value]) {
+                    phi[product] = phi[value] * prime;
+                    mu[product] = 0;
+                } else {
+                    phi[product] = phi[value] * (prime - 1);
+                    mu[product] = -mu[value];
+                }
+            }
+        }
+    }
+    bool isprime(int value) const { return 2 <= value && value <= n && lp[value] == value; }
+    nvector<pair<int, int>> factor(int value) const {
+        npre(0 < value && value <= n);
+        nvector<pair<int, int>> result;
+        while (value > 1) {
+            int prime = lp[value], exponent = 0;
+            do {
+                value /= prime;
+                ++exponent;
+            } while (value > 1 && lp[value] == prime);
+            result.push(pair<int, int>{prime, exponent});
+        }
+        return result;
+    }
+    nvector<int> divisors(int value) const {
+        nvector<int> result{1};
+        nfor(factor, this->factor(value)) {
+            int previous = result.len(), power = 1;
+            for (int exponent = 1; exponent <= factor.second; ++exponent) {
+                power *= factor.first;
+                for (int index = 0; index < previous; ++index)
+                    result.push(result[index] * power);
+            }
+        }
+        nsort(result);
+        return result;
+    }
+};

@@ -4540,6 +4540,136 @@ void nrun_mo(const Q& queries, int universe, Add&& add, Remove&& remove, Answer&
     nrun_mo(queries, universe, add, add, remove, remove, answer);
 }
 
+// ---- 36_classic.hpp ----
+template <class T, class O = nmin<T>>
+    requires nmonoid<O, T> && copyable<T>
+class nsparse {
+    nvector<T> values_;
+    nvector<nvector<T>> table_;
+    [[no_unique_address]] O operation_{};
+
+  public:
+    nsparse() = default;
+
+    template <nindexed A> explicit nsparse(const A& values, O operation = {})
+        : values_(ncollect<T>(values)), operation_(move(operation)) {
+        int n = values_.len();
+        int levels = n <= 1 ? 0 : int(bit_width(unsigned(n - 1)));
+        table_.resize(levels);
+        for (int level = 0; level < levels; ++level) {
+            table_[level] = values_;
+            int half = 1 << level;
+            int block = half << 1;
+            for (int start = 0; start < n; start += block) {
+                int middle = min(start + half, n), last = min(start + block, n);
+                if (start < middle) {
+                    for (int index = middle - 1; index-- > start;)
+                        table_[level][index] =
+                            operation_(values_[index], table_[level][index + 1]);
+                }
+                if (middle < last) {
+                    for (int index = middle + 1; index < last; ++index)
+                        table_[level][index] =
+                            operation_(table_[level][index - 1], values_[index]);
+                }
+            }
+        }
+    }
+
+    int len() const noexcept { return values_.len(); }
+    bool empty() const noexcept { return values_.empty(); }
+    const T& operator[](int index) const { return values_[index]; }
+    T fold(int left, int right) const {
+        npre(0 <= left && left <= right && right <= len());
+        if (left == right)
+            return operation_.id();
+        if (left + 1 == right)
+            return values_[left];
+        int level = int(bit_width(unsigned(left ^ (right - 1)))) - 1;
+        return operation_(table_[level][left], table_[level][right - 1]);
+    }
+    T fold(int left, int right, T fallback) const {
+        npre(0 <= left && left <= right && right <= len());
+        return left == right ? move(fallback) : fold(left, right);
+    }
+};
+
+template <class T>
+    requires copyable<T> && requires(T a, const T& b) {
+        { a += b } -> same_as<T&>;
+        { -a } -> convertible_to<T>;
+        { a == b } -> convertible_to<bool>;
+    }
+class npotential_dsu {
+    vector<int> parent_;
+    nvector<T> delta_; // potential(vertex) - potential(parent(vertex))
+
+    static size_t checked_size(int n) {
+        npre(n >= 0);
+        return size_t(n);
+    }
+    static T add(T left, const T& right) { return left += right; }
+    static T sub(T left, const T& right) { return left += -right; }
+
+    pair<int, T> root_with_potential(int vertex) {
+        npre(0 <= vertex && vertex < len());
+        int root = vertex;
+        T total{};
+        while (parent_[root] >= 0) {
+            total = add(move(total), delta_[root]);
+            root = parent_[root];
+        }
+        int current = vertex;
+        T prefix{};
+        while (parent_[current] >= 0) {
+            int next = parent_[current];
+            T edge = delta_[current];
+            parent_[current] = root;
+            delta_[current] = sub(total, prefix);
+            prefix = add(move(prefix), edge);
+            current = next;
+        }
+        return {root, total};
+    }
+
+  public:
+    explicit npotential_dsu(int n = 0) : parent_(checked_size(n), -1), delta_(n) {}
+    int len() const noexcept { return int(parent_.size()); }
+
+    int find(int vertex) { return root_with_potential(vertex).first; }
+    int size(int vertex) { return -parent_[find(vertex)]; }
+    bool same(int a, int b) { return find(a) == find(b); }
+
+    // Enforces potential(right) - potential(left) == difference.
+    bool bind(int left, int right, T difference) {
+        auto [left_root, left_value] = root_with_potential(left);
+        auto [right_root, right_value] = root_with_potential(right);
+        if (left_root == right_root)
+            return sub(right_value, left_value) == difference;
+
+        T right_to_left = add(add(move(difference), left_value), -right_value);
+        if (parent_[left_root] > parent_[right_root]) {
+            swap(left_root, right_root);
+            right_to_left = -right_to_left;
+        }
+        parent_[left_root] += parent_[right_root];
+        parent_[right_root] = left_root;
+        delta_[right_root] = move(right_to_left);
+        return true;
+    }
+    nmaybe<T> diff(int left, int right) {
+        auto [left_root, left_value] = root_with_potential(left);
+        auto [right_root, right_value] = root_with_potential(right);
+        if (left_root != right_root)
+            return {};
+        return sub(right_value, left_value);
+    }
+    T diff(int left, int right, T fallback) {
+        auto result = diff(left, right);
+        return result ? result.val() : move(fallback);
+    }
+};
+
 // ---- 40_graph.hpp ----
 template <class W = int> struct narc {
     int to;
@@ -5010,6 +5140,170 @@ template <ngraph_like G> ngraph_csr(const G&) -> ngraph_csr<ni::ngraph_weight_t<
 
 template <class W = int> using ngraph = ngraph_forward<W>;
 
+template <ngraph_like G> auto nvertices(const G& graph) {
+    return nrange(ni::ngraph_vertices(graph));
+}
+
+template <class G> class ngraph_arcs_view {
+    G* graph_;
+    using adjacency_type = decltype(declval<G&>().neighbors(0));
+    using inner_cursor = nenumerator_t<adjacency_type>;
+
+    struct cursor {
+        G* graph;
+        int vertex = 0, index = 0;
+        optional<inner_cursor> inner;
+
+        explicit cursor(G* graph) : graph(graph) { seek(); }
+        void seek() {
+            int vertices = ni::ngraph_vertices(*graph);
+            while (vertex < vertices) {
+                // Preserve the value category returned by neighbors(): a temporary adjacency
+                // is owned by its enumerator, while a reference remains borrowed from graph.
+                inner.emplace(nenumerate(graph->neighbors(vertex)));
+                if (inner->ok())
+                    return;
+                ++vertex;
+            }
+            inner.reset();
+        }
+        bool ok() const { return inner.has_value(); }
+        auto val() {
+            decltype(auto) raw = inner->val();
+            using weight_reference = decltype(nedge_weight(raw));
+            int id;
+            if constexpr (requires { raw.id; })
+                id = raw.id;
+            else
+                id = index;
+            return nedge<weight_reference>{vertex, nedge_to(raw), id, nedge_weight(raw)};
+        }
+        int idx() const { return index; }
+        void next() {
+            inner->next();
+            ++index;
+            if (!inner->ok()) {
+                ++vertex;
+                seek();
+            }
+        }
+    };
+
+  public:
+    explicit ngraph_arcs_view(G& graph) : graph_(addressof(graph)) {}
+    int len() const {
+        int result = 0;
+        for (int vertex = 0; vertex < ni::ngraph_vertices(*graph_); ++vertex) {
+            decltype(auto) adjacency = graph_->neighbors(vertex);
+            nfor(edge, adjacency) {
+                (void)edge;
+                npre(result < INT_MAX);
+                ++result;
+            }
+        }
+        return result;
+    }
+    bool empty() const {
+        for (int vertex = 0; vertex < ni::ngraph_vertices(*graph_); ++vertex) {
+            decltype(auto) adjacency = graph_->neighbors(vertex);
+            auto enumeration = nenumerate(adjacency);
+            if (enumeration.ok())
+                return false;
+        }
+        return true;
+    }
+    auto enumerate() const { return cursor(graph_); }
+};
+
+template <ngraph_like G> auto narcs(G& graph) { return ngraph_arcs_view<G>(graph); }
+template <ngraph_like G> auto narcs(const G& graph) { return ngraph_arcs_view<const G>(graph); }
+template <ngraph_like G> auto narcs(G&&) = delete;
+
+template <class D> struct npath_result {
+    nvector<D> d;
+    nvector<int> p;
+    D bad{};
+
+    int len() const noexcept { return d.len(); }
+    bool reach(int vertex) const {
+        return 0 <= vertex && vertex < len() && vertex < p.len() && p[vertex] != npos;
+    }
+    D dist(int vertex, D fallback) const { return reach(vertex) ? d[vertex] : move(fallback); }
+    const D& operator[](int vertex) const { return d[vertex]; }
+    nvector<int> path(int vertex) const {
+        nvector<int> result;
+        if (!reach(vertex))
+            return result;
+        for (;;) {
+            result.push(vertex);
+            if (p[vertex] == vertex)
+                break;
+            vertex = p[vertex];
+        }
+        nreverse_inplace(result);
+        return result;
+    }
+};
+
+template <ngraph_like G> npath_result<int> nbfs_path(const G& graph, int source) {
+    int vertices = ni::ngraph_vertices(graph);
+    npre(0 <= source && source < vertices);
+    npath_result<int> result{nvector<int>(vertices, npos), nvector<int>(vertices, npos), npos};
+    deque<int> queue;
+    result.d[source] = 0;
+    result.p[source] = source;
+    queue.push_back(source);
+    while (!queue.empty()) {
+        int from = queue.front();
+        queue.pop_front();
+        decltype(auto) adjacency = graph.neighbors(from);
+        nfor(edge, adjacency) {
+            int to = nedge_to(edge);
+            npre(0 <= to && to < vertices);
+            if (result.p[to] == npos) {
+                result.d[to] = result.d[from] + 1;
+                result.p[to] = from;
+                queue.push_back(to);
+            }
+        }
+    }
+    return result;
+}
+
+template <class D = long long, ngraph_like G>
+    requires is_arithmetic_v<D> && (!same_as<remove_cv_t<D>, bool>)
+npath_result<D> ndijkstra_path(const G& graph, int source, D infinity = nmin<D>{}.id()) {
+    int vertices = ni::ngraph_vertices(graph);
+    npre(0 <= source && source < vertices && D{} <= infinity);
+    npath_result<D> result{nvector<D>(vertices, infinity), nvector<int>(vertices, npos), infinity};
+    using state = pair<D, int>;
+    priority_queue<state, vector<state>, greater<state>> queue;
+    result.d[source] = D{};
+    result.p[source] = source;
+    queue.push({D{}, source});
+    while (!queue.empty()) {
+        auto [distance, from] = queue.top();
+        queue.pop();
+        if (distance != result.d[from])
+            continue;
+        decltype(auto) adjacency = graph.neighbors(from);
+        nfor(edge, adjacency) {
+            int to = nedge_to(edge);
+            D weight = ni::nchecked_number<D>(nedge_weight(edge));
+            npre(0 <= to && to < vertices && !(weight < D{}));
+            if (distance <= infinity && weight <= infinity - distance) {
+                D candidate = distance + weight;
+                if (candidate < result.d[to]) {
+                    result.d[to] = candidate;
+                    result.p[to] = from;
+                    queue.push({candidate, to});
+                }
+            }
+        }
+    }
+    return result;
+}
+
 template <ngraph_like G> nvector<int> nbfs(const G& graph, int source) {
     int vertices = ni::ngraph_vertices(graph);
     npre(0 <= source && source < vertices);
@@ -5340,6 +5634,274 @@ nvector<T> nreroot(const G& graph, T identity, Merge merge, Vertex vertex, Lift 
     return answer;
 }
 
+struct nhld_segment {
+    int l, r;
+    bool rev;
+};
+
+class nhld {
+    int vertices_ = 0;
+    nvector<int> parent_, depth_, heavy_, head_, position_, inverse_, subtree_;
+
+  public:
+    nhld() = default;
+
+    template <ngraph_like G> explicit nhld(const G& graph, int root = 0)
+        : vertices_(ni::ngraph_vertices(graph)), parent_(vertices_), depth_(vertices_),
+          heavy_(vertices_, npos), head_(vertices_), position_(vertices_),
+          inverse_(vertices_), subtree_(vertices_, 1) {
+        if (!vertices_) {
+            npre(root == 0);
+            return;
+        }
+        auto layout = ni::nbuild_tree_layout(graph, root, false);
+        parent_ = layout.parent;
+        depth_[root] = 0;
+        for (int index = 1; index < layout.order.len(); ++index) {
+            int vertex = layout.order[index];
+            depth_[vertex] = depth_[parent_[vertex]] + 1;
+        }
+        for (int index = vertices_; index-- > 0;) {
+            int vertex = layout.order[index];
+            int best_size = 0;
+            for (int to : layout.adjacency[vertex])
+                if (parent_[to] == vertex) {
+                    npre(subtree_[vertex] <= INT_MAX - subtree_[to]);
+                    subtree_[vertex] += subtree_[to];
+                    if (best_size < subtree_[to]) {
+                        best_size = subtree_[to];
+                        heavy_[vertex] = to;
+                    }
+                }
+        }
+
+        vector<pair<int, int>> pending{{root, root}};
+        int timer = 0;
+        while (!pending.empty()) {
+            auto [start, chain_head] = pending.back();
+            pending.pop_back();
+            for (int vertex = start; vertex != npos; vertex = heavy_[vertex]) {
+                head_[vertex] = chain_head;
+                position_[vertex] = timer;
+                inverse_[timer++] = vertex;
+                for (int to : layout.adjacency[vertex])
+                    if (parent_[to] == vertex && to != heavy_[vertex])
+                        pending.push_back({to, to});
+            }
+        }
+        npre(timer == vertices_);
+    }
+
+    int len() const noexcept { return vertices_; }
+    bool empty() const noexcept { return vertices_ == 0; }
+    bool same(int a, int b) const {
+        return 0 <= a && a < vertices_ && 0 <= b && b < vertices_;
+    }
+    int parent(int vertex) const {
+        npre(0 <= vertex && vertex < vertices_);
+        return parent_[vertex];
+    }
+    int depth(int vertex) const {
+        npre(0 <= vertex && vertex < vertices_);
+        return depth_[vertex];
+    }
+    int position(int vertex) const {
+        npre(0 <= vertex && vertex < vertices_);
+        return position_[vertex];
+    }
+    int vertex(int position) const {
+        npre(0 <= position && position < vertices_);
+        return inverse_[position];
+    }
+    int lca(int a, int b, int fallback = npos) const {
+        if (!same(a, b))
+            return fallback;
+        while (head_[a] != head_[b]) {
+            if (depth_[head_[a]] < depth_[head_[b]])
+                swap(a, b);
+            a = parent_[head_[a]];
+        }
+        return depth_[a] < depth_[b] ? a : b;
+    }
+    nvector<nhld_segment> path(int a, int b, bool edge = false) const {
+        nvector<nhld_segment> left, right;
+        if (!same(a, b))
+            return left;
+        while (head_[a] != head_[b]) {
+            if (depth_[head_[a]] >= depth_[head_[b]]) {
+                left.push(nhld_segment{position_[head_[a]], position_[a] + 1, true});
+                a = parent_[head_[a]];
+            } else {
+                right.push(nhld_segment{position_[head_[b]], position_[b] + 1, false});
+                b = parent_[head_[b]];
+            }
+        }
+        if (depth_[a] >= depth_[b]) {
+            int first = position_[b] + int(edge);
+            if (first <= position_[a])
+                left.push(nhld_segment{first, position_[a] + 1, true});
+        } else {
+            int first = position_[a] + int(edge);
+            if (first <= position_[b])
+                right.push(nhld_segment{first, position_[b] + 1, false});
+        }
+        for (int index = right.len(); index-- > 0;)
+            left.push(right[index]);
+        return left;
+    }
+    pair<int, int> subtree(int vertex, bool edge = false) const {
+        npre(0 <= vertex && vertex < vertices_);
+        int left = position_[vertex] + int(edge);
+        return {left, position_[vertex] + subtree_[vertex]};
+    }
+    template <class F> bool each(int a, int b, F visit, bool edge = false) const {
+        if (!same(a, b))
+            return false;
+        nfor(segment, path(a, b, edge))
+            invoke(visit, segment.l, segment.r, segment.rev);
+        return true;
+    }
+};
+
+template <class W = int> class nlca_binary {
+    int vertices_ = 0, levels_ = 0;
+    vector<vector<int>> ancestor_;
+    nvector<int> depth_, component_;
+    nvector<W> distance_;
+
+    template <class A, class B> static W add_distance(const A& a, const B& b) {
+        if constexpr (is_integral_v<W>)
+            return ni::nchecked_add(W(a), ni::nchecked_number<W>(b));
+        else
+            return W(a) + W(b);
+    }
+
+  public:
+    nlca_binary() = default;
+
+    template <ngraph_like G> explicit nlca_binary(const G& graph, int root = 0) {
+        build(graph, root, [](const auto& edge) -> decltype(auto) { return nedge_weight(edge); });
+    }
+    template <ngraph_like G, class F> nlca_binary(const G& graph, int root, F weight) {
+        build(graph, root, move(weight));
+    }
+
+    template <ngraph_like G, class F> void build(const G& graph, int root, F weight) {
+        vertices_ = ni::ngraph_vertices(graph);
+        levels_ = max(1, int(bit_width(unsigned(max(1, vertices_)))));
+        ancestor_.assign(size_t(levels_), vector<int>(size_t(vertices_), 0));
+        depth_ = nvector<int>(vertices_, npos);
+        component_ = nvector<int>(vertices_, npos);
+        distance_ = nvector<W>(vertices_, W{});
+        if (!vertices_) {
+            npre(root == 0);
+            return;
+        }
+        npre(0 <= root && root < vertices_);
+        nvector<int> starts;
+        starts.reserve(vertices_);
+        starts.push(root);
+        for (int vertex = 0; vertex < vertices_; ++vertex)
+            if (vertex != root)
+                starts.push(vertex);
+
+        nfor(start, starts) {
+            if (depth_[start] != npos)
+                continue;
+            deque<int> queue;
+            depth_[start] = 0;
+            component_[start] = start;
+            ancestor_[0][start] = start;
+            queue.push_back(start);
+            while (!queue.empty()) {
+                int from = queue.front();
+                queue.pop_front();
+                decltype(auto) adjacency = graph.neighbors(from);
+                nfor(edge, adjacency) {
+                    int to = nedge_to(edge);
+                    npre(0 <= to && to < vertices_);
+                    if (depth_[to] != npos)
+                        continue;
+                    depth_[to] = depth_[from] + 1;
+                    component_[to] = start;
+                    ancestor_[0][to] = from;
+                    distance_[to] = add_distance(distance_[from], invoke(weight, edge));
+                    queue.push_back(to);
+                }
+            }
+        }
+        for (int level = 1; level < levels_; ++level)
+            for (int vertex = 0; vertex < vertices_; ++vertex)
+                ancestor_[level][vertex] = ancestor_[level - 1][ancestor_[level - 1][vertex]];
+    }
+
+    int len() const noexcept { return vertices_; }
+    bool same(int a, int b) const {
+        return 0 <= a && a < vertices_ && 0 <= b && b < vertices_ &&
+               component_[a] == component_[b];
+    }
+    int depth(int vertex) const {
+        npre(0 <= vertex && vertex < vertices_);
+        return depth_[vertex];
+    }
+    int jump(int vertex, int steps, int fallback = npos) const {
+        if (vertex < 0 || vertex >= vertices_ || steps < 0 || steps > depth_[vertex])
+            return fallback;
+        for (int level = 0; steps; ++level, steps >>= 1)
+            if (steps & 1)
+                vertex = ancestor_[level][vertex];
+        return vertex;
+    }
+    int lca(int a, int b, int fallback = npos) const {
+        if (!same(a, b))
+            return fallback;
+        if (depth_[a] < depth_[b])
+            swap(a, b);
+        a = jump(a, depth_[a] - depth_[b]);
+        if (a == b)
+            return a;
+        for (int level = levels_; level-- > 0;)
+            if (ancestor_[level][a] != ancestor_[level][b]) {
+                a = ancestor_[level][a];
+                b = ancestor_[level][b];
+            }
+        return ancestor_[0][a];
+    }
+    int operator()(int a, int b) const {
+        int result = lca(a, b);
+        npre(result != npos);
+        return result;
+    }
+    W dist(int a, int b, W fallback) const {
+        int common = lca(a, b);
+        if (common == npos)
+            return fallback;
+        if constexpr (is_integral_v<W>) {
+            __int128_t result = __int128_t(distance_[a]) + distance_[b] -
+                                2 * __int128_t(distance_[common]);
+            return ni::nchecked_integral_cast<W>(result);
+        } else {
+            return distance_[a] + distance_[b] - W{2} * distance_[common];
+        }
+    }
+    W dist(int a, int b) const {
+        npre(same(a, b));
+        return dist(a, b, W{});
+    }
+    int kth(int from, int to, int steps, int fallback = npos) const {
+        if (steps < 0)
+            return fallback;
+        int common = lca(from, to);
+        if (common == npos)
+            return fallback;
+        int upward = depth_[from] - depth_[common];
+        int downward = depth_[to] - depth_[common];
+        if (steps > upward + downward)
+            return fallback;
+        return steps <= upward ? jump(from, steps) : jump(to, upward + downward - steps);
+    }
+};
+
 // ---- 43_graph_more.hpp ----
 template <ngraph_like G> nvector<int> n01bfs(const G& graph, int source) {
     int vertices = ni::ngraph_vertices(graph);
@@ -5369,7 +5931,11 @@ template <ngraph_like G> nvector<int> n01bfs(const G& graph, int source) {
 
 template <class W> struct nmst_result {
     W weight{};
+    W cost{};
     nvector<pair<int, int>> edges;
+    nvector<int> edge;
+    int components = 0;
+    bool connected() const { return components <= 1; }
 };
 
 template <class D = long long, ngraph_like G>
@@ -5383,6 +5949,7 @@ nmaybe<nmst_result<D>> nprim(const G& graph, int root = 0) {
     priority_queue<candidate, vector<candidate>, greater<candidate>> queue;
     nvector<unsigned char> used(vertices, false);
     nmst_result<D> result;
+    result.components = vertices;
     result.edges.reserve(vertices - 1);
     queue.push({D{}, root, npos});
     int visited = 0;
@@ -5395,7 +5962,9 @@ nmaybe<nmst_result<D>> nprim(const G& graph, int root = 0) {
         ++visited;
         if (parent != npos) {
             result.weight = ni::nchecked_add(result.weight, weight);
+            result.cost = result.weight;
             result.edges.push(pair<int, int>{parent, vertex});
+            --result.components;
         }
         decltype(auto) adjacency = graph.neighbors(vertex);
         nfor(edge, adjacency) {
@@ -5406,6 +5975,47 @@ nmaybe<nmst_result<D>> nprim(const G& graph, int root = 0) {
         }
     }
     return visited == vertices ? nmaybe<nmst_result<D>>(move(result)) : nmaybe<nmst_result<D>>{};
+}
+
+template <ngraph_like G, class F,
+          class W = remove_cvref_t<invoke_result_t<F&, ni::ngraph_neighbor_t<G>>>>
+    requires invocable<F&, ni::ngraph_neighbor_t<G>>
+nmst_result<W> nkruskal(const G& graph, F weight) {
+    struct candidate {
+        int from, to, id;
+        W weight;
+    };
+    int vertices = ni::ngraph_vertices(graph);
+    nvector<candidate> candidates;
+    auto arcs = narcs(graph);
+    candidates.reserve(arcs.len());
+    nfor(edge, arcs)
+        candidates.push(candidate{edge.from, edge.to, edge.id, W(invoke(weight, edge))});
+    nsort(candidates, [](const candidate& left, const candidate& right) {
+        return left.weight < right.weight;
+    });
+    ndsu components(vertices);
+    nmst_result<W> result;
+    result.components = vertices;
+    nfor(edge, candidates) {
+        if (components.same(edge.from, edge.to))
+            continue;
+        components.merge(edge.from, edge.to);
+        if constexpr (is_arithmetic_v<W>)
+            result.weight = ni::nchecked_add(result.weight, edge.weight);
+        else
+            result.weight += edge.weight;
+        result.cost = result.weight;
+        result.edges.push(pair<int, int>{edge.from, edge.to});
+        result.edge.push(edge.id);
+        --result.components;
+    }
+    return result;
+}
+
+template <ngraph_like G> auto nkruskal(const G& graph) {
+    return nkruskal(graph,
+                     [](const auto& edge) -> decltype(auto) { return nedge_weight(edge); });
 }
 
 template <class C>
@@ -6072,6 +6682,222 @@ inline nvector<uint64_t> nfactor(uint64_t value) {
 }
 
 inline nvector<uint64_t> nfactor_rho(uint64_t value) { return nfactor(value); }
+
+template <signed_integral T = long long> class nfrac {
+    using W = nwide_t<T>;
+    using U = make_unsigned_t<W>;
+
+    static U magnitude(W value) {
+        U encoded = U(value);
+        return value < 0 ? U{} - encoded : encoded;
+    }
+    static U gcd_wide(U a, U b) {
+        while (b) {
+            U remainder = a % b;
+            a = b;
+            b = remainder;
+        }
+        return a;
+    }
+    static T narrow(W value) { return ni::nchecked_integral_cast<T>(value); }
+    void assign(W numerator, W denominator) {
+        npre(denominator != 0);
+        U divisor = gcd_wide(magnitude(numerator), magnitude(denominator));
+        numerator /= W(divisor);
+        denominator /= W(divisor);
+        if (denominator < 0) {
+            npre(numerator != numeric_limits<W>::lowest());
+            numerator = -numerator;
+            denominator = -denominator;
+        }
+        p = narrow(numerator);
+        q = narrow(denominator);
+    }
+
+  public:
+    T p = 0, q = 1;
+
+    constexpr nfrac() = default;
+    constexpr nfrac(T integer) : p(integer) {}
+    nfrac(T numerator, T denominator) { assign(W(numerator), W(denominator)); }
+
+    nfrac& operator+=(const nfrac& other) {
+        U divisor = gcd_wide(U(q), U(other.q));
+        W left_scale = W(other.q) / W(divisor);
+        W right_scale = W(q) / W(divisor);
+        W numerator;
+        npre(!__builtin_mul_overflow(W(p), left_scale, &numerator));
+        W addend;
+        npre(!__builtin_mul_overflow(W(other.p), right_scale, &addend));
+        npre(!__builtin_add_overflow(numerator, addend, &numerator));
+        W denominator;
+        npre(!__builtin_mul_overflow(right_scale, W(other.q), &denominator));
+        assign(numerator, denominator);
+        return *this;
+    }
+    nfrac& operator-=(const nfrac& other) { return *this += -other; }
+    nfrac& operator*=(const nfrac& other) {
+        U left_cancel = gcd_wide(magnitude(W(p)), U(other.q));
+        U right_cancel = gcd_wide(magnitude(W(other.p)), U(q));
+        W numerator, denominator;
+        npre(!__builtin_mul_overflow(W(p) / W(left_cancel), W(other.p) / W(right_cancel),
+                                     &numerator));
+        npre(!__builtin_mul_overflow(W(q) / W(right_cancel), W(other.q) / W(left_cancel),
+                                     &denominator));
+        assign(numerator, denominator);
+        return *this;
+    }
+    nmaybe<nfrac> trydiv(const nfrac& other) const {
+        if (!other.p)
+            return {};
+        nfrac result = *this;
+        result *= nfrac(other.q, other.p);
+        return result;
+    }
+    nfrac& operator/=(const nfrac& other) {
+        auto result = trydiv(other);
+        npre(result.ok());
+        return *this = move(result.val());
+    }
+    nfrac operator+() const { return *this; }
+    nfrac operator-() const {
+        npre(p != numeric_limits<T>::lowest());
+        return nfrac(T(-p), q);
+    }
+    friend nfrac operator+(nfrac left, const nfrac& right) { return left += right; }
+    friend nfrac operator-(nfrac left, const nfrac& right) { return left -= right; }
+    friend nfrac operator*(nfrac left, const nfrac& right) { return left *= right; }
+    friend nfrac operator/(nfrac left, const nfrac& right) { return left /= right; }
+    friend bool operator==(const nfrac&, const nfrac&) = default;
+    friend strong_ordering operator<=>(const nfrac& left, const nfrac& right) {
+        W a = W(left.p) * right.q;
+        W b = W(right.p) * left.q;
+        return a < b ? strong_ordering::less
+                     : a > b ? strong_ordering::greater : strong_ordering::equal;
+    }
+    T floor() const { return nfloor_div(p, q); }
+    T ceil() const { return nceil_div(p, q); }
+    explicit operator long double() const { return static_cast<long double>(p) / q; }
+    friend ostream& operator<<(ostream& output, const nfrac& value) {
+        return output << value.p << '/' << value.q;
+    }
+};
+
+struct ncongruence {
+    long long a = 0, m = 1;
+
+    ncongruence() = default;
+    ncongruence(long long residue, long long modulus) : m(modulus) {
+        npre(modulus > 0);
+        a = nmodulo(residue, modulus);
+    }
+    bool has(long long value) const { return (__int128_t(value) - a) % m == 0; }
+    nmaybe<long long> at(long long index) const {
+        __int128_t value = __int128_t(a) + __int128_t(index) * m;
+        if (value < numeric_limits<long long>::lowest() ||
+            value > numeric_limits<long long>::max())
+            return {};
+        return static_cast<long long>(value);
+    }
+    long long at(long long index, long long fallback) const {
+        auto result = at(index);
+        return result ? result.val() : fallback;
+    }
+    long long operator()(long long index) const {
+        auto result = at(index);
+        npre(result.ok());
+        return result.val();
+    }
+    friend bool operator==(const ncongruence&, const ncongruence&) = default;
+};
+
+inline nmaybe<ncongruence> ncrt(ncongruence left, ncongruence right) {
+    auto bezout = nextgcd(left.m, right.m);
+    __int128_t difference = __int128_t(right.a) - left.a;
+    if (difference % bezout.gcd)
+        return {};
+    __int128_t modulus = __int128_t(left.m / bezout.gcd) * right.m;
+    if (modulus > numeric_limits<long long>::max())
+        return {};
+    __int128_t quotient_modulus = right.m / bezout.gcd;
+    __int128_t multiplier = difference / bezout.gcd * bezout.x % quotient_modulus;
+    __int128_t residue = (__int128_t(left.a) + __int128_t(left.m) * multiplier) % modulus;
+    if (residue < 0)
+        residue += modulus;
+    return ncongruence(static_cast<long long>(residue), static_cast<long long>(modulus));
+}
+
+inline ncongruence ncrt(ncongruence left, ncongruence right, ncongruence fallback) {
+    auto result = ncrt(left, right);
+    return result ? result.val() : move(fallback);
+}
+
+class nprime_table {
+    static int checked_limit(int limit) {
+        npre(0 <= limit && limit < INT_MAX);
+        return limit;
+    }
+
+  public:
+    int n = 0;
+    nvector<int> p, lp, phi, mu;
+
+    nprime_table() = default;
+    explicit nprime_table(int limit)
+        : n(checked_limit(limit)), lp(n + 1, 0), phi(n + 1, 0), mu(n + 1, 0) {
+        if (limit >= 1)
+            phi[1] = mu[1] = 1;
+        for (int value = 2; value <= limit; ++value) {
+            if (!lp[value]) {
+                lp[value] = value;
+                p.push(value);
+                phi[value] = value - 1;
+                mu[value] = -1;
+            }
+            for (int index = 0; index < p.len(); ++index) {
+                int prime = p[index];
+                if (prime > lp[value] || 1LL * value * prime > limit)
+                    break;
+                int product = value * prime;
+                lp[product] = prime;
+                if (prime == lp[value]) {
+                    phi[product] = phi[value] * prime;
+                    mu[product] = 0;
+                } else {
+                    phi[product] = phi[value] * (prime - 1);
+                    mu[product] = -mu[value];
+                }
+            }
+        }
+    }
+    bool isprime(int value) const { return 2 <= value && value <= n && lp[value] == value; }
+    nvector<pair<int, int>> factor(int value) const {
+        npre(0 < value && value <= n);
+        nvector<pair<int, int>> result;
+        while (value > 1) {
+            int prime = lp[value], exponent = 0;
+            do {
+                value /= prime;
+                ++exponent;
+            } while (value > 1 && lp[value] == prime);
+            result.push(pair<int, int>{prime, exponent});
+        }
+        return result;
+    }
+    nvector<int> divisors(int value) const {
+        nvector<int> result{1};
+        nfor(factor, this->factor(value)) {
+            int previous = result.len(), power = 1;
+            for (int exponent = 1; exponent <= factor.second; ++exponent) {
+                power *= factor.first;
+                for (int index = 0; index < previous; ++index)
+                    result.push(result[index] * power);
+            }
+        }
+        nsort(result);
+        return result;
+    }
+};
 
 // ---- 51_modular.hpp ----
 template <uint64_t Modulus>
@@ -6921,6 +7747,91 @@ auto nfps_inverse(const A& series, int terms) {
         result.resize(size);
     }
     return result;
+}
+
+template <nindexed A> auto nberlekamp(const A& sequence) {
+    using T = nindex_value_t<const A>;
+    nvector<T> current{T{1}}, previous{T{1}};
+    int length = 0, shift = 1;
+    T previous_discrepancy{1};
+    for (int index = 0; index < nlen(sequence); ++index) {
+        T discrepancy = sequence[index];
+        for (int i = 1; i <= length; ++i)
+            discrepancy += current[i] * sequence[index - i];
+        if (discrepancy == T{}) {
+            ++shift;
+            continue;
+        }
+        nvector<T> saved = current;
+        T factor = discrepancy / previous_discrepancy;
+        if (current.len() < previous.len() + shift)
+            current.resize(previous.len() + shift, T{});
+        for (int i = 0; i < previous.len(); ++i)
+            current[i + shift] -= factor * previous[i];
+        if (2 * length <= index) {
+            length = index + 1 - length;
+            previous = move(saved);
+            previous_discrepancy = discrepancy;
+            shift = 1;
+        } else {
+            ++shift;
+        }
+    }
+    nvector<T> result(length);
+    for (int i = 0; i < length; ++i)
+        result[i] = -current[i + 1];
+    return result;
+}
+
+template <nindexed A, nindexed C>
+    requires same_as<nindex_value_t<const A>, nindex_value_t<const C>>
+auto nrec_nth(const A& initial, const C& recurrence, uint64_t index)
+    -> nmaybe<nindex_value_t<const A>> {
+    using T = nindex_value_t<const A>;
+    int order = nlen(recurrence);
+    if (index < uint64_t(nlen(initial)))
+        return initial[int(index)];
+    if (!order || nlen(initial) < order)
+        return {};
+    npre(order <= INT_MAX / 2);
+
+    auto multiply = [&](const nvector<T>& left, const nvector<T>& right) {
+        nvector<T> product(2 * order - 1, T{});
+        for (int i = 0; i < order; ++i)
+            for (int j = 0; j < order; ++j)
+                product[i + j] += left[i] * right[j];
+        for (int degree = 2 * order - 1; degree-- > order;)
+            for (int offset = 0; offset < order; ++offset)
+                product[degree - offset - 1] += product[degree] * recurrence[offset];
+        product.resize(order);
+        return product;
+    };
+
+    nvector<T> coefficient(order, T{}), power(order, T{});
+    coefficient[0] = T{1};
+    if (order == 1)
+        power[0] = recurrence[0];
+    else
+        power[1] = T{1};
+    while (index) {
+        if (index & 1)
+            coefficient = multiply(coefficient, power);
+        index >>= 1;
+        if (index)
+            power = multiply(power, power);
+    }
+    T result{};
+    for (int i = 0; i < order; ++i)
+        result += coefficient[i] * initial[i];
+    return result;
+}
+
+template <nindexed A, nindexed C>
+    requires same_as<nindex_value_t<const A>, nindex_value_t<const C>>
+auto nrec_nth(const A& initial, const C& recurrence, uint64_t index,
+              nindex_value_t<const A> fallback) {
+    auto result = nrec_nth(initial, recurrence, index);
+    return result ? result.val() : move(fallback);
 }
 
 // ---- 55_game.hpp ----

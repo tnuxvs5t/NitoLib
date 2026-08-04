@@ -26,7 +26,11 @@ template <ngraph_like G> nvector<int> n01bfs(const G& graph, int source) {
 
 template <class W> struct nmst_result {
     W weight{};
+    W cost{};
     nvector<pair<int, int>> edges;
+    nvector<int> edge;
+    int components = 0;
+    bool connected() const { return components <= 1; }
 };
 
 template <class D = long long, ngraph_like G>
@@ -40,6 +44,7 @@ nmaybe<nmst_result<D>> nprim(const G& graph, int root = 0) {
     priority_queue<candidate, vector<candidate>, greater<candidate>> queue;
     nvector<unsigned char> used(vertices, false);
     nmst_result<D> result;
+    result.components = vertices;
     result.edges.reserve(vertices - 1);
     queue.push({D{}, root, npos});
     int visited = 0;
@@ -52,7 +57,9 @@ nmaybe<nmst_result<D>> nprim(const G& graph, int root = 0) {
         ++visited;
         if (parent != npos) {
             result.weight = ni::nchecked_add(result.weight, weight);
+            result.cost = result.weight;
             result.edges.push(pair<int, int>{parent, vertex});
+            --result.components;
         }
         decltype(auto) adjacency = graph.neighbors(vertex);
         nfor(edge, adjacency) {
@@ -63,6 +70,47 @@ nmaybe<nmst_result<D>> nprim(const G& graph, int root = 0) {
         }
     }
     return visited == vertices ? nmaybe<nmst_result<D>>(move(result)) : nmaybe<nmst_result<D>>{};
+}
+
+template <ngraph_like G, class F,
+          class W = remove_cvref_t<invoke_result_t<F&, ni::ngraph_neighbor_t<G>>>>
+    requires invocable<F&, ni::ngraph_neighbor_t<G>>
+nmst_result<W> nkruskal(const G& graph, F weight) {
+    struct candidate {
+        int from, to, id;
+        W weight;
+    };
+    int vertices = ni::ngraph_vertices(graph);
+    nvector<candidate> candidates;
+    auto arcs = narcs(graph);
+    candidates.reserve(arcs.len());
+    nfor(edge, arcs)
+        candidates.push(candidate{edge.from, edge.to, edge.id, W(invoke(weight, edge))});
+    nsort(candidates, [](const candidate& left, const candidate& right) {
+        return left.weight < right.weight;
+    });
+    ndsu components(vertices);
+    nmst_result<W> result;
+    result.components = vertices;
+    nfor(edge, candidates) {
+        if (components.same(edge.from, edge.to))
+            continue;
+        components.merge(edge.from, edge.to);
+        if constexpr (is_arithmetic_v<W>)
+            result.weight = ni::nchecked_add(result.weight, edge.weight);
+        else
+            result.weight += edge.weight;
+        result.cost = result.weight;
+        result.edges.push(pair<int, int>{edge.from, edge.to});
+        result.edge.push(edge.id);
+        --result.components;
+    }
+    return result;
+}
+
+template <ngraph_like G> auto nkruskal(const G& graph) {
+    return nkruskal(graph,
+                     [](const auto& edge) -> decltype(auto) { return nedge_weight(edge); });
 }
 
 template <class C>

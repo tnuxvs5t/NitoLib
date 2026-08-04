@@ -177,3 +177,88 @@ auto nfps_inverse(const A& series, int terms) {
     }
     return result;
 }
+
+template <nindexed A> auto nberlekamp(const A& sequence) {
+    using T = nindex_value_t<const A>;
+    nvector<T> current{T{1}}, previous{T{1}};
+    int length = 0, shift = 1;
+    T previous_discrepancy{1};
+    for (int index = 0; index < nlen(sequence); ++index) {
+        T discrepancy = sequence[index];
+        for (int i = 1; i <= length; ++i)
+            discrepancy += current[i] * sequence[index - i];
+        if (discrepancy == T{}) {
+            ++shift;
+            continue;
+        }
+        nvector<T> saved = current;
+        T factor = discrepancy / previous_discrepancy;
+        if (current.len() < previous.len() + shift)
+            current.resize(previous.len() + shift, T{});
+        for (int i = 0; i < previous.len(); ++i)
+            current[i + shift] -= factor * previous[i];
+        if (2 * length <= index) {
+            length = index + 1 - length;
+            previous = move(saved);
+            previous_discrepancy = discrepancy;
+            shift = 1;
+        } else {
+            ++shift;
+        }
+    }
+    nvector<T> result(length);
+    for (int i = 0; i < length; ++i)
+        result[i] = -current[i + 1];
+    return result;
+}
+
+template <nindexed A, nindexed C>
+    requires same_as<nindex_value_t<const A>, nindex_value_t<const C>>
+auto nrec_nth(const A& initial, const C& recurrence, uint64_t index)
+    -> nmaybe<nindex_value_t<const A>> {
+    using T = nindex_value_t<const A>;
+    int order = nlen(recurrence);
+    if (index < uint64_t(nlen(initial)))
+        return initial[int(index)];
+    if (!order || nlen(initial) < order)
+        return {};
+    npre(order <= INT_MAX / 2);
+
+    auto multiply = [&](const nvector<T>& left, const nvector<T>& right) {
+        nvector<T> product(2 * order - 1, T{});
+        for (int i = 0; i < order; ++i)
+            for (int j = 0; j < order; ++j)
+                product[i + j] += left[i] * right[j];
+        for (int degree = 2 * order - 1; degree-- > order;)
+            for (int offset = 0; offset < order; ++offset)
+                product[degree - offset - 1] += product[degree] * recurrence[offset];
+        product.resize(order);
+        return product;
+    };
+
+    nvector<T> coefficient(order, T{}), power(order, T{});
+    coefficient[0] = T{1};
+    if (order == 1)
+        power[0] = recurrence[0];
+    else
+        power[1] = T{1};
+    while (index) {
+        if (index & 1)
+            coefficient = multiply(coefficient, power);
+        index >>= 1;
+        if (index)
+            power = multiply(power, power);
+    }
+    T result{};
+    for (int i = 0; i < order; ++i)
+        result += coefficient[i] * initial[i];
+    return result;
+}
+
+template <nindexed A, nindexed C>
+    requires same_as<nindex_value_t<const A>, nindex_value_t<const C>>
+auto nrec_nth(const A& initial, const C& recurrence, uint64_t index,
+              nindex_value_t<const A> fallback) {
+    auto result = nrec_nth(initial, recurrence, index);
+    return result ? result.val() : move(fallback);
+}

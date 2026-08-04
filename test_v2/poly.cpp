@@ -51,4 +51,23 @@ int main() {
         for (int i = 1; i < n; ++i)
             ntest(product[i] == mint{});
     }
+
+    nvector<mint> fibonacci{0, 1};
+    for (int index = 2; index < 40; ++index)
+        fibonacci.push(fibonacci[index - 1] + fibonacci[index - 2]);
+    auto recurrence = nberlekamp(fibonacci);
+    ntest(recurrence == nvector<mint>({1, 1}));
+    for (int index = 0; index < 100; ++index) {
+        mint expected = index < fibonacci.len() ? fibonacci[index] : mint{};
+        if (index >= fibonacci.len()) {
+            mint left = 0, right = 1;
+            for (int step = 0; step < index; ++step) {
+                mint next = left + right;
+                left = right;
+                right = next;
+            }
+            expected = left;
+        }
+        ntest(nrec_nth(fibonacci, recurrence, index).val() == expected);
+    }
 }
