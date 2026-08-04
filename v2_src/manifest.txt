@@ -3,10 +3,15 @@
 02_algebra.hpp
 03_ref.hpp
 04_enum.hpp
+05_ast.hpp
+06_func.hpp
 10_seq.hpp
 20_mechanism.hpp
 21_memory.hpp
 22_finite.hpp
+23_ordered.hpp
+24_map.hpp
+25_relation.hpp
 30_ds.hpp
 31_lazy.hpp
 32_dsu_queue.hpp

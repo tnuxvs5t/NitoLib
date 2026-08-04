@@ -190,3 +190,74 @@ template <class T = void> struct ngreater {
 template <class T = void> struct nequal {
     constexpr bool operator()(const auto& a, const auto& b) const { return a == b; }
 };
+
+class nrng {
+    uint64_t state_;
+
+  public:
+    using result_type = uint64_t;
+
+    constexpr explicit nrng(uint64_t seed = 0x243f6a8885a308d3ULL) : state_(seed) {}
+    static constexpr uint64_t min() noexcept { return 0; }
+    static constexpr uint64_t max() noexcept { return numeric_limits<uint64_t>::max(); }
+    static constexpr uint64_t mix(uint64_t value) noexcept {
+        value += 0x9e3779b97f4a7c15ULL;
+        value = (value ^ (value >> 30)) * 0xbf58476d1ce4e5b9ULL;
+        value = (value ^ (value >> 27)) * 0x94d049bb133111ebULL;
+        return value ^ (value >> 31);
+    }
+
+    constexpr uint64_t operator()() noexcept { return state_ = mix(state_); }
+
+    template <integral I> constexpr I operator()(I bound) {
+        npre(bound > 0);
+        using U = make_unsigned_t<I>;
+        return I((__uint128_t((*this)()) * U(bound)) >> 64);
+    }
+
+    template <integral I> constexpr I operator()(I first, I last) {
+        npre(first < last);
+        using U = make_unsigned_t<I>;
+        U width = U(last) - U(first);
+        if constexpr (signed_integral<I>)
+            return I(__int128_t(first) + __int128_t((*this)(width)));
+        else
+            return I(U(first) + (*this)(width));
+    }
+};
+
+inline uint64_t nseed_value =
+    uint64_t(chrono::steady_clock::now().time_since_epoch().count()) ^
+    uint64_t(reinterpret_cast<uintptr_t>(addressof(nseed_value)));
+inline nrng nrng_global(nseed_value);
+inline uint64_t nhash_seed = nrng::mix(nseed_value);
+
+inline void nseed(uint64_t seed) {
+    nseed_value = seed;
+    nrng_global = nrng(seed);
+    nhash_seed = nrng::mix(seed);
+}
+
+template <class T> struct nhash {
+    uint64_t salt = nhash_seed;
+
+    nhash() = default;
+    explicit nhash(uint64_t seed) : salt(seed) {}
+    size_t operator()(const T& value) const noexcept(noexcept(hash<T>{}(value))) {
+        return size_t(nrng::mix(uint64_t(hash<T>{}(value)) + salt));
+    }
+};
+
+template <class A, class B> struct nhash<pair<A, B>> {
+    uint64_t salt = nhash_seed;
+
+    nhash() = default;
+    explicit nhash(uint64_t seed) : salt(seed) {}
+    size_t operator()(const pair<A, B>& value) const
+        noexcept(noexcept(nhash<A>{salt}(value.first)) &&
+                 noexcept(nhash<B>{salt ^ 0x9e3779b97f4a7c15ULL}(value.second))) {
+        uint64_t left = uint64_t(nhash<A>{salt}(value.first));
+        uint64_t right = uint64_t(nhash<B>{salt ^ 0x9e3779b97f4a7c15ULL}(value.second));
+        return size_t(nrng::mix(left ^ (right + 0x9e3779b97f4a7c15ULL)));
+    }
+};

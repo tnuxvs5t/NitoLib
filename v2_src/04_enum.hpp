@@ -2,6 +2,9 @@ template <signed_integral T> class nrange_t {
     T first_ = 0, last_ = 0, step_ = 1;
 
   public:
+    using value_type = T;
+    using nview_tag = void;
+
     constexpr nrange_t() = default;
     constexpr nrange_t(T first, T last, T step = 1) : first_(first), last_(last), step_(step) {
         npre(step != 0);
@@ -19,6 +22,10 @@ template <signed_integral T> class nrange_t {
         return int(count);
     }
     constexpr bool empty() const { return len() == 0; }
+    constexpr T operator[](int index) const {
+        npre(0 <= index && index < len());
+        return T(__int128_t(first_) + __int128_t(index) * __int128_t(step_));
+    }
 
     struct cursor {
         T value, last, step;
@@ -148,8 +155,68 @@ template <bool WithIndex, class A> constexpr auto ni_ncursor_range(A&& a) {
     return ni::ncursor_range<Cursor, WithIndex>{nenumerate(forward<A>(a))};
 }
 
+namespace ni {
+template <class Cursor> class nkeyvalue_iterator {
+    Cursor* cursor_;
+
+  public:
+    constexpr explicit nkeyvalue_iterator(Cursor* cursor) : cursor_(cursor) {}
+    constexpr bool operator!=(ncursor_sentinel) const { return cursor_->ok(); }
+    constexpr auto operator*() const {
+        using key_reference = decltype(cursor_->key());
+        using value_reference = decltype(cursor_->val());
+        return pair<key_reference, value_reference>(cursor_->key(), cursor_->val());
+    }
+    constexpr nkeyvalue_iterator& operator++() {
+        cursor_->next();
+        return *this;
+    }
+};
+
+template <class Cursor> struct nkeyvalue_range {
+    Cursor cursor;
+    constexpr auto begin() { return nkeyvalue_iterator<Cursor>{addressof(cursor)}; }
+    constexpr auto end() const { return ncursor_sentinel{}; }
+};
+} // namespace ni
+
+template <class A>
+concept nkeyvalue_enumerable = requires(A&& sequence) {
+    nenumerate(forward<A>(sequence)).key();
+    nenumerate(forward<A>(sequence)).val();
+};
+
+template <class A>
+    requires nkeyvalue_enumerable<A&&>
+constexpr auto ni_nkeyvalue_range(A&& a) {
+    using Cursor = remove_cvref_t<decltype(nenumerate(forward<A>(a)))>;
+    return ni::nkeyvalue_range<Cursor>{nenumerate(forward<A>(a))};
+}
+
+namespace ni {
+template <class H> struct nkeyed_index_cursor {
+    H owner;
+    int index = 0;
+    bool ok() const { return index < nlen(owner.get()); }
+    decltype(auto) key() { return owner.get().key(index); }
+    decltype(auto) val() { return owner.get()[index]; }
+    int idx() const { return index; }
+    void next() { ++index; }
+};
+} // namespace ni
+
+template <class A>
+    requires(!nkeyvalue_enumerable<A&&>) && nviewable_indexed<A&&> &&
+            requires(remove_reference_t<A>& sequence) { sequence.key(0); }
+constexpr auto ni_nkeyvalue_range(A&& a) {
+    auto owner = ni::nhold_indexed(forward<A>(a));
+    using Cursor = ni::nkeyed_index_cursor<decltype(owner)>;
+    return ni::nkeyvalue_range<Cursor>{Cursor{move(owner)}};
+}
+
 #define nfor(x, sequence) for (auto&& x : ni_ncursor_range<false>((sequence)))
 #define nfori(index, x, sequence) for (auto&& [index, x] : ni_ncursor_range<true>((sequence)))
+#define nforkv(key, value, sequence) for (auto&& [key, value] : ni_nkeyvalue_range((sequence)))
 #define nrep(index, count) for (int index : ni_ncursor_range<false>(nrange(ni_nloop_count((count)))))
 #define nrrep(index, count)                                                                                           \
     for (int index : ni_ncursor_range<false>(nrange(ni_nloop_count((count)) - 1, -1, -1)))

@@ -194,6 +194,91 @@ template <class T> class ndeque {
     void clear() noexcept { storage_.clear(); }
 };
 
+template <class T, class C = nless<T>> class nheap_binary {
+    nvector<T> values_;
+    [[no_unique_address]] C compare_{};
+
+    int up(int index) {
+        while (index) {
+            int parent = (index - 1) / 2;
+            if (!invoke(compare_, values_[index], values_[parent]))
+                break;
+            ranges::swap(values_[index], values_[parent]);
+            index = parent;
+        }
+        return index;
+    }
+
+    void down(int index) {
+        for (;;) {
+            long long first_child = 2LL * index + 1;
+            if (first_child >= len())
+                return;
+            int child = int(first_child);
+            if (child + 1 < len() && invoke(compare_, values_[child + 1], values_[child]))
+                ++child;
+            if (!invoke(compare_, values_[child], values_[index]))
+                return;
+            ranges::swap(values_[index], values_[child]);
+            index = child;
+        }
+    }
+
+  public:
+    using value_type = T;
+
+    nheap_binary() = default;
+    explicit nheap_binary(C compare) : compare_(move(compare)) {}
+
+    template <class A>
+        requires nenumerable<const A&>
+    explicit nheap_binary(const A& source, C compare = {}) : compare_(move(compare)) {
+        if constexpr (requires { nlen(source); })
+            values_.reserve(nlen(source));
+        nfor(value, source)
+            values_.push(value);
+        for (int root = len() / 2; root-- > 0;)
+            down(root);
+    }
+
+    int len() const noexcept { return values_.len(); }
+    bool empty() const noexcept { return values_.empty(); }
+    void clear() noexcept { values_.clear(); }
+    void reserve(int capacity) { values_.reserve(capacity); }
+
+    template <class... A> T& push(A&&... args) {
+        values_.push(forward<A>(args)...);
+        return values_[up(len() - 1)];
+    }
+
+    const T& top() const {
+        npre(!empty());
+        return values_[0];
+    }
+    T top(T fallback) const { return empty() ? move(fallback) : values_[0]; }
+
+    T pop() {
+        npre(!empty());
+        T result = move(values_[0]);
+        if (len() == 1) {
+            values_.pop();
+            return result;
+        }
+        values_[0] = values_.pop();
+        down(0);
+        return result;
+    }
+    T pop(T fallback) { return empty() ? move(fallback) : pop(); }
+
+    void replace(T value) {
+        npre(!empty());
+        values_[0] = move(value);
+        down(0);
+    }
+};
+
+template <class T, class C = nless<T>> using nheap = nheap_binary<T, C>;
+
 template <class T, int Rank>
     requires(Rank > 0)
 class narray {
