@@ -1,3 +1,19 @@
+template <class T> struct nntt_info {
+    static constexpr bool ok = false;
+};
+template <> struct nntt_info<nmodint<998244353>> {
+    static constexpr bool ok = true;
+    static constexpr uint64_t root = 3;
+};
+template <> struct nntt_info<nmodint<1004535809>> {
+    static constexpr bool ok = true;
+    static constexpr uint64_t root = 3;
+};
+template <> struct nntt_info<nmodint<469762049>> {
+    static constexpr bool ok = true;
+    static constexpr uint64_t root = 3;
+};
+
 namespace ni {
 template <class T> inline constexpr bool nstatic_modular = false;
 template <uint64_t Modulus> inline constexpr bool nstatic_modular<nmodint<Modulus>> = true;
@@ -41,7 +57,12 @@ template <uint64_t Modulus> void nntt(nvector<nmodint<Modulus>>& values, bool in
             swap(values[i], values[reversed]);
     }
     using mint = nmodint<Modulus>;
-    static const uint64_t primitive = nprimitive_root(Modulus);
+    static const uint64_t primitive = [] {
+        if constexpr (nntt_info<mint>::ok)
+            return nntt_info<mint>::root;
+        else
+            return nprimitive_root(Modulus);
+    }();
     for (int width = 2; width <= n;) {
         mint step = mint(primitive).pow((Modulus - 1) / uint64_t(width));
         if (inverse)

@@ -7,6 +7,9 @@ template <class T>
 concept nhas_ntt = requires(nvector<T> values) { nconv_ntt(values, values); };
 
 int main() {
+    static_assert(nntt_info<nmodint<998244353>>::ok &&
+                  nntt_info<nmodint<998244353>>::root == 3);
+    static_assert(!nntt_info<nmodint<101>>::ok);
     static_assert(!nhas_poly_integral<int> && nhas_poly_integral<double>);
     static_assert(nhas_poly_integral<nmodint<101>> && !nhas_poly_integral<nmodint<100>>);
     static_assert(nhas_ntt<nmodint<998244353>> && !nhas_ntt<nmodint<100>>);
