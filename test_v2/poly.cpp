@@ -70,4 +70,21 @@ int main() {
         }
         ntest(nrec_nth(fibonacci, recurrence, index).val() == expected);
     }
+
+    npoly<mint> polynomial{1, 2, 3};
+    ntest(polynomial.deg() == 2 && polynomial(mint{2}) == mint{17});
+    ntest(polynomial.deriv() == npoly<mint>({2, 6}));
+    ntest(polynomial.integral().deriv() == polynomial);
+    ntest((polynomial + npoly<mint>{-1, -2, -3}).empty());
+
+    npoly<mint> unit{1, 2, 5, 7};
+    auto owner_inverse = unit.inv(40);
+    auto identity = (unit * owner_inverse).cut(40);
+    ntest(identity[0] == mint{1});
+    for (int index = 1; index < 40; ++index)
+        ntest(identity[index] == mint{});
+
+    npoly<mint> logarithm_source{1, 3, 4, 8, 2};
+    auto logarithm = logarithm_source.log(32);
+    ntest(logarithm.exp(32).cut(logarithm_source.len()) == logarithm_source);
 }

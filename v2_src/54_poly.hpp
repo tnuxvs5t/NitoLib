@@ -178,6 +178,127 @@ auto nfps_inverse(const A& series, int terms) {
     return result;
 }
 
+template <class T> class npoly {
+  public:
+    using value_type = T;
+    nvector<T> a;
+
+    npoly() = default;
+    npoly(initializer_list<T> coefficients) : a(coefficients) { norm(); }
+    explicit npoly(nvector<T> coefficients) : a(move(coefficients)) { norm(); }
+
+    int len() const noexcept { return a.len(); }
+    int deg() const noexcept { return len() - 1; }
+    bool empty() const noexcept { return a.empty(); }
+    void norm() {
+        while (!a.empty() && a.back() == T{})
+            a.pop();
+    }
+    T operator[](int index) const { return 0 <= index && index < len() ? a[index] : T{}; }
+    T& at(int index) {
+        npre(0 <= index && index < len());
+        return a[index];
+    }
+    const T& at(int index) const {
+        npre(0 <= index && index < len());
+        return a[index];
+    }
+    template <class X> T operator()(const X& point) const {
+        T result{};
+        for (int index = len(); index-- > 0;)
+            result = result * point + a[index];
+        return result;
+    }
+
+    npoly& operator+=(const npoly& other) {
+        if (len() < other.len())
+            a.resize(other.len(), T{});
+        for (int index = 0; index < other.len(); ++index)
+            a[index] += other.a[index];
+        norm();
+        return *this;
+    }
+    npoly& operator-=(const npoly& other) {
+        if (len() < other.len())
+            a.resize(other.len(), T{});
+        for (int index = 0; index < other.len(); ++index)
+            a[index] -= other.a[index];
+        norm();
+        return *this;
+    }
+    npoly& operator*=(const npoly& other) {
+        a = nconv(a, other.a);
+        norm();
+        return *this;
+    }
+    friend npoly operator+(npoly left, const npoly& right) { return left += right; }
+    friend npoly operator-(npoly left, const npoly& right) { return left -= right; }
+    friend npoly operator*(npoly left, const npoly& right) { return left *= right; }
+    friend bool operator==(const npoly&, const npoly&) = default;
+
+    npoly deriv() const {
+        if (len() < 2)
+            return {};
+        nvector<T> result(len() - 1);
+        for (int index = 1; index < len(); ++index)
+            result[index - 1] = a[index] * T(index);
+        return npoly(move(result));
+    }
+    npoly integral() const
+        requires floating_point<T> || nexact_field_element<T>
+    {
+        npre(len() < INT_MAX);
+        nvector<T> result(len() + 1, T{});
+        for (int index = 0; index < len(); ++index)
+            result[index + 1] = a[index] / T(index + 1);
+        return npoly(move(result));
+    }
+    npoly cut(int terms) const {
+        npre(terms >= 0);
+        nvector<T> result(min(terms, len()));
+        for (int index = 0; index < result.len(); ++index)
+            result[index] = a[index];
+        return npoly(move(result));
+    }
+    npoly inv(int terms) const
+        requires floating_point<T> || nexact_field_element<T>
+    {
+        npre(terms >= 0);
+        if (!terms)
+            return {};
+        npre(!empty() && a[0] != T{});
+        return npoly(nfps_inverse(a, terms));
+    }
+    npoly log(int terms) const
+        requires floating_point<T> || nexact_field_element<T>
+    {
+        npre(terms >= 0);
+        if (!terms)
+            return {};
+        npre((*this)[0] == T{1});
+        return (deriv() * inv(terms)).cut(terms - 1).integral().cut(terms);
+    }
+    npoly exp(int terms) const
+        requires floating_point<T> || nexact_field_element<T>
+    {
+        npre(terms >= 0);
+        if (!terms)
+            return {};
+        npre((*this)[0] == T{});
+        npoly result{T{1}};
+        for (int size = 1; size < terms;) {
+            int next = int(min<long long>(terms, 2LL * size));
+            npoly correction = cut(next) - result.log(next);
+            if (correction.empty())
+                correction.a.resize(1);
+            correction.a[0] += T{1};
+            result = (result * correction).cut(next);
+            size = next;
+        }
+        return result.cut(terms);
+    }
+};
+
 template <nindexed A> auto nberlekamp(const A& sequence) {
     using T = nindex_value_t<const A>;
     nvector<T> current{T{1}}, previous{T{1}};

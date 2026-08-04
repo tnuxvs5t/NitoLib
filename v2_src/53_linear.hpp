@@ -138,6 +138,78 @@ nmatrix<T> nmatpow(nmatrix<T> base, uint64_t exponent, Add add = {}, Mul multipl
     return result;
 }
 
+template <class T, class Add = nadd<T>, class Mul = nmul<T>>
+    requires nmonoid<Add, T> && nmonoid<Mul, T>
+class nmat : public nmatrix<T> {
+    using base = nmatrix<T>;
+
+  public:
+    using base::base;
+    nmat() = default;
+    explicit nmat(base matrix) : base(move(matrix)) {}
+
+    static nmat eye(int size) {
+        npre(size >= 0);
+        Add add;
+        Mul multiply;
+        nmat result(size, size, add.id());
+        for (int index = 0; index < size; ++index)
+            result(index, index) = multiply.id();
+        return result;
+    }
+    T get(int row, int column, T fallback = Add{}.id()) const {
+        return 0 <= row && row < this->rows() && 0 <= column && column < this->cols()
+                   ? (*this)(row, column)
+                   : move(fallback);
+    }
+    nmat& operator+=(const nmat& other) {
+        npre(this->rows() == other.rows() && this->cols() == other.cols());
+        Add add;
+        for (int index = 0; index < this->len(); ++index)
+            (*this)[index] = add(move((*this)[index]), other[index]);
+        return *this;
+    }
+    friend nmat operator+(nmat left, const nmat& right) { return left += right; }
+    friend nmat operator*(const nmat& left, const nmat& right) {
+        npre(left.cols() == right.rows());
+        Add add;
+        Mul multiply;
+        nmat result(left.rows(), right.cols(), add.id());
+        for (int row = 0; row < left.rows(); ++row)
+            for (int middle = 0; middle < left.cols(); ++middle) {
+                const T& value = left(row, middle);
+                for (int column = 0; column < right.cols(); ++column)
+                    result(row, column) =
+                        add(move(result(row, column)), multiply(value, right(middle, column)));
+            }
+        return result;
+    }
+    nmat& operator*=(const nmat& other) { return *this = *this * other; }
+    nmat pow(long long exponent) const {
+        npre(this->rows() == this->cols() && exponent >= 0);
+        nmat base = *this, result = eye(this->rows());
+        uint64_t remaining = uint64_t(exponent);
+        while (remaining) {
+            if (remaining & 1)
+                result *= base;
+            remaining >>= 1;
+            if (remaining)
+                base *= base;
+        }
+        return result;
+    }
+    nmat trans() const {
+        nmat result(this->cols(), this->rows(), Add{}.id());
+        for (int row = 0; row < this->rows(); ++row)
+            for (int column = 0; column < this->cols(); ++column)
+                result(column, row) = (*this)(row, column);
+        return result;
+    }
+    friend bool operator==(const nmat& left, const nmat& right) {
+        return static_cast<const base&>(left) == static_cast<const base&>(right);
+    }
+};
+
 template <nexact_field_element T> int nrref(nmatrix<T>& matrix, nvector<int>* pivot_columns = nullptr) {
     if (pivot_columns)
         pivot_columns->clear();
@@ -192,8 +264,76 @@ template <nexact_field_element T> T ndeterminant(nmatrix<T> matrix) {
     return determinant;
 }
 
+template <nexact_field_element T> T ndet(nmatrix<T> matrix) {
+    return ndeterminant(move(matrix));
+}
+
+template <nexact_field_element T> nmaybe<nmatrix<T>> ninverse(nmatrix<T> matrix) {
+    npre(matrix.rows() == matrix.cols());
+    int size = matrix.rows();
+    nmatrix<T> inverse(size, size, T{});
+    for (int index = 0; index < size; ++index)
+        inverse(index, index) = T{1};
+    for (int column = 0; column < size; ++column) {
+        int pivot = column;
+        while (pivot < size && matrix(pivot, column) == T{})
+            ++pivot;
+        if (pivot == size)
+            return {};
+        if (pivot != column)
+            for (int index = 0; index < size; ++index) {
+                swap(matrix(column, index), matrix(pivot, index));
+                swap(inverse(column, index), inverse(pivot, index));
+            }
+        T scale = T{1} / matrix(column, column);
+        for (int index = 0; index < size; ++index) {
+            matrix(column, index) *= scale;
+            inverse(column, index) *= scale;
+        }
+        for (int row = 0; row < size; ++row)
+            if (row != column && matrix(row, column) != T{}) {
+                T factor = matrix(row, column);
+                for (int index = 0; index < size; ++index) {
+                    matrix(row, index) -= factor * matrix(column, index);
+                    inverse(row, index) -= factor * inverse(column, index);
+                }
+            }
+    }
+    return inverse;
+}
+
+template <nexact_field_element T>
+nmatrix<T> ninverse(nmatrix<T> matrix, nmatrix<T> fallback) {
+    auto result = ninverse(move(matrix));
+    return result ? move(result.val()) : move(fallback);
+}
+
+template <nexact_field_element T, class Add, class Mul>
+T ndet(nmat<T, Add, Mul> matrix) {
+    nmatrix<T> storage = move(matrix);
+    return ndeterminant(move(storage));
+}
+
+template <nexact_field_element T, class Add, class Mul>
+nmaybe<nmat<T, Add, Mul>> ninverse(nmat<T, Add, Mul> matrix) {
+    nmatrix<T> storage = move(matrix);
+    auto result = ninverse(move(storage));
+    if (!result)
+        return {};
+    return nmat<T, Add, Mul>(move(result.val()));
+}
+
+template <nexact_field_element T, class Add, class Mul>
+nmat<T, Add, Mul> ninverse(nmat<T, Add, Mul> matrix, nmat<T, Add, Mul> fallback) {
+    auto result = ninverse(move(matrix));
+    return result ? move(result.val()) : move(fallback);
+}
+
 template <class T> struct nlinear_solution {
+    bool consistent = true;
+    int rank = 0;
     nvector<T> particular;
+    nvector<T> one;
     nvector<nvector<T>> basis;
 };
 
@@ -218,11 +358,13 @@ nmaybe<nlinear_solution<T>> nlinear_solve(nmatrix<T> coefficients, const B& valu
             return {};
     }
 
-    nlinear_solution<T> result{nvector<T>(variables), {}};
+    nlinear_solution<T> result;
+    result.particular = nvector<T>(variables);
     nvector<int> pivot_row(variables, npos);
     for (int row = 0; row < pivots.len() && pivots[row] < variables; ++row) {
         pivot_row[pivots[row]] = row;
         result.particular[pivots[row]] = augmented(row, variables);
+        ++result.rank;
     }
     for (int free = 0; free < variables; ++free)
         if (pivot_row[free] == npos) {
@@ -233,5 +375,71 @@ nmaybe<nlinear_solution<T>> nlinear_solve(nmatrix<T> coefficients, const B& valu
                     direction[pivot] = -augmented(pivot_row[pivot], free);
             result.basis.push(move(direction));
         }
+    result.one = result.particular;
     return result;
+}
+
+template <nexact_field_element T, nindexed B>
+nlinear_solution<T> ngauss(nmatrix<T> coefficients, const B& values) {
+    npre(coefficients.rows() == nlen(values));
+    int equations = coefficients.rows(), variables = coefficients.cols(), row = 0;
+    nvector<T> right = ncollect<T>(values);
+    nvector<int> pivot_row(variables, npos);
+    for (int column = 0; column < variables && row < equations; ++column) {
+        int pivot = row;
+        while (pivot < equations && coefficients(pivot, column) == T{})
+            ++pivot;
+        if (pivot == equations)
+            continue;
+        if (pivot != row) {
+            for (int index = 0; index < variables; ++index)
+                swap(coefficients(row, index), coefficients(pivot, index));
+            swap(right[row], right[pivot]);
+        }
+        T scale = T{1} / coefficients(row, column);
+        for (int index = column; index < variables; ++index)
+            coefficients(row, index) *= scale;
+        right[row] *= scale;
+        for (int other = 0; other < equations; ++other)
+            if (other != row && coefficients(other, column) != T{}) {
+                T factor = coefficients(other, column);
+                for (int index = column; index < variables; ++index)
+                    coefficients(other, index) -= factor * coefficients(row, index);
+                right[other] -= factor * right[row];
+            }
+        pivot_row[column] = row++;
+    }
+
+    nlinear_solution<T> result;
+    result.rank = row;
+    for (int equation = 0; equation < equations; ++equation) {
+        bool zero = true;
+        for (int column = 0; column < variables; ++column)
+            zero &= coefficients(equation, column) == T{};
+        if (zero && right[equation] != T{}) {
+            result.consistent = false;
+            return result;
+        }
+    }
+    result.particular = nvector<T>(variables);
+    for (int column = 0; column < variables; ++column)
+        if (pivot_row[column] != npos)
+            result.particular[column] = right[pivot_row[column]];
+    for (int free = 0; free < variables; ++free)
+        if (pivot_row[free] == npos) {
+            nvector<T> direction(variables);
+            direction[free] = T{1};
+            for (int pivot = 0; pivot < variables; ++pivot)
+                if (pivot_row[pivot] != npos)
+                    direction[pivot] = -coefficients(pivot_row[pivot], free);
+            result.basis.push(move(direction));
+        }
+    result.one = result.particular;
+    return result;
+}
+
+template <nexact_field_element T, class Add, class Mul, nindexed B>
+nlinear_solution<T> ngauss(nmat<T, Add, Mul> coefficients, const B& values) {
+    nmatrix<T> storage = move(coefficients);
+    return ngauss(move(storage), values);
 }

@@ -47,7 +47,8 @@ int main() {
     nmatrix<field> under{{1, 2, 3}, {2, 4, 6}};
     nvector<field> rhs{4, 8};
     auto family = nlinear_solve(under, rhs);
-    ntest(family.ok() && family->basis.len() == 2);
+    ntest(family.ok() && family->basis.len() == 2 && family->rank == 1 &&
+          family->one == family->particular);
     for (int vector = 0; vector < family->basis.len(); ++vector)
         for (int row = 0; row < under.rows(); ++row) {
             field sum;
@@ -74,4 +75,21 @@ int main() {
                 ntest(product(i, j) == brute);
             }
     }
+
+    nmat<long long> legacy{{1, 2}, {3, 4}};
+    ntest((legacy * nmat<long long>::eye(2)) == legacy);
+    ntest(legacy.trans() == nmat<long long>({{1, 3}, {2, 4}}));
+    ntest(legacy.get(9, 9, 77) == 77);
+
+    nmat<field> invertible{{2, 3}, {5, 7}};
+    ntest(ndet(invertible) == field{-1});
+    auto inverse = ninverse(invertible);
+    ntest(inverse && invertible * inverse.val() == nmat<field>::eye(2));
+    ntest(!ninverse(nmat<field>{{1, 2}, {2, 4}}));
+
+    auto legacy_solution = ngauss(nmat<field>{{1, 2, 3}, {2, 4, 6}}, rhs);
+    ntest(legacy_solution.consistent && legacy_solution.rank == 1 &&
+          legacy_solution.basis.len() == 2 && legacy_solution.one == legacy_solution.particular);
+    auto impossible = ngauss(nmat<field>{{1}, {1}}, nvector<field>{3, 4});
+    ntest(!impossible.consistent && impossible.rank == 1);
 }
