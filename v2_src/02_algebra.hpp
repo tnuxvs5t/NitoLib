@@ -182,3 +182,31 @@ inline constexpr bool naction_laws<naddsum_action<T>, T, T> = true;
 template <integral T>
     requires(!same_as<remove_cv_t<T>, bool>)
 inline constexpr bool nsemiring_laws<nadd<T>, nmul<T>, T> = true;
+
+template <class T, class O = nmul<T>>
+    requires nmonoid<O, T> && copy_constructible<T>
+constexpr T npow(T base, long long exponent, O operation = {}) {
+    uint64_t remaining;
+    if (exponent < 0) {
+        if constexpr (ngroup<O, T>) {
+            base = operation.inv(move(base));
+            remaining = uint64_t{} - uint64_t(exponent);
+        } else {
+            npre(exponent >= 0);
+            return operation.id();
+        }
+    } else {
+        remaining = uint64_t(exponent);
+    }
+    T result = operation.id();
+    while (remaining) {
+        if (remaining & 1)
+            result = operation(move(result), base);
+        remaining >>= 1;
+        if (remaining) {
+            T copy = base;
+            base = operation(move(copy), base);
+        }
+    }
+    return result;
+}

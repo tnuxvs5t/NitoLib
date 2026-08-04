@@ -254,3 +254,17 @@ I nunimodal_arg(I first, I last, F function, Better better = {}) {
     }
     return best;
 }
+
+template <floating_point T, class F>
+T nternary_min(T left, T right, F function, int iterations = 100) {
+    npre(left <= right && iterations >= 0);
+    for (int iteration = 0; iteration < iterations; ++iteration) {
+        T distance = (right - left) / T{3};
+        T a = left + distance, b = right - distance;
+        if (invoke(function, a) < invoke(function, b))
+            right = b;
+        else
+            left = a;
+    }
+    return midpoint(left, right);
+}

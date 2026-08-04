@@ -10,6 +10,7 @@ int main() {
     dag.add(2, 5);
     auto topological = ntoposort(dag);
     ntest(topological && topological->len() == 6);
+    ntest(ntopo(dag).ok());
     nvector<int> position(6);
     for (int i = 0; i < 6; ++i)
         position[(*topological)[i]] = i;
@@ -19,6 +20,7 @@ int main() {
     }
     dag.add(4, 1);
     ntest(!ntoposort(dag));
+    ntest(ntopo(dag, nvector<int>{77}) == nvector<int>({77}));
 
     ngraph_list<int> directed(8);
     directed.add(0, 1);
@@ -35,6 +37,11 @@ int main() {
     ntest(components.classes() == 4);
     ntest(components.same(0, 2) && components.same(3, 4) && components.same(6, 7));
     ntest(!components.same(2, 3) && !components.same(4, 5));
+    auto tarjan = nscc_tarjan(directed);
+    auto kosaraju = nscc_kosaraju(directed);
+    for (int left = 0; left < 8; ++left)
+        for (int right = 0; right < 8; ++right)
+            ntest(tarjan.same(left, right) == kosaraju.same(left, right));
 
     ngraph_list<int> tree(9);
     tree.add2(0, 1);

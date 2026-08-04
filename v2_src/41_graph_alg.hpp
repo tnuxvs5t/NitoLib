@@ -93,6 +93,54 @@ template <ngraph_like G> npartition nscc(const G& graph) {
     return npartition(move(component));
 }
 
+template <ngraph_like G> nmaybe<nvector<int>> ntopo(const G& graph) {
+    return ntoposort(graph);
+}
+
+template <ngraph_like G> nvector<int> ntopo(const G& graph, nvector<int> fallback) {
+    auto result = ntoposort(graph);
+    return result ? move(result.val()) : move(fallback);
+}
+
+template <ngraph_like G> npartition nscc_kosaraju(const G& graph) { return nscc(graph); }
+
+template <ngraph_like G> npartition nscc_tarjan(const G& graph) {
+    int vertices = ni::ngraph_vertices(graph);
+    nvector<int> discovered(vertices, 0), low(vertices, 0), component(vertices, npos), stack;
+    nvector<unsigned char> active(vertices, false);
+    int timer = 0, components = 0;
+    auto visit = [&](auto&& self, int from) -> void {
+        discovered[from] = low[from] = ++timer;
+        stack.push(from);
+        active[from] = true;
+        decltype(auto) adjacency = graph.neighbors(from);
+        nfor(edge, adjacency) {
+            int to = nedge_to(edge);
+            npre(0 <= to && to < vertices);
+            if (!discovered[to]) {
+                self(self, to);
+                nchmin(low[from], low[to]);
+            } else if (active[to]) {
+                nchmin(low[from], discovered[to]);
+            }
+        }
+        if (low[from] != discovered[from])
+            return;
+        for (;;) {
+            int vertex = stack.pop();
+            active[vertex] = false;
+            component[vertex] = components;
+            if (vertex == from)
+                break;
+        }
+        ++components;
+    };
+    for (int vertex = 0; vertex < vertices; ++vertex)
+        if (!discovered[vertex])
+            visit(visit, vertex);
+    return npartition(move(component));
+}
+
 namespace ni {
 struct ntree_layout {
     vector<vector<int>> adjacency;

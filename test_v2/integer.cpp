@@ -9,6 +9,7 @@ int main() {
 
     ntest(nmag(LLONG_MIN) == (1ULL << 63));
     ntest(ngcd(84, 30) == 6 && ngcd(LLONG_MIN, 0LL) == (1ULL << 63));
+    ntest(ngcd_euclid(-84, 30) == 6 && ngcd_binary(-84, 30) == 6);
     ntest(nlcm(12, -18) == 36);
     ntest(nfloor_div(-7, 3) == -3 && nceil_div(-7, 3) == -2);
     ntest(nfloor_div(7, -3) == -3 && nceil_div(7, -3) == -2);

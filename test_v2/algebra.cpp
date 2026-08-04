@@ -39,4 +39,7 @@ int main() {
     ntest(nfold(nvector<int>{-1'000'000'000}, nmax<int>{}) == -1'000'000'000);
     ntest(nmin<int>{}.id() == numeric_limits<int>::max());
     ntest(nmax<int>{}.id() == numeric_limits<int>::lowest());
+    ntest(npow(3LL, 5) == 243);
+    ntest(npow(3, -1, nmod_add{10}) == 7);
+    ntest(npow(3, -3, nmod_add{10}) == 1);
 }

@@ -12,7 +12,7 @@ template <ninteger T> constexpr make_unsigned_t<T> nmag(T value) {
 
 template <ninteger T> constexpr make_unsigned_t<T> nabs(T value) { return nmag(value); }
 
-template <ninteger T> constexpr make_unsigned_t<T> ngcd(T a, T b) {
+template <ninteger T> constexpr make_unsigned_t<T> ngcd_euclid(T a, T b) {
     using U = make_unsigned_t<T>;
     U x = nmag(a), y = nmag(b);
     while (y) {
@@ -21,6 +21,35 @@ template <ninteger T> constexpr make_unsigned_t<T> ngcd(T a, T b) {
         y = remainder;
     }
     return x;
+}
+
+template <ninteger T> constexpr make_unsigned_t<T> ngcd_binary(T a, T b) {
+    using U = make_unsigned_t<T>;
+    U x = nmag(a), y = nmag(b);
+    if (!x)
+        return y;
+    if (!y)
+        return x;
+    int common = 0;
+    while (((x | y) & U{1}) == 0) {
+        x >>= 1;
+        y >>= 1;
+        ++common;
+    }
+    while ((x & U{1}) == 0)
+        x >>= 1;
+    do {
+        while ((y & U{1}) == 0)
+            y >>= 1;
+        if (y < x)
+            swap(x, y);
+        y -= x;
+    } while (y);
+    return x << common;
+}
+
+template <ninteger T> constexpr make_unsigned_t<T> ngcd(T a, T b) {
+    return ngcd_binary(a, b);
 }
 
 template <ninteger T> constexpr make_unsigned_t<T> nlcm(T a, T b) {

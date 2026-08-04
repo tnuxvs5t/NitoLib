@@ -1,6 +1,8 @@
 #include "common.hpp"
 
 int main() {
+    ntest(ncapadd(INT_MAX - 4, 10, INT_MAX) == INT_MAX);
+    static_assert(same_as<ni::ngraph_edge_t<ngraph_list<int>>, const narc<int>&>);
     nvector<nvector<narc<int>>> adjacency(5);
     auto add2 = [&](int a, int b, int weight) {
         adjacency[a].push(narc<int>{b, weight});

@@ -342,6 +342,17 @@ auto ncompress(const A& source, C compare = {}) {
     return nbije_rank<T, C>(source, move(compare));
 }
 
+template <class A, class C = nless<typename A::value_type>>
+auto ncompress_stl(const A& source, C compare = {}) {
+    using T = typename A::value_type;
+    nvector<T> values;
+    if constexpr (requires { source.size(); })
+        values.reserve(nlen(source));
+    for (const T& value : source)
+        values.push(value);
+    return nbije_rank<T, C>(values, move(compare));
+}
+
 template <class A, class B, class HA = nhash<A>, class HB = nhash<B>,
           class EA = equal_to<A>, class EB = equal_to<B>>
 using nbije = nbije_hash<A, B, HA, HB, EA, EB>;

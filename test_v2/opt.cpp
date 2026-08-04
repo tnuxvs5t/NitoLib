@@ -71,4 +71,7 @@ int main() {
     ntest(!segmented.get(-10));
     ntest(segmented.get(-3).val() == -3 && segmented.get(4).val() == 4);
     ntest(!segmented.get(11));
+
+    auto continuous = [](long double x) { return (x - 2.5L) * (x - 2.5L); };
+    ntest(abs(nternary_min(-10.0L, 10.0L, continuous) - 2.5L) < 1e-9L);
 }

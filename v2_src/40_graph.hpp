@@ -31,6 +31,21 @@ template <class W = int> struct nedge {
     W w;
 };
 
+template <class T> constexpr T ncapadd(T left, T right, T infinity = ninf<T>) {
+    if constexpr (integral<T> && sizeof(T) <= sizeof(uint64_t)) {
+        using W = conditional_t<signed_integral<T>, __int128_t, __uint128_t>;
+        W sum = W(left) + W(right);
+        if (sum > W(infinity))
+            return infinity;
+        if constexpr (signed_integral<T>)
+            if (sum < W(nninf<T>))
+                return nninf<T>;
+        return T(sum);
+    } else {
+        return left + right;
+    }
+}
+
 template <class F> class ngraph_view {
     int vertices_ = 0;
     [[no_unique_address]] F adjacency_;
@@ -77,6 +92,8 @@ using ngraph_neighbor_t = decltype(
 
 template <class G>
 using ngraph_weight_t = remove_cvref_t<decltype(nedge_weight(declval<ngraph_neighbor_t<G>>()))>;
+
+template <class G> using ngraph_edge_t = ngraph_neighbor_t<G>;
 } // namespace ni
 
 template <class W = int> class ngraph_list {

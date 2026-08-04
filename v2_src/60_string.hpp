@@ -110,6 +110,19 @@ class npalindrome_index {
 
 template <nindexed A> auto nmanacher(const A& sequence) { return npalindrome_index(sequence); }
 
+template <nindexed A> nvector<int> nprefix(const A& sequence) {
+    return nprefix_function(sequence);
+}
+
+template <nindexed A> nvector<int> nzfunc(const A& sequence) { return nz_function(sequence); }
+
+template <nindexed Text, nindexed Pattern>
+nvector<int> nkmp(const Text& text, const Pattern& pattern) {
+    return nkmp_find(text, pattern);
+}
+
+using nmanacher_result = npalindrome_index;
+
 template <nindexed A, class C = nless<>> nvector<int> nsuffix_array(const A& sequence, C compare = {}) {
     int n = nlen(sequence);
     nvector<int> suffix(n), rank(n), next_rank(n);

@@ -495,6 +495,34 @@ template <integral T>
     requires(!same_as<remove_cv_t<T>, bool>)
 inline constexpr bool nsemiring_laws<nadd<T>, nmul<T>, T> = true;
 
+template <class T, class O = nmul<T>>
+    requires nmonoid<O, T> && copy_constructible<T>
+constexpr T npow(T base, long long exponent, O operation = {}) {
+    uint64_t remaining;
+    if (exponent < 0) {
+        if constexpr (ngroup<O, T>) {
+            base = operation.inv(move(base));
+            remaining = uint64_t{} - uint64_t(exponent);
+        } else {
+            npre(exponent >= 0);
+            return operation.id();
+        }
+    } else {
+        remaining = uint64_t(exponent);
+    }
+    T result = operation.id();
+    while (remaining) {
+        if (remaining & 1)
+            result = operation(move(result), base);
+        remaining >>= 1;
+        if (remaining) {
+            T copy = base;
+            base = operation(move(copy), base);
+        }
+    }
+    return result;
+}
+
 // ---- 03_ref.hpp ----
 template <class T> class nspan {
     T* data_ = nullptr;
@@ -2149,6 +2177,14 @@ template <class A, class X, class C = nless<>> int nupper(const A& a, const X& v
     return l;
 }
 
+template <class A, class X, class C = nless<>>
+int nfind_sorted(const A& a, const X& value, C compare = {}, int fallback = npos) {
+    int index = nlower(a, value, compare);
+    return index < nlen(a) && !compare(value, a[index]) && !compare(a[index], value)
+               ? index
+               : fallback;
+}
+
 template <class A, class O = nadd<nindex_value_t<const A>>>
     requires nmonoid<O, nindex_value_t<const A>>
 auto nfold(const A& a, int l, int r, O op = {}) {
@@ -2190,6 +2226,14 @@ int nunique(A&& a, E equal = {}) {
     int kept = nunique_compact(a, move(equal));
     a.resize(kept);
     return kept;
+}
+
+template <class A, class C = nless<>, class E = nequal<>>
+    requires nviewable_indexed<A&&> && nresizable<remove_reference_t<A>> &&
+             nswappable_indexed<remove_reference_t<A>>
+int nsort_unique(A&& a, C compare = {}, E equal = {}) {
+    nsort(a, move(compare));
+    return nunique(a, move(equal));
 }
 
 // ---- 20_mechanism.hpp ----
@@ -2446,6 +2490,7 @@ class npartition {
 };
 
 using npart = npartition;
+using npart_dense = npartition;
 
 class nperm {
     nvector<int> image_;
@@ -4288,6 +4333,17 @@ auto ncompress(const A& source, C compare = {}) {
     return nbije_rank<T, C>(source, move(compare));
 }
 
+template <class A, class C = nless<typename A::value_type>>
+auto ncompress_stl(const A& source, C compare = {}) {
+    using T = typename A::value_type;
+    nvector<T> values;
+    if constexpr (requires { source.size(); })
+        values.reserve(nlen(source));
+    for (const T& value : source)
+        values.push(value);
+    return nbije_rank<T, C>(values, move(compare));
+}
+
 template <class A, class B, class HA = nhash<A>, class HB = nhash<B>,
           class EA = equal_to<A>, class EB = equal_to<B>>
 using nbije = nbije_hash<A, B, HA, HB, EA, EB>;
@@ -5218,6 +5274,21 @@ template <class W = int> struct nedge {
     W w;
 };
 
+template <class T> constexpr T ncapadd(T left, T right, T infinity = ninf<T>) {
+    if constexpr (integral<T> && sizeof(T) <= sizeof(uint64_t)) {
+        using W = conditional_t<signed_integral<T>, __int128_t, __uint128_t>;
+        W sum = W(left) + W(right);
+        if (sum > W(infinity))
+            return infinity;
+        if constexpr (signed_integral<T>)
+            if (sum < W(nninf<T>))
+                return nninf<T>;
+        return T(sum);
+    } else {
+        return left + right;
+    }
+}
+
 template <class F> class ngraph_view {
     int vertices_ = 0;
     [[no_unique_address]] F adjacency_;
@@ -5264,6 +5335,8 @@ using ngraph_neighbor_t = decltype(
 
 template <class G>
 using ngraph_weight_t = remove_cvref_t<decltype(nedge_weight(declval<ngraph_neighbor_t<G>>()))>;
+
+template <class G> using ngraph_edge_t = ngraph_neighbor_t<G>;
 } // namespace ni
 
 template <class W = int> class ngraph_list {
@@ -6056,6 +6129,54 @@ template <ngraph_like G> npartition nscc(const G& graph) {
         }
         ++count;
     }
+    return npartition(move(component));
+}
+
+template <ngraph_like G> nmaybe<nvector<int>> ntopo(const G& graph) {
+    return ntoposort(graph);
+}
+
+template <ngraph_like G> nvector<int> ntopo(const G& graph, nvector<int> fallback) {
+    auto result = ntoposort(graph);
+    return result ? move(result.val()) : move(fallback);
+}
+
+template <ngraph_like G> npartition nscc_kosaraju(const G& graph) { return nscc(graph); }
+
+template <ngraph_like G> npartition nscc_tarjan(const G& graph) {
+    int vertices = ni::ngraph_vertices(graph);
+    nvector<int> discovered(vertices, 0), low(vertices, 0), component(vertices, npos), stack;
+    nvector<unsigned char> active(vertices, false);
+    int timer = 0, components = 0;
+    auto visit = [&](auto&& self, int from) -> void {
+        discovered[from] = low[from] = ++timer;
+        stack.push(from);
+        active[from] = true;
+        decltype(auto) adjacency = graph.neighbors(from);
+        nfor(edge, adjacency) {
+            int to = nedge_to(edge);
+            npre(0 <= to && to < vertices);
+            if (!discovered[to]) {
+                self(self, to);
+                nchmin(low[from], low[to]);
+            } else if (active[to]) {
+                nchmin(low[from], discovered[to]);
+            }
+        }
+        if (low[from] != discovered[from])
+            return;
+        for (;;) {
+            int vertex = stack.pop();
+            active[vertex] = false;
+            component[vertex] = components;
+            if (vertex == from)
+                break;
+        }
+        ++components;
+    };
+    for (int vertex = 0; vertex < vertices; ++vertex)
+        if (!discovered[vertex])
+            visit(visit, vertex);
     return npartition(move(component));
 }
 
@@ -7060,7 +7181,7 @@ template <ninteger T> constexpr make_unsigned_t<T> nmag(T value) {
 
 template <ninteger T> constexpr make_unsigned_t<T> nabs(T value) { return nmag(value); }
 
-template <ninteger T> constexpr make_unsigned_t<T> ngcd(T a, T b) {
+template <ninteger T> constexpr make_unsigned_t<T> ngcd_euclid(T a, T b) {
     using U = make_unsigned_t<T>;
     U x = nmag(a), y = nmag(b);
     while (y) {
@@ -7069,6 +7190,35 @@ template <ninteger T> constexpr make_unsigned_t<T> ngcd(T a, T b) {
         y = remainder;
     }
     return x;
+}
+
+template <ninteger T> constexpr make_unsigned_t<T> ngcd_binary(T a, T b) {
+    using U = make_unsigned_t<T>;
+    U x = nmag(a), y = nmag(b);
+    if (!x)
+        return y;
+    if (!y)
+        return x;
+    int common = 0;
+    while (((x | y) & U{1}) == 0) {
+        x >>= 1;
+        y >>= 1;
+        ++common;
+    }
+    while ((x & U{1}) == 0)
+        x >>= 1;
+    do {
+        while ((y & U{1}) == 0)
+            y >>= 1;
+        if (y < x)
+            swap(x, y);
+        y -= x;
+    } while (y);
+    return x << common;
+}
+
+template <ninteger T> constexpr make_unsigned_t<T> ngcd(T a, T b) {
+    return ngcd_binary(a, b);
 }
 
 template <ninteger T> constexpr make_unsigned_t<T> nlcm(T a, T b) {
@@ -9101,6 +9251,19 @@ class npalindrome_index {
 
 template <nindexed A> auto nmanacher(const A& sequence) { return npalindrome_index(sequence); }
 
+template <nindexed A> nvector<int> nprefix(const A& sequence) {
+    return nprefix_function(sequence);
+}
+
+template <nindexed A> nvector<int> nzfunc(const A& sequence) { return nz_function(sequence); }
+
+template <nindexed Text, nindexed Pattern>
+nvector<int> nkmp(const Text& text, const Pattern& pattern) {
+    return nkmp_find(text, pattern);
+}
+
+using nmanacher_result = npalindrome_index;
+
 template <nindexed A, class C = nless<>> nvector<int> nsuffix_array(const A& sequence, C compare = {}) {
     int n = nlen(sequence);
     nvector<int> suffix(n), rank(n), next_rank(n);
@@ -9173,6 +9336,11 @@ template <int Alphabet, integral I> constexpr int nautomaton_symbol(I value) {
     return __uint128_t(value) < __uint128_t(Alphabet) ? int(value) : npos;
 }
 } // namespace ni
+
+struct nmatch {
+    int l, r, id;
+    friend bool operator==(const nmatch&, const nmatch&) = default;
+};
 
 template <int Alphabet>
     requires(Alphabet > 0)
@@ -9247,6 +9415,7 @@ class nac {
         node() { next.fill(npos); }
     };
     nvector<node> nodes_{node{}};
+    nvector<int> lengths_;
     int patterns_ = 0;
     bool built_ = false;
 
@@ -9269,6 +9438,7 @@ class nac {
             vertex = next;
         }
         nodes_[vertex].patterns.push(patterns_);
+        lengths_.push(nlen(pattern));
         return patterns_++;
     }
 
@@ -9326,6 +9496,20 @@ class nac {
         match(text, [&](int, int) { ++result; });
         return result;
     }
+
+    template <ni::nautomaton_sequence A, class F> void each(const A& text, F&& callback) const {
+        match(text, [&](int position, int id) {
+            invoke(callback, position + 1 - lengths_[id], position + 1, id);
+        });
+    }
+
+    template <ni::nautomaton_sequence A> nvector<nmatch> matches(const A& text) const {
+        nvector<nmatch> result;
+        each(text, [&](int left, int right, int id) {
+            result.push(nmatch{left, right, id});
+        });
+        return result;
+    }
 };
 
 // ---- 70_geom.hpp ----
@@ -9342,6 +9526,12 @@ template <class T> constexpr nwide_t<T> ngeom_widen(const T& value) {
 template <class T> struct npoint {
     T x{}, y{};
 
+    constexpr npoint() = default;
+    constexpr npoint(T x, T y) : x(move(x)), y(move(y)) {}
+    template <class U> explicit constexpr operator npoint<U>() const {
+        return {U(x), U(y)};
+    }
+
     constexpr npoint& operator+=(const npoint& other) {
         x += other.x;
         y += other.y;
@@ -9352,15 +9542,30 @@ template <class T> struct npoint {
         y -= other.y;
         return *this;
     }
-    constexpr npoint& operator*=(const T& scale) {
+    template <class U> constexpr npoint& operator*=(const U& scale) {
         x *= scale;
         y *= scale;
         return *this;
     }
+    template <class U> constexpr npoint& operator/=(const U& scale) {
+        x /= scale;
+        y /= scale;
+        return *this;
+    }
+    constexpr npoint operator+() const { return *this; }
+    constexpr npoint operator-() const { return {-x, -y}; }
     friend constexpr npoint operator+(npoint a, const npoint& b) { return a += b; }
     friend constexpr npoint operator-(npoint a, const npoint& b) { return a -= b; }
-    friend constexpr npoint operator*(npoint a, const T& scale) { return a *= scale; }
-    friend constexpr bool operator==(const npoint&, const npoint&) = default;
+    template <class U> friend constexpr npoint operator*(npoint a, const U& scale) {
+        return a *= scale;
+    }
+    template <class U> friend constexpr npoint operator*(const U& scale, npoint a) {
+        return a *= scale;
+    }
+    template <class U> friend constexpr npoint operator/(npoint a, const U& scale) {
+        return a /= scale;
+    }
+    friend constexpr auto operator<=>(const npoint&, const npoint&) = default;
 };
 
 template <class T> constexpr nwide_t<T> ndot(const npoint<T>& a, const npoint<T>& b) {
@@ -9371,6 +9576,16 @@ template <class T> constexpr nwide_t<T> ndot(const npoint<T>& a, const npoint<T>
 template <class T> constexpr nwide_t<T> ncross(const npoint<T>& a, const npoint<T>& b) {
     return ni::nchecked_sub(ni::nchecked_mul(ni::ngeom_widen(a.x), ni::ngeom_widen(b.y)),
                             ni::nchecked_mul(ni::ngeom_widen(a.y), ni::ngeom_widen(b.x)));
+}
+
+template <class T>
+constexpr nwide_t<T> ncross(const npoint<T>& a, const npoint<T>& b, const npoint<T>& c) {
+    using W = nwide_t<T>;
+    W abx = ni::nchecked_sub(ni::ngeom_widen(b.x), ni::ngeom_widen(a.x));
+    W aby = ni::nchecked_sub(ni::ngeom_widen(b.y), ni::ngeom_widen(a.y));
+    W acx = ni::nchecked_sub(ni::ngeom_widen(c.x), ni::ngeom_widen(a.x));
+    W acy = ni::nchecked_sub(ni::ngeom_widen(c.y), ni::ngeom_widen(a.y));
+    return ni::nchecked_sub(ni::nchecked_mul(abx, acy), ni::nchecked_mul(aby, acx));
 }
 
 template <class T> constexpr nwide_t<T> norient(const npoint<T>& a, const npoint<T>& b, const npoint<T>& c) {
@@ -9389,11 +9604,42 @@ template <class T> constexpr nwide_t<T> ndist2(const npoint<T>& a, const npoint<
     return ni::nchecked_add(ni::nchecked_mul(dx, dx), ni::nchecked_mul(dy, dy));
 }
 
+template <class X> constexpr int nsgn_eps(X value, long double epsilon = 0) {
+    if constexpr (unsigned_integral<X>)
+        return value > 0 ? 1 : 0;
+    else if constexpr (signed_integral<X>)
+        return value > 0 ? 1 : value < 0 ? -1 : 0;
+    else
+        return value > epsilon ? 1 : value < -epsilon ? -1 : 0;
+}
+
+template <class X> constexpr int nsign(X value) { return nsgn_eps(value); }
+
+template <class T>
+constexpr int norient(const npoint<T>& a, const npoint<T>& b, const npoint<T>& c,
+                      long double epsilon) {
+    return nsgn_eps(norient(a, b, c), epsilon);
+}
+
 template <class T> constexpr bool non_segment(const npoint<T>& point, const npoint<T>& a, const npoint<T>& b) {
     if (norient(a, b, point) != 0)
         return false;
     return min(a.x, b.x) <= point.x && point.x <= max(a.x, b.x) &&
            min(a.y, b.y) <= point.y && point.y <= max(a.y, b.y);
+}
+
+template <class T>
+constexpr bool nonseg(const npoint<T>& a, const npoint<T>& b, const npoint<T>& point,
+                      long double epsilon = 0) {
+    if (norient(a, b, point, epsilon))
+        return false;
+    if constexpr (integral<T>) {
+        return min(a.x, b.x) <= point.x && point.x <= max(a.x, b.x) &&
+               min(a.y, b.y) <= point.y && point.y <= max(a.y, b.y);
+    } else {
+        return min(a.x, b.x) - epsilon <= point.x && point.x <= max(a.x, b.x) + epsilon &&
+               min(a.y, b.y) - epsilon <= point.y && point.y <= max(a.y, b.y) + epsilon;
+    }
 }
 
 template <class T>
@@ -9410,6 +9656,39 @@ constexpr bool nsegment_intersect(const npoint<T>& a, const npoint<T>& b, const 
     if (cd_b == 0 && non_segment(b, c, d))
         return true;
     return (ab_c < 0) != (ab_d < 0) && (cd_a < 0) != (cd_b < 0);
+}
+
+template <class T>
+constexpr bool nsegment_intersect(const npoint<T>& a, const npoint<T>& b, const npoint<T>& c,
+                                  const npoint<T>& d, long double epsilon) {
+    int ab_c = norient(a, b, c, epsilon), ab_d = norient(a, b, d, epsilon);
+    int cd_a = norient(c, d, a, epsilon), cd_b = norient(c, d, b, epsilon);
+    return (ab_c && ab_d && cd_a && cd_b)
+               ? ab_c != ab_d && cd_a != cd_b
+               : (!ab_c && nonseg(a, b, c, epsilon)) ||
+                     (!ab_d && nonseg(a, b, d, epsilon)) ||
+                     (!cd_a && nonseg(c, d, a, epsilon)) ||
+                     (!cd_b && nonseg(c, d, b, epsilon));
+}
+
+template <class T> struct nline2 {
+    npoint<T> p, v;
+    template <class U> auto operator()(const U& scale) const { return p + v * scale; }
+};
+
+template <class T>
+nmaybe<npoint<long double>> nline_intersect(const nline2<T>& a, const nline2<T>& b,
+                                             long double epsilon = 0) {
+    npoint<long double> av{static_cast<long double>(a.v.x), static_cast<long double>(a.v.y)};
+    npoint<long double> bv{static_cast<long double>(b.v.x), static_cast<long double>(b.v.y)};
+    npoint<long double> delta{static_cast<long double>(b.p.x) - static_cast<long double>(a.p.x),
+                              static_cast<long double>(b.p.y) - static_cast<long double>(a.p.y)};
+    long double denominator = ncross(av, bv);
+    if (abs(denominator) <= epsilon)
+        return {};
+    long double scale = ncross(delta, bv) / denominator;
+    return npoint<long double>{static_cast<long double>(a.p.x) + av.x * scale,
+                               static_cast<long double>(a.p.y) + av.y * scale};
 }
 
 template <nindexed A> auto nconvex_hull(const A& source, bool keep_collinear = false) {
@@ -9473,6 +9752,23 @@ template <nindexed A> auto npolygon_area2(const A& polygon) {
         area = ni::nchecked_add(area, term);
     }
     return area;
+}
+
+template <nindexed A>
+int npoint_in_poly(const A& polygon, const nindex_value_t<const A>& point,
+                   long double epsilon = 0) {
+    bool inside = false;
+    for (int index = 0; index < nlen(polygon); ++index) {
+        const auto& a = polygon[index];
+        const auto& b = polygon[index + 1 == nlen(polygon) ? 0 : index + 1];
+        if (nonseg(a, b, point, epsilon))
+            return 0;
+        int orientation = norient(a, b, point, epsilon);
+        if ((a.y <= point.y && point.y < b.y && orientation > 0) ||
+            (b.y <= point.y && point.y < a.y && orientation < 0))
+            inside = !inside;
+    }
+    return inside ? 1 : -1;
 }
 
 template <nindexed A> auto nconvex_diameter2(const A& source) {
@@ -9769,6 +10065,20 @@ I nunimodal_arg(I first, I last, F function, Better better = {}) {
         }
     }
     return best;
+}
+
+template <floating_point T, class F>
+T nternary_min(T left, T right, F function, int iterations = 100) {
+    npre(left <= right && iterations >= 0);
+    for (int iteration = 0; iteration < iterations; ++iteration) {
+        T distance = (right - left) / T{3};
+        T a = left + distance, b = right - distance;
+        if (invoke(function, a) < invoke(function, b))
+            right = b;
+        else
+            left = a;
+    }
+    return midpoint(left, right);
 }
 
 // ---- 80_io.hpp ----

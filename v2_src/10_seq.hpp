@@ -631,6 +631,14 @@ template <class A, class X, class C = nless<>> int nupper(const A& a, const X& v
     return l;
 }
 
+template <class A, class X, class C = nless<>>
+int nfind_sorted(const A& a, const X& value, C compare = {}, int fallback = npos) {
+    int index = nlower(a, value, compare);
+    return index < nlen(a) && !compare(value, a[index]) && !compare(a[index], value)
+               ? index
+               : fallback;
+}
+
 template <class A, class O = nadd<nindex_value_t<const A>>>
     requires nmonoid<O, nindex_value_t<const A>>
 auto nfold(const A& a, int l, int r, O op = {}) {
@@ -672,4 +680,12 @@ int nunique(A&& a, E equal = {}) {
     int kept = nunique_compact(a, move(equal));
     a.resize(kept);
     return kept;
+}
+
+template <class A, class C = nless<>, class E = nequal<>>
+    requires nviewable_indexed<A&&> && nresizable<remove_reference_t<A>> &&
+             nswappable_indexed<remove_reference_t<A>>
+int nsort_unique(A&& a, C compare = {}, E equal = {}) {
+    nsort(a, move(compare));
+    return nunique(a, move(equal));
 }

@@ -42,6 +42,7 @@ class npartition {
 };
 
 using npart = npartition;
+using npart_dense = npartition;
 
 class nperm {
     nvector<int> image_;

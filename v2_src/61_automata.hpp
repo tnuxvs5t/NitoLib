@@ -10,6 +10,11 @@ template <int Alphabet, integral I> constexpr int nautomaton_symbol(I value) {
 }
 } // namespace ni
 
+struct nmatch {
+    int l, r, id;
+    friend bool operator==(const nmatch&, const nmatch&) = default;
+};
+
 template <int Alphabet>
     requires(Alphabet > 0)
 class ntrie {
@@ -83,6 +88,7 @@ class nac {
         node() { next.fill(npos); }
     };
     nvector<node> nodes_{node{}};
+    nvector<int> lengths_;
     int patterns_ = 0;
     bool built_ = false;
 
@@ -105,6 +111,7 @@ class nac {
             vertex = next;
         }
         nodes_[vertex].patterns.push(patterns_);
+        lengths_.push(nlen(pattern));
         return patterns_++;
     }
 
@@ -160,6 +167,20 @@ class nac {
     template <ni::nautomaton_sequence A> long long count(const A& text) const {
         long long result = 0;
         match(text, [&](int, int) { ++result; });
+        return result;
+    }
+
+    template <ni::nautomaton_sequence A, class F> void each(const A& text, F&& callback) const {
+        match(text, [&](int position, int id) {
+            invoke(callback, position + 1 - lengths_[id], position + 1, id);
+        });
+    }
+
+    template <ni::nautomaton_sequence A> nvector<nmatch> matches(const A& text) const {
+        nvector<nmatch> result;
+        each(text, [&](int left, int right, int id) {
+            result.push(nmatch{left, right, id});
+        });
         return result;
     }
 };

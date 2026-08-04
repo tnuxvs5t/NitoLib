@@ -14,6 +14,9 @@ int main() {
     ntest(nlower(a, 1) == 0 && nupper(a, 1) == 2 && nfind(a, 3) == 3);
     ntest(nfold(a) == 11);
     ntest(nunique(a) == 4 && (a == nvector<int>{1, 2, 3, 4}));
+    nvector<int> repeated{4, 2, 4, 1, 2, 3};
+    ntest(nsort_unique(repeated) == 4 && repeated == nvector<int>({1, 2, 3, 4}));
+    ntest(nfind_sorted(repeated, 3) == 2 && nfind_sorted(repeated, 8, nless<>{}, 77) == 77);
 
     nvector<string> distinct{"a", "b", "c"};
     ntest(nunique(distinct) == 3 && distinct[0] == "a" && distinct[1] == "b" && distinct[2] == "c");

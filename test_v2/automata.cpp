@@ -32,6 +32,8 @@ int main() {
     nvector<pair<int, int>> matches;
     automaton.match(letters(sample), [&](int end, int id) { matches.push(end, id); });
     ntest(matches.len() == 3 && automaton.count(letters(sample)) == 3);
+    ntest(automaton.matches(letters(sample)) ==
+          nvector<nmatch>({{1, 4, 1}, {2, 4, 0}, {2, 6, 2}}));
     nnoncopy_match_sink sink;
     automaton.match(letters(sample), sink);
     ntest(sink.calls == 3);
