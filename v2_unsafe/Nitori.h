@@ -5733,6 +5733,94 @@ template <ngraph_like G> auto narcs(G& graph) { return ngraph_arcs_view<G>(graph
 template <ngraph_like G> auto narcs(const G& graph) { return ngraph_arcs_view<const G>(graph); }
 template <ngraph_like G> auto narcs(G&&) = delete;
 
+template <class G, class P> class ngraph_where_view {
+    const G* graph_;
+    [[no_unique_address]] P predicate_;
+    using adjacency_result = decltype(declval<const G&>().neighbors(0));
+    using base_cursor = nenumerator_t<adjacency_result>;
+
+    struct filtered_cursor {
+        base_cursor base;
+        const P* predicate;
+        int index = 0;
+
+        filtered_cursor(base_cursor base, const P* predicate)
+            : base(move(base)), predicate(predicate) {
+            skip();
+        }
+        void skip() {
+            while (base.ok() && !invoke(*predicate, base.val()))
+                base.next();
+        }
+        bool ok() const { return base.ok(); }
+        decltype(auto) val() { return base.val(); }
+        int idx() const { return index; }
+        void next() {
+            base.next();
+            ++index;
+            skip();
+        }
+    };
+
+    class adjacency_view {
+        const ngraph_where_view* owner_;
+        int vertex_;
+
+      public:
+        adjacency_view(const ngraph_where_view* owner, int vertex)
+            : owner_(owner), vertex_(vertex) {}
+        auto enumerate() const {
+            return filtered_cursor(nenumerate(owner_->graph_->neighbors(vertex_)),
+                                   addressof(owner_->predicate_));
+        }
+        int len() const {
+            int result = 0;
+            auto cursor = enumerate();
+            while (cursor.ok()) {
+                npre(result < INT_MAX);
+                ++result;
+                cursor.next();
+            }
+            return result;
+        }
+        bool empty() const {
+            auto cursor = enumerate();
+            return !cursor.ok();
+        }
+    };
+
+  public:
+    ngraph_where_view(const G& graph, P predicate)
+        : graph_(addressof(graph)), predicate_(move(predicate)) {}
+    int len() const { return ni::ngraph_vertices(*graph_); }
+    bool empty() const { return len() == 0; }
+    auto vertices() const { return nrange(len()); }
+    adjacency_view neighbors(int vertex) const {
+        npre(0 <= vertex && vertex < len());
+        return {this, vertex};
+    }
+    adjacency_view operator[](int vertex) const& { return neighbors(vertex); }
+    adjacency_view operator[](int) const&& = delete;
+    adjacency_view from(int vertex) const& { return neighbors(vertex); }
+    adjacency_view from(int) const&& = delete;
+    int edges() const {
+        int result = 0;
+        for (int vertex = 0; vertex < len(); ++vertex) {
+            int degree = neighbors(vertex).len();
+            npre(result <= INT_MAX - degree);
+            result += degree;
+        }
+        return result;
+    }
+    auto arcs() const& { return narcs(*this); }
+    auto arcs() const&& = delete;
+};
+
+template <ngraph_like G, class P> auto ngraph_where(const G& graph, P predicate) {
+    return ngraph_where_view<G, P>(graph, move(predicate));
+}
+template <ngraph_like G, class P> auto ngraph_where(const G&&, P) = delete;
+
 template <class D> struct npath_result {
     nvector<D> d;
     nvector<int> p;

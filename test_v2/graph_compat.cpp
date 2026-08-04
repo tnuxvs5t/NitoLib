@@ -48,4 +48,17 @@ int main() {
     disconnected.add2(2, 3, 7);
     auto forest = nkruskal(disconnected);
     ntest(!forest.connected() && forest.components == 2 && forest.weight == 10);
+
+    auto light = ngraph_where(graph, [](const auto& edge) { return nedge_weight(edge) <= 2; });
+    static_assert(ngraph_like<decltype(light)>);
+    ntest(light.edges() == 6);
+    ntest(ncollect(nvertices(light)) == nvector<int>({0, 1, 2, 3, 4}));
+    int filtered_count = 0;
+    nfor(edge, light.arcs()) {
+        ntest(edge.w <= 2);
+        ++filtered_count;
+    }
+    ntest(filtered_count == light.edges());
+    auto light_path = ndijkstra_path(light, 0, 1'000'000);
+    ntest(light_path.reach(2) && !light_path.reach(4));
 }
