@@ -178,3 +178,132 @@ class nmaxflow {
         return reachable;
     }
 };
+
+template <class C>
+    requires integral<C> && (!same_as<remove_cv_t<C>, bool>)
+class nflow_dinic {
+    int vertices_ = 0;
+    vector<int> head_, to_, next_, level_, current_;
+    vector<C> residual_, initial_;
+
+    static size_t checked_vertices(int vertices) {
+        npre(vertices >= 0);
+        return size_t(vertices);
+    }
+
+    bool build_levels(int source, int sink) {
+        fill(level_.begin(), level_.end(), npos);
+        deque<int> queue;
+        level_[source] = 0;
+        queue.push_back(source);
+        while (!queue.empty()) {
+            int from = queue.front();
+            queue.pop_front();
+            for (int edge = head_[from]; edge != npos; edge = next_[edge])
+                if (C{} < residual_[edge] && level_[to_[edge]] == npos) {
+                    level_[to_[edge]] = level_[from] + 1;
+                    queue.push_back(to_[edge]);
+                }
+        }
+        return level_[sink] != npos;
+    }
+
+    C send(int from, int sink, C available) {
+        if (from == sink)
+            return available;
+        for (int& edge = current_[from]; edge != npos; edge = next_[edge]) {
+            int to = to_[edge];
+            if (!(C{} < residual_[edge]) || level_[to] != level_[from] + 1)
+                continue;
+            C pushed = send(to, sink, min(available, residual_[edge]));
+            if (C{} < pushed) {
+                npre(residual_[edge ^ 1] <= numeric_limits<C>::max() - pushed);
+                residual_[edge] -= pushed;
+                residual_[edge ^ 1] += pushed;
+                return pushed;
+            }
+        }
+        return C{};
+    }
+
+  public:
+    nflow_dinic() = default;
+    explicit nflow_dinic(int vertices, int expected_edges = 0)
+        : vertices_(vertices), head_(checked_vertices(vertices), npos),
+          level_(size_t(vertices)), current_(size_t(vertices)) {
+        reserve(expected_edges);
+    }
+
+    int len() const noexcept { return vertices_; }
+    int edges() const {
+        npre(to_.size() / 2 <= size_t(INT_MAX));
+        return int(to_.size() / 2);
+    }
+    void reserve(int expected_edges) {
+        npre(expected_edges >= 0 && expected_edges <= INT_MAX / 2);
+        size_t arcs = size_t(expected_edges) * 2;
+        to_.reserve(arcs);
+        next_.reserve(arcs);
+        residual_.reserve(arcs);
+        initial_.reserve(arcs);
+    }
+    int add(int from, int to, C capacity, C reverse_capacity = C{}) {
+        npre(0 <= from && from < vertices_ && 0 <= to && to < vertices_);
+        npre(!(capacity < C{}) && !(reverse_capacity < C{}));
+        npre(to_.size() <= size_t(INT_MAX - 2));
+        int id = edges();
+        to_.push_back(to);
+        next_.push_back(head_[from]);
+        residual_.push_back(capacity);
+        initial_.push_back(capacity);
+        head_[from] = int(to_.size()) - 1;
+        to_.push_back(from);
+        next_.push_back(head_[to]);
+        residual_.push_back(reverse_capacity);
+        initial_.push_back(reverse_capacity);
+        head_[to] = int(to_.size()) - 1;
+        return id;
+    }
+    C flow(int source, int sink, C limit = numeric_limits<C>::max()) {
+        npre(0 <= source && source < vertices_ && 0 <= sink && sink < vertices_ && source != sink);
+        npre(!(limit < C{}));
+        C result{};
+        while (result < limit && build_levels(source, sink)) {
+            current_ = head_;
+            while (result < limit) {
+                C pushed = send(source, sink, limit - result);
+                if (!(C{} < pushed))
+                    break;
+                result += pushed;
+            }
+        }
+        return result;
+    }
+    C operator()(int source, int sink, C limit = numeric_limits<C>::max()) {
+        return flow(source, sink, limit);
+    }
+    C used(int id) const {
+        npre(0 <= id && id < edges());
+        return initial_[id * 2] - residual_[id * 2];
+    }
+    nvector<unsigned char> cut(int source) const {
+        npre(0 <= source && source < vertices_);
+        nvector<unsigned char> reachable(vertices_, false);
+        deque<int> queue;
+        reachable[source] = true;
+        queue.push_back(source);
+        while (!queue.empty()) {
+            int from = queue.front();
+            queue.pop_front();
+            for (int edge = head_[from]; edge != npos; edge = next_[edge])
+                if (C{} < residual_[edge] && !reachable[to_[edge]]) {
+                    reachable[to_[edge]] = true;
+                    queue.push_back(to_[edge]);
+                }
+        }
+        return reachable;
+    }
+    void reset() { residual_ = initial_; }
+};
+
+template <class C> using nflow = nflow_dinic<C>;

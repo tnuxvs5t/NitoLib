@@ -28,6 +28,7 @@
 52_comb.hpp
 53_linear.hpp
 54_poly.hpp
+55_game.hpp
 60_string.hpp
 61_automata.hpp
 70_geom.hpp

@@ -12,7 +12,7 @@ int main() {
     ntest(nlcm(12, -18) == 36);
     ntest(nfloor_div(-7, 3) == -3 && nceil_div(-7, 3) == -2);
     ntest(nfloor_div(7, -3) == -3 && nceil_div(7, -3) == -2);
-    ntest(nmod(-17, 5) == 3);
+    ntest(nmodulo(-17, 5) == 3);
 
     auto bezout = nextgcd(-84LL, 30LL);
     ntest(bezout.gcd == 6);
@@ -27,4 +27,9 @@ int main() {
         ntest(!nisprime(composite));
 
     ntest((nprimes(30) == nvector<int>{2, 3, 5, 7, 11, 13, 17, 19, 23, 29}));
+
+    nseed(0x5001U);
+    uint64_t semiprime = 1000000007ULL * 1000000009ULL;
+    ntest(nfactor(semiprime) == nvector<uint64_t>({1000000007ULL, 1000000009ULL}));
+    ntest(nfactor(1).empty());
 }

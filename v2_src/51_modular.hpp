@@ -1,5 +1,5 @@
 template <uint64_t Modulus>
-    requires(Modulus > 1)
+    requires(Modulus > 0)
 class nmodint {
     uint64_t value_ = 0;
 
@@ -20,6 +20,7 @@ class nmodint {
     template <integral I> constexpr nmodint(I value) : value_(normalize(value)) {}
 
     constexpr uint64_t val() const noexcept { return value_; }
+    constexpr explicit operator uint64_t() const noexcept { return value_; }
 
     constexpr nmodint& operator+=(nmodint other) {
         __uint128_t sum = __uint128_t(value_) + other.value_;
@@ -56,6 +57,17 @@ class nmodint {
         return raw(uint64_t(old_coefficient));
     }
 
+    constexpr nmaybe<nmodint> tryinv() const { return inverse(); }
+    constexpr nmodint inv() const {
+        auto result = inverse();
+        npre(result.ok());
+        return result.val();
+    }
+    constexpr nmodint inv(nmodint fallback) const {
+        auto result = inverse();
+        return result ? result.val() : move(fallback);
+    }
+
     constexpr nmodint& operator/=(nmodint other) {
         auto inverse = other.inverse();
         npre(inverse.ok());
@@ -71,6 +83,27 @@ class nmodint {
     friend constexpr nmodint operator/(nmodint a, nmodint b) { return a /= b; }
     friend constexpr bool operator==(nmodint, nmodint) = default;
 
+    constexpr nmodint& operator++() { return *this += nmodint(1); }
+    constexpr nmodint operator++(int) {
+        nmodint copy = *this;
+        ++*this;
+        return copy;
+    }
+    constexpr nmodint& operator--() { return *this -= nmodint(1); }
+    constexpr nmodint operator--(int) {
+        nmodint copy = *this;
+        --*this;
+        return copy;
+    }
+
+    friend ostream& operator<<(ostream& output, nmodint value) { return output << value.value_; }
+    friend istream& operator>>(istream& input, nmodint& value) {
+        long long raw_value;
+        input >> raw_value;
+        value = nmodint(raw_value);
+        return input;
+    }
+
     static constexpr nmodint raw(uint64_t value) {
         npre(value < Modulus);
         nmodint result;
@@ -78,6 +111,122 @@ class nmodint {
         return result;
     }
 };
+
+template <int Tag = 0> class nmod_dynamic {
+    static inline uint64_t modulus_ = 1;
+    uint64_t value_ = 0;
+
+    template <integral I> static uint64_t normalize(I value) {
+        uint64_t modulus = mod();
+        if constexpr (is_signed_v<I>) {
+            __int128_t remainder = __int128_t(value) % __int128_t(modulus);
+            if (remainder < 0)
+                remainder += modulus;
+            return uint64_t(remainder);
+        } else {
+            return uint64_t(__uint128_t(value) % modulus);
+        }
+    }
+
+  public:
+    static uint64_t mod() noexcept { return modulus_; }
+    static void setmod(uint64_t modulus) {
+        npre(0 < modulus && modulus <= uint64_t(numeric_limits<int64_t>::max()));
+        modulus_ = modulus;
+    }
+    static nmod_dynamic raw(uint64_t value) {
+        npre(value < mod());
+        nmod_dynamic result;
+        result.value_ = value;
+        return result;
+    }
+
+    nmod_dynamic() = default;
+    template <integral I> nmod_dynamic(I value) : value_(normalize(value)) {}
+
+    uint64_t val() const noexcept { return value_; }
+    explicit operator uint64_t() const noexcept { return value_; }
+
+    nmod_dynamic& operator+=(nmod_dynamic other) {
+        __uint128_t sum = __uint128_t(value_) + other.value_;
+        value_ = uint64_t(sum >= mod() ? sum - mod() : sum);
+        return *this;
+    }
+    nmod_dynamic& operator-=(nmod_dynamic other) {
+        value_ = value_ >= other.value_ ? value_ - other.value_ : mod() - (other.value_ - value_);
+        return *this;
+    }
+    nmod_dynamic& operator*=(nmod_dynamic other) {
+        value_ = nmulmod(value_, other.value_, mod());
+        return *this;
+    }
+    nmod_dynamic pow(uint64_t exponent) const {
+        return raw(npowmod(value_, exponent, mod()));
+    }
+    nmaybe<nmod_dynamic> inverse() const {
+        if (!value_)
+            return {};
+        auto bezout = nextgcd(mod(), value_);
+        if (bezout.gcd != 1)
+            return {};
+        __int128_t coefficient = bezout.y % __int128_t(mod());
+        if (coefficient < 0)
+            coefficient += mod();
+        return raw(uint64_t(coefficient));
+    }
+    nmaybe<nmod_dynamic> tryinv() const { return inverse(); }
+    nmod_dynamic inv() const {
+        auto result = inverse();
+        npre(result.ok());
+        return result.val();
+    }
+    nmod_dynamic inv(nmod_dynamic fallback) const {
+        auto result = inverse();
+        return result ? result.val() : move(fallback);
+    }
+    nmod_dynamic& operator/=(nmod_dynamic other) { return *this *= other.inv(); }
+
+    nmod_dynamic operator+() const { return *this; }
+    nmod_dynamic operator-() const { return value_ ? raw(mod() - value_) : *this; }
+    friend nmod_dynamic operator+(nmod_dynamic left, nmod_dynamic right) { return left += right; }
+    friend nmod_dynamic operator-(nmod_dynamic left, nmod_dynamic right) { return left -= right; }
+    friend nmod_dynamic operator*(nmod_dynamic left, nmod_dynamic right) { return left *= right; }
+    friend nmod_dynamic operator/(nmod_dynamic left, nmod_dynamic right) { return left /= right; }
+    friend bool operator==(nmod_dynamic, nmod_dynamic) = default;
+
+    nmod_dynamic& operator++() { return *this += nmod_dynamic(1); }
+    nmod_dynamic operator++(int) {
+        nmod_dynamic copy = *this;
+        ++*this;
+        return copy;
+    }
+    nmod_dynamic& operator--() { return *this -= nmod_dynamic(1); }
+    nmod_dynamic operator--(int) {
+        nmod_dynamic copy = *this;
+        --*this;
+        return copy;
+    }
+
+    friend ostream& operator<<(ostream& output, nmod_dynamic value) { return output << value.value_; }
+    friend istream& operator>>(istream& input, nmod_dynamic& value) {
+        long long raw_value;
+        input >> raw_value;
+        value = nmod_dynamic(raw_value);
+        return input;
+    }
+};
+
+template <uint64_t Modulus> using nmod_static = nmodint<Modulus>;
+template <uint64_t Modulus> using nmod = nmodint<Modulus>;
+template <int Tag = 0> using ndmod = nmod_dynamic<Tag>;
+
+template <int Tag> inline constexpr bool nadd_group<nmod_dynamic<Tag>> = true;
+template <int Tag>
+inline constexpr bool nsemiring_laws<nadd<nmod_dynamic<Tag>>, nmul<nmod_dynamic<Tag>>,
+                                     nmod_dynamic<Tag>> = true;
+template <int Tag>
+inline constexpr bool naction_laws<naddsum_action<nmod_dynamic<Tag>>, nmod_dynamic<Tag>,
+                                   nmod_dynamic<Tag>> = true;
 
 template <uint64_t Modulus> inline constexpr bool nadd_group<nmodint<Modulus>> = true;
 template <uint64_t Modulus> inline constexpr bool nexact_field<nmodint<Modulus>> = nisprime(Modulus);

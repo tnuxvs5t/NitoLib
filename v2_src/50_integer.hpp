@@ -51,7 +51,7 @@ template <signed_integral T> constexpr T nceil_div(T a, T b) {
     return quotient;
 }
 
-template <signed_integral T> constexpr T nmod(T value, T modulus) {
+template <signed_integral T> constexpr T nmodulo(T value, T modulus) {
     npre(modulus > 0);
     T remainder = value % modulus;
     return remainder < 0 ? remainder + modulus : remainder;
@@ -157,3 +157,82 @@ inline nvector<int> nprimes(int limit) {
     }
     return primes;
 }
+
+inline bool nisprime_trial(uint64_t value) {
+    if (value < 2)
+        return false;
+    for (uint64_t divisor = 2; divisor <= value / divisor; ++divisor)
+        if (value % divisor == 0)
+            return false;
+    return true;
+}
+
+constexpr bool nisprime_miller(uint64_t value) { return nisprime(value); }
+
+inline uint64_t npollard(uint64_t value) {
+    npre(value > 1 && !nisprime(value));
+    if (!(value & 1))
+        return 2;
+    if (value % 3 == 0)
+        return 3;
+
+    auto advance = [value](uint64_t x, uint64_t constant) {
+        return uint64_t((__uint128_t(nmulmod(x, x, value)) + constant) % value);
+    };
+    for (;;) {
+        uint64_t current = nrng_global(uint64_t(1), value);
+        uint64_t constant = nrng_global(uint64_t(1), value);
+        uint64_t block = 128, power = 1, divisor = 1;
+        uint64_t anchor = 0, recovery = 0;
+        while (divisor == 1) {
+            anchor = current;
+            for (uint64_t step = 0; step < power; ++step)
+                current = advance(current, constant);
+            for (uint64_t offset = 0; offset < power && divisor == 1; offset += block) {
+                recovery = current;
+                uint64_t product = 1;
+                uint64_t count = min(block, power - offset);
+                for (uint64_t step = 0; step < count; ++step) {
+                    current = advance(current, constant);
+                    uint64_t difference = anchor > current ? anchor - current : current - anchor;
+                    product = nmulmod(product, difference, value);
+                }
+                divisor = gcd(product, value);
+            }
+            if (power > numeric_limits<uint64_t>::max() / 2) {
+                divisor = value;
+                break;
+            }
+            power *= 2;
+        }
+        if (divisor == value) {
+            do {
+                recovery = advance(recovery, constant);
+                uint64_t difference = anchor > recovery ? anchor - recovery : recovery - anchor;
+                divisor = gcd(difference, value);
+            } while (divisor == 1);
+        }
+        if (1 < divisor && divisor < value)
+            return divisor;
+    }
+}
+
+inline nvector<uint64_t> nfactor(uint64_t value) {
+    nvector<uint64_t> factors, pending;
+    if (value > 1)
+        pending.push(value);
+    while (!pending.empty()) {
+        uint64_t current = pending.pop();
+        if (nisprime(current)) {
+            factors.push(current);
+        } else {
+            uint64_t divisor = npollard(current);
+            pending.push(divisor);
+            pending.push(current / divisor);
+        }
+    }
+    nsort(factors);
+    return factors;
+}
+
+inline nvector<uint64_t> nfactor_rho(uint64_t value) { return nfactor(value); }

@@ -4563,6 +4563,17 @@ constexpr decltype(auto) nedge_weight(const E& edge) {
     return edge.weight;
 }
 
+template <class E>
+    requires(!requires(const E& edge) { edge.weight; }) && requires(const E& edge) { edge.w; }
+constexpr decltype(auto) nedge_weight(const E& edge) {
+    return edge.w;
+}
+
+template <class W = int> struct nedge {
+    int from, to, id;
+    W w;
+};
+
 template <class F> class ngraph_view {
     int vertices_ = 0;
     [[no_unique_address]] F adjacency_;
@@ -4582,18 +4593,33 @@ template <class F> ngraph_view(int, F) -> ngraph_view<F>;
 
 template <class G>
 concept ngraph_like = requires(const G& graph, int vertex) {
-    requires integral<remove_cvref_t<decltype(graph.vertices())>>;
-    requires(!same_as<remove_cvref_t<decltype(graph.vertices())>, bool>);
+    graph.vertices();
     graph.neighbors(vertex);
     requires nenumerable<decltype(graph.neighbors(vertex))>;
-};
+} && (integral<remove_cvref_t<decltype(declval<const G&>().vertices())>> ||
+      requires(const G& graph) {
+          { nlen(graph.vertices()) } -> same_as<int>;
+      }) && (!same_as<remove_cvref_t<decltype(declval<const G&>().vertices())>, bool>);
 
 namespace ni {
 template <ngraph_like G> constexpr int ngraph_vertices(const G& graph) {
-    int vertices = nchecked_int(graph.vertices());
+    int vertices;
+    if constexpr (integral<remove_cvref_t<decltype(graph.vertices())>>) {
+        static_assert(!same_as<remove_cvref_t<decltype(graph.vertices())>, bool>);
+        vertices = nchecked_int(graph.vertices());
+    } else {
+        vertices = nlen(graph.vertices());
+    }
     npre(vertices >= 0);
     return vertices;
 }
+
+template <class G>
+using ngraph_neighbor_t = decltype(
+    nenumerate(declval<decltype(declval<const G&>().neighbors(0))>()).val());
+
+template <class G>
+using ngraph_weight_t = remove_cvref_t<decltype(nedge_weight(declval<ngraph_neighbor_t<G>>()))>;
 } // namespace ni
 
 template <class W = int> class ngraph_list {
@@ -4630,6 +4656,359 @@ template <class W = int> class ngraph_list {
         return {edges.data(), int(edges.size())};
     }
 };
+
+template <class W = int> class ngraph_forward {
+    int vertices_ = 0;
+    vector<int> head_, to_, next_;
+    vector<W> weight_;
+
+    static size_t checked_vertices(int vertices) {
+        npre(vertices >= 0);
+        return size_t(vertices);
+    }
+
+    template <bool Constant> struct adjacency_cursor {
+        using graph_type = conditional_t<Constant, const ngraph_forward, ngraph_forward>;
+        using weight_reference = conditional_t<Constant, const W&, W&>;
+        graph_type* graph;
+        int from, edge, index = 0;
+
+        bool ok() const { return edge != npos; }
+        nedge<weight_reference> val() const {
+            return {from, graph->to_[edge], edge, graph->weight_[edge]};
+        }
+        int idx() const { return index; }
+        void next() {
+            edge = graph->next_[edge];
+            ++index;
+        }
+    };
+
+    template <bool Constant> class adjacency_view {
+        using graph_type = conditional_t<Constant, const ngraph_forward, ngraph_forward>;
+        graph_type* graph_;
+        int vertex_;
+
+      public:
+        adjacency_view(graph_type* graph, int vertex) : graph_(graph), vertex_(vertex) {}
+        int len() const {
+            int result = 0;
+            for (int edge = graph_->head_[vertex_]; edge != npos; edge = graph_->next_[edge])
+                ++result;
+            return result;
+        }
+        bool empty() const { return graph_->head_[vertex_] == npos; }
+        auto enumerate() const {
+            return adjacency_cursor<Constant>{graph_, vertex_, graph_->head_[vertex_]};
+        }
+    };
+
+    template <bool Constant> struct arcs_cursor {
+        using graph_type = conditional_t<Constant, const ngraph_forward, ngraph_forward>;
+        using weight_reference = conditional_t<Constant, const W&, W&>;
+        graph_type* graph;
+        int from = 0, edge = npos, index = 0;
+
+        explicit arcs_cursor(graph_type* graph) : graph(graph) { seek(); }
+        void seek() {
+            while (from < graph->vertices_ && graph->head_[from] == npos)
+                ++from;
+            edge = from < graph->vertices_ ? graph->head_[from] : npos;
+        }
+        bool ok() const { return edge != npos; }
+        nedge<weight_reference> val() const {
+            return {from, graph->to_[edge], edge, graph->weight_[edge]};
+        }
+        int idx() const { return index; }
+        void next() {
+            edge = graph->next_[edge];
+            ++index;
+            if (edge == npos) {
+                ++from;
+                seek();
+            }
+        }
+    };
+
+    template <bool Constant> class arcs_view {
+        using graph_type = conditional_t<Constant, const ngraph_forward, ngraph_forward>;
+        graph_type* graph_;
+
+      public:
+        explicit arcs_view(graph_type* graph) : graph_(graph) {}
+        int len() const { return graph_->edges(); }
+        bool empty() const { return graph_->edges() == 0; }
+        auto enumerate() const { return arcs_cursor<Constant>(graph_); }
+    };
+
+  public:
+    using edge = nedge<W>;
+    using view = adjacency_view<false>;
+    using const_view = adjacency_view<true>;
+
+    ngraph_forward() = default;
+    explicit ngraph_forward(int vertices, int expected_edges = 0)
+        : vertices_(vertices), head_(checked_vertices(vertices), npos) {
+        reserve(expected_edges);
+    }
+
+    int len() const noexcept { return vertices_; }
+    int edges() const {
+        npre(to_.size() <= size_t(INT_MAX));
+        return int(to_.size());
+    }
+    bool empty() const noexcept { return vertices_ == 0; }
+    void reserve(int expected_edges) {
+        npre(expected_edges >= 0);
+        to_.reserve(size_t(expected_edges));
+        next_.reserve(size_t(expected_edges));
+        weight_.reserve(size_t(expected_edges));
+    }
+    void clear_edges() {
+        fill(head_.begin(), head_.end(), npos);
+        to_.clear();
+        next_.clear();
+        weight_.clear();
+    }
+    int add(int from, int to, W weight = W{1}) {
+        npre(0 <= from && from < vertices_ && 0 <= to && to < vertices_);
+        npre(to_.size() < size_t(INT_MAX));
+        int id = edges();
+        to_.push_back(to);
+        next_.push_back(head_[from]);
+        weight_.push_back(move(weight));
+        head_[from] = id;
+        return id;
+    }
+    pair<int, int> add2(int a, int b, W weight = W{1}) {
+        int forward = add(a, b, weight);
+        int backward = add(b, a, move(weight));
+        return {forward, backward};
+    }
+
+    view neighbors(int vertex) {
+        npre(0 <= vertex && vertex < vertices_);
+        return {this, vertex};
+    }
+    const_view neighbors(int vertex) const {
+        npre(0 <= vertex && vertex < vertices_);
+        return {this, vertex};
+    }
+    view operator[](int vertex) & { return neighbors(vertex); }
+    const_view operator[](int vertex) const& { return neighbors(vertex); }
+    view operator[](int) && = delete;
+    const_view operator[](int) const&& = delete;
+    view from(int vertex) & { return neighbors(vertex); }
+    const_view from(int vertex) const& { return neighbors(vertex); }
+    view from(int) && = delete;
+    const_view from(int) const&& = delete;
+
+    int degree(int vertex) const { return neighbors(vertex).len(); }
+    int find(int from, int to, int fallback = npos) const {
+        npre(0 <= from && from < vertices_ && 0 <= to && to < vertices_);
+        nfor(edge, neighbors(from))
+            if (edge.to == to)
+                return edge.id;
+        return fallback;
+    }
+    bool has(int from, int to) const { return find(from, to) != npos; }
+    W* weight(int edge) { return 0 <= edge && edge < edges() ? addressof(weight_[edge]) : nullptr; }
+    const W* weight(int edge) const {
+        return 0 <= edge && edge < edges() ? addressof(weight_[edge]) : nullptr;
+    }
+    W weight(int edge, W fallback) const {
+        return 0 <= edge && edge < edges() ? weight_[edge] : move(fallback);
+    }
+    bool set(int edge, W weight) {
+        if (edge < 0 || edge >= edges())
+            return false;
+        weight_[edge] = move(weight);
+        return true;
+    }
+
+    auto vertices() const { return nrange(vertices_); }
+    auto arcs() & { return arcs_view<false>(this); }
+    auto arcs() const& { return arcs_view<true>(this); }
+    auto arcs() && = delete;
+    auto arcs() const&& = delete;
+
+    ngraph_forward reverse() const {
+        ngraph_forward result(vertices_, edges());
+        nfor(edge, arcs())
+            result.add(edge.to, edge.from, edge.w);
+        return result;
+    }
+};
+
+template <class W = int> class ngraph_csr {
+    int vertices_ = 0;
+    vector<int> offset_{0}, to_;
+    vector<W> weight_;
+
+    static size_t checked_vertices(int vertices) {
+        npre(vertices >= 0);
+        return size_t(vertices);
+    }
+
+    template <bool Constant> struct adjacency_cursor {
+        using graph_type = conditional_t<Constant, const ngraph_csr, ngraph_csr>;
+        using weight_reference = conditional_t<Constant, const W&, W&>;
+        graph_type* graph;
+        int from, edge, last, index = 0;
+        bool ok() const { return edge < last; }
+        nedge<weight_reference> val() const {
+            return {from, graph->to_[edge], edge, graph->weight_[edge]};
+        }
+        int idx() const { return index; }
+        void next() {
+            ++edge;
+            ++index;
+        }
+    };
+
+    template <bool Constant> class adjacency_view {
+        using graph_type = conditional_t<Constant, const ngraph_csr, ngraph_csr>;
+        graph_type* graph_;
+        int vertex_;
+
+      public:
+        adjacency_view(graph_type* graph, int vertex) : graph_(graph), vertex_(vertex) {}
+        int len() const { return graph_->offset_[vertex_ + 1] - graph_->offset_[vertex_]; }
+        bool empty() const { return len() == 0; }
+        auto enumerate() const {
+            return adjacency_cursor<Constant>{graph_, vertex_, graph_->offset_[vertex_],
+                                              graph_->offset_[vertex_ + 1]};
+        }
+    };
+
+    template <bool Constant> struct arcs_cursor {
+        using graph_type = conditional_t<Constant, const ngraph_csr, ngraph_csr>;
+        using weight_reference = conditional_t<Constant, const W&, W&>;
+        graph_type* graph;
+        mutable int from = 0;
+        int edge = 0;
+
+        bool ok() const { return edge < graph->edges(); }
+        nedge<weight_reference> val() const {
+            while (from + 1 < int(graph->offset_.size()) && graph->offset_[from + 1] <= edge)
+                ++from;
+            return {from, graph->to_[edge], edge, graph->weight_[edge]};
+        }
+        int idx() const { return edge; }
+        void next() { ++edge; }
+    };
+
+    template <bool Constant> class arcs_view {
+        using graph_type = conditional_t<Constant, const ngraph_csr, ngraph_csr>;
+        graph_type* graph_;
+
+      public:
+        explicit arcs_view(graph_type* graph) : graph_(graph) {}
+        int len() const { return graph_->edges(); }
+        bool empty() const { return graph_->edges() == 0; }
+        auto enumerate() const { return arcs_cursor<Constant>{graph_}; }
+    };
+
+  public:
+    using edge = nedge<W>;
+    using view = adjacency_view<false>;
+    using const_view = adjacency_view<true>;
+
+    ngraph_csr() = default;
+    explicit ngraph_csr(int vertices)
+        : vertices_(vertices), offset_(checked_vertices(vertices) + 1, 0) {}
+    template <ngraph_like G> explicit ngraph_csr(const G& graph) { build(graph); }
+
+    template <ngraph_like G> void build(const G& graph) {
+        vertices_ = ni::ngraph_vertices(graph);
+        offset_.assign(size_t(vertices_) + 1, 0);
+        for (int vertex = 0; vertex < vertices_; ++vertex) {
+            decltype(auto) adjacency = graph.neighbors(vertex);
+            nfor(edge, adjacency) {
+                int to = nedge_to(edge);
+                npre(0 <= to && to < vertices_);
+                npre(offset_[vertex + 1] < INT_MAX);
+                ++offset_[vertex + 1];
+            }
+            npre(offset_[vertex] <= INT_MAX - offset_[vertex + 1]);
+            offset_[vertex + 1] += offset_[vertex];
+        }
+        to_.clear();
+        weight_.clear();
+        to_.reserve(size_t(offset_.back()));
+        weight_.reserve(size_t(offset_.back()));
+        for (int vertex = 0; vertex < vertices_; ++vertex) {
+            decltype(auto) adjacency = graph.neighbors(vertex);
+            nfor(edge, adjacency) {
+                to_.push_back(nedge_to(edge));
+                weight_.push_back(W(nedge_weight(edge)));
+            }
+        }
+    }
+
+    int len() const noexcept { return vertices_; }
+    int edges() const {
+        npre(to_.size() <= size_t(INT_MAX));
+        return int(to_.size());
+    }
+    bool empty() const noexcept { return vertices_ == 0; }
+    view neighbors(int vertex) {
+        npre(0 <= vertex && vertex < vertices_);
+        return {this, vertex};
+    }
+    const_view neighbors(int vertex) const {
+        npre(0 <= vertex && vertex < vertices_);
+        return {this, vertex};
+    }
+    view operator[](int vertex) & { return neighbors(vertex); }
+    const_view operator[](int vertex) const& { return neighbors(vertex); }
+    view operator[](int) && = delete;
+    const_view operator[](int) const&& = delete;
+    view from(int vertex) & { return neighbors(vertex); }
+    const_view from(int vertex) const& { return neighbors(vertex); }
+    view from(int) && = delete;
+    const_view from(int) const&& = delete;
+
+    int degree(int vertex) const { return neighbors(vertex).len(); }
+    int find(int from, int to, int fallback = npos) const {
+        npre(0 <= from && from < vertices_ && 0 <= to && to < vertices_);
+        nfor(edge, neighbors(from))
+            if (edge.to == to)
+                return edge.id;
+        return fallback;
+    }
+    bool has(int from, int to) const { return find(from, to) != npos; }
+    W* weight(int edge) { return 0 <= edge && edge < edges() ? addressof(weight_[edge]) : nullptr; }
+    const W* weight(int edge) const {
+        return 0 <= edge && edge < edges() ? addressof(weight_[edge]) : nullptr;
+    }
+    W weight(int edge, W fallback) const {
+        return 0 <= edge && edge < edges() ? weight_[edge] : move(fallback);
+    }
+    bool set(int edge, W weight) {
+        if (edge < 0 || edge >= edges())
+            return false;
+        weight_[edge] = move(weight);
+        return true;
+    }
+
+    auto vertices() const { return nrange(vertices_); }
+    auto arcs() & { return arcs_view<false>(this); }
+    auto arcs() const& { return arcs_view<true>(this); }
+    auto arcs() && = delete;
+    auto arcs() const&& = delete;
+
+    ngraph_csr reverse() const {
+        ngraph_forward<W> reversed(vertices_, edges());
+        nfor(edge, arcs())
+            reversed.add(edge.to, edge.from, edge.w);
+        return ngraph_csr(reversed);
+    }
+};
+
+template <ngraph_like G> ngraph_csr(const G&) -> ngraph_csr<ni::ngraph_weight_t<G>>;
+
+template <class W = int> using ngraph = ngraph_forward<W>;
 
 template <ngraph_like G> nvector<int> nbfs(const G& graph, int source) {
     int vertices = ni::ngraph_vertices(graph);
@@ -5143,6 +5522,135 @@ class nmaxflow {
     }
 };
 
+template <class C>
+    requires integral<C> && (!same_as<remove_cv_t<C>, bool>)
+class nflow_dinic {
+    int vertices_ = 0;
+    vector<int> head_, to_, next_, level_, current_;
+    vector<C> residual_, initial_;
+
+    static size_t checked_vertices(int vertices) {
+        npre(vertices >= 0);
+        return size_t(vertices);
+    }
+
+    bool build_levels(int source, int sink) {
+        fill(level_.begin(), level_.end(), npos);
+        deque<int> queue;
+        level_[source] = 0;
+        queue.push_back(source);
+        while (!queue.empty()) {
+            int from = queue.front();
+            queue.pop_front();
+            for (int edge = head_[from]; edge != npos; edge = next_[edge])
+                if (C{} < residual_[edge] && level_[to_[edge]] == npos) {
+                    level_[to_[edge]] = level_[from] + 1;
+                    queue.push_back(to_[edge]);
+                }
+        }
+        return level_[sink] != npos;
+    }
+
+    C send(int from, int sink, C available) {
+        if (from == sink)
+            return available;
+        for (int& edge = current_[from]; edge != npos; edge = next_[edge]) {
+            int to = to_[edge];
+            if (!(C{} < residual_[edge]) || level_[to] != level_[from] + 1)
+                continue;
+            C pushed = send(to, sink, min(available, residual_[edge]));
+            if (C{} < pushed) {
+                npre(residual_[edge ^ 1] <= numeric_limits<C>::max() - pushed);
+                residual_[edge] -= pushed;
+                residual_[edge ^ 1] += pushed;
+                return pushed;
+            }
+        }
+        return C{};
+    }
+
+  public:
+    nflow_dinic() = default;
+    explicit nflow_dinic(int vertices, int expected_edges = 0)
+        : vertices_(vertices), head_(checked_vertices(vertices), npos),
+          level_(size_t(vertices)), current_(size_t(vertices)) {
+        reserve(expected_edges);
+    }
+
+    int len() const noexcept { return vertices_; }
+    int edges() const {
+        npre(to_.size() / 2 <= size_t(INT_MAX));
+        return int(to_.size() / 2);
+    }
+    void reserve(int expected_edges) {
+        npre(expected_edges >= 0 && expected_edges <= INT_MAX / 2);
+        size_t arcs = size_t(expected_edges) * 2;
+        to_.reserve(arcs);
+        next_.reserve(arcs);
+        residual_.reserve(arcs);
+        initial_.reserve(arcs);
+    }
+    int add(int from, int to, C capacity, C reverse_capacity = C{}) {
+        npre(0 <= from && from < vertices_ && 0 <= to && to < vertices_);
+        npre(!(capacity < C{}) && !(reverse_capacity < C{}));
+        npre(to_.size() <= size_t(INT_MAX - 2));
+        int id = edges();
+        to_.push_back(to);
+        next_.push_back(head_[from]);
+        residual_.push_back(capacity);
+        initial_.push_back(capacity);
+        head_[from] = int(to_.size()) - 1;
+        to_.push_back(from);
+        next_.push_back(head_[to]);
+        residual_.push_back(reverse_capacity);
+        initial_.push_back(reverse_capacity);
+        head_[to] = int(to_.size()) - 1;
+        return id;
+    }
+    C flow(int source, int sink, C limit = numeric_limits<C>::max()) {
+        npre(0 <= source && source < vertices_ && 0 <= sink && sink < vertices_ && source != sink);
+        npre(!(limit < C{}));
+        C result{};
+        while (result < limit && build_levels(source, sink)) {
+            current_ = head_;
+            while (result < limit) {
+                C pushed = send(source, sink, limit - result);
+                if (!(C{} < pushed))
+                    break;
+                result += pushed;
+            }
+        }
+        return result;
+    }
+    C operator()(int source, int sink, C limit = numeric_limits<C>::max()) {
+        return flow(source, sink, limit);
+    }
+    C used(int id) const {
+        npre(0 <= id && id < edges());
+        return initial_[id * 2] - residual_[id * 2];
+    }
+    nvector<unsigned char> cut(int source) const {
+        npre(0 <= source && source < vertices_);
+        nvector<unsigned char> reachable(vertices_, false);
+        deque<int> queue;
+        reachable[source] = true;
+        queue.push_back(source);
+        while (!queue.empty()) {
+            int from = queue.front();
+            queue.pop_front();
+            for (int edge = head_[from]; edge != npos; edge = next_[edge])
+                if (C{} < residual_[edge] && !reachable[to_[edge]]) {
+                    reachable[to_[edge]] = true;
+                    queue.push_back(to_[edge]);
+                }
+        }
+        return reachable;
+    }
+    void reset() { residual_ = initial_; }
+};
+
+template <class C> using nflow = nflow_dinic<C>;
+
 // ---- 44_matching.hpp ----
 struct nbipartite_matching {
     int size = 0;
@@ -5237,6 +5745,94 @@ template <ngraph_like G> nbipartite_matching nhopcroft_karp(const G& graph, int 
     return result;
 }
 
+struct nbicover {
+    nvector<int> l, r;
+};
+
+class nbimatch_hopcroft {
+    int left_vertices_ = 0, right_vertices_ = 0;
+    nvector<nvector<int>> adjacency_;
+    nvector<int> left_match_, right_match_;
+    bool solved_ = false;
+
+  public:
+    nbimatch_hopcroft() = default;
+    nbimatch_hopcroft(int left_vertices, int right_vertices)
+        : left_vertices_(left_vertices), right_vertices_(right_vertices),
+          adjacency_(left_vertices), left_match_(left_vertices, npos),
+          right_match_(right_vertices, npos) {
+        npre(left_vertices >= 0 && right_vertices >= 0);
+    }
+
+    int add(int left, int right) {
+        npre(0 <= left && left < left_vertices_ && 0 <= right && right < right_vertices_);
+        solved_ = false;
+        adjacency_[left].push(right);
+        return adjacency_[left].len() - 1;
+    }
+    int solve() {
+        auto graph = ngraph_view(left_vertices_,
+                                 [this](int left) -> const nvector<int>& { return adjacency_[left]; });
+        auto result = nhopcroft_karp(graph, right_vertices_);
+        left_match_ = move(result.left);
+        right_match_ = move(result.right);
+        solved_ = true;
+        return result.size;
+    }
+    int left(int vertex, int fallback = npos) const {
+        npre(0 <= vertex && vertex < left_vertices_);
+        return left_match_[vertex] == npos ? fallback : left_match_[vertex];
+    }
+    int right(int vertex, int fallback = npos) const {
+        npre(0 <= vertex && vertex < right_vertices_);
+        return right_match_[vertex] == npos ? fallback : right_match_[vertex];
+    }
+    nvector<pair<int, int>> pairs() const {
+        npre(solved_);
+        nvector<pair<int, int>> result;
+        for (int left = 0; left < left_vertices_; ++left)
+            if (left_match_[left] != npos)
+                result.push(pair<int, int>{left, left_match_[left]});
+        return result;
+    }
+    nbicover mincover() const {
+        npre(solved_);
+        nvector<unsigned char> reachable_left(left_vertices_, false),
+            reachable_right(right_vertices_, false);
+        deque<int> queue;
+        for (int left = 0; left < left_vertices_; ++left)
+            if (left_match_[left] == npos) {
+                reachable_left[left] = true;
+                queue.push_back(left);
+            }
+        while (!queue.empty()) {
+            int left = queue.front();
+            queue.pop_front();
+            for (int index = 0; index < adjacency_[left].len(); ++index) {
+                int right = adjacency_[left][index];
+                if (left_match_[left] == right || reachable_right[right])
+                    continue;
+                reachable_right[right] = true;
+                int next_left = right_match_[right];
+                if (next_left != npos && !reachable_left[next_left]) {
+                    reachable_left[next_left] = true;
+                    queue.push_back(next_left);
+                }
+            }
+        }
+        nbicover result;
+        for (int left = 0; left < left_vertices_; ++left)
+            if (!reachable_left[left])
+                result.l.push(left);
+        for (int right = 0; right < right_vertices_; ++right)
+            if (reachable_right[right])
+                result.r.push(right);
+        return result;
+    }
+};
+
+using nbimatch = nbimatch_hopcroft;
+
 // ---- 50_integer.hpp ----
 template <class T>
 concept ninteger = integral<T> && (!same_as<remove_cv_t<T>, bool>);
@@ -5291,7 +5887,7 @@ template <signed_integral T> constexpr T nceil_div(T a, T b) {
     return quotient;
 }
 
-template <signed_integral T> constexpr T nmod(T value, T modulus) {
+template <signed_integral T> constexpr T nmodulo(T value, T modulus) {
     npre(modulus > 0);
     T remainder = value % modulus;
     return remainder < 0 ? remainder + modulus : remainder;
@@ -5398,9 +5994,88 @@ inline nvector<int> nprimes(int limit) {
     return primes;
 }
 
+inline bool nisprime_trial(uint64_t value) {
+    if (value < 2)
+        return false;
+    for (uint64_t divisor = 2; divisor <= value / divisor; ++divisor)
+        if (value % divisor == 0)
+            return false;
+    return true;
+}
+
+constexpr bool nisprime_miller(uint64_t value) { return nisprime(value); }
+
+inline uint64_t npollard(uint64_t value) {
+    npre(value > 1 && !nisprime(value));
+    if (!(value & 1))
+        return 2;
+    if (value % 3 == 0)
+        return 3;
+
+    auto advance = [value](uint64_t x, uint64_t constant) {
+        return uint64_t((__uint128_t(nmulmod(x, x, value)) + constant) % value);
+    };
+    for (;;) {
+        uint64_t current = nrng_global(uint64_t(1), value);
+        uint64_t constant = nrng_global(uint64_t(1), value);
+        uint64_t block = 128, power = 1, divisor = 1;
+        uint64_t anchor = 0, recovery = 0;
+        while (divisor == 1) {
+            anchor = current;
+            for (uint64_t step = 0; step < power; ++step)
+                current = advance(current, constant);
+            for (uint64_t offset = 0; offset < power && divisor == 1; offset += block) {
+                recovery = current;
+                uint64_t product = 1;
+                uint64_t count = min(block, power - offset);
+                for (uint64_t step = 0; step < count; ++step) {
+                    current = advance(current, constant);
+                    uint64_t difference = anchor > current ? anchor - current : current - anchor;
+                    product = nmulmod(product, difference, value);
+                }
+                divisor = gcd(product, value);
+            }
+            if (power > numeric_limits<uint64_t>::max() / 2) {
+                divisor = value;
+                break;
+            }
+            power *= 2;
+        }
+        if (divisor == value) {
+            do {
+                recovery = advance(recovery, constant);
+                uint64_t difference = anchor > recovery ? anchor - recovery : recovery - anchor;
+                divisor = gcd(difference, value);
+            } while (divisor == 1);
+        }
+        if (1 < divisor && divisor < value)
+            return divisor;
+    }
+}
+
+inline nvector<uint64_t> nfactor(uint64_t value) {
+    nvector<uint64_t> factors, pending;
+    if (value > 1)
+        pending.push(value);
+    while (!pending.empty()) {
+        uint64_t current = pending.pop();
+        if (nisprime(current)) {
+            factors.push(current);
+        } else {
+            uint64_t divisor = npollard(current);
+            pending.push(divisor);
+            pending.push(current / divisor);
+        }
+    }
+    nsort(factors);
+    return factors;
+}
+
+inline nvector<uint64_t> nfactor_rho(uint64_t value) { return nfactor(value); }
+
 // ---- 51_modular.hpp ----
 template <uint64_t Modulus>
-    requires(Modulus > 1)
+    requires(Modulus > 0)
 class nmodint {
     uint64_t value_ = 0;
 
@@ -5421,6 +6096,7 @@ class nmodint {
     template <integral I> constexpr nmodint(I value) : value_(normalize(value)) {}
 
     constexpr uint64_t val() const noexcept { return value_; }
+    constexpr explicit operator uint64_t() const noexcept { return value_; }
 
     constexpr nmodint& operator+=(nmodint other) {
         __uint128_t sum = __uint128_t(value_) + other.value_;
@@ -5457,6 +6133,17 @@ class nmodint {
         return raw(uint64_t(old_coefficient));
     }
 
+    constexpr nmaybe<nmodint> tryinv() const { return inverse(); }
+    constexpr nmodint inv() const {
+        auto result = inverse();
+        npre(result.ok());
+        return result.val();
+    }
+    constexpr nmodint inv(nmodint fallback) const {
+        auto result = inverse();
+        return result ? result.val() : move(fallback);
+    }
+
     constexpr nmodint& operator/=(nmodint other) {
         auto inverse = other.inverse();
         npre(inverse.ok());
@@ -5472,6 +6159,27 @@ class nmodint {
     friend constexpr nmodint operator/(nmodint a, nmodint b) { return a /= b; }
     friend constexpr bool operator==(nmodint, nmodint) = default;
 
+    constexpr nmodint& operator++() { return *this += nmodint(1); }
+    constexpr nmodint operator++(int) {
+        nmodint copy = *this;
+        ++*this;
+        return copy;
+    }
+    constexpr nmodint& operator--() { return *this -= nmodint(1); }
+    constexpr nmodint operator--(int) {
+        nmodint copy = *this;
+        --*this;
+        return copy;
+    }
+
+    friend ostream& operator<<(ostream& output, nmodint value) { return output << value.value_; }
+    friend istream& operator>>(istream& input, nmodint& value) {
+        long long raw_value;
+        input >> raw_value;
+        value = nmodint(raw_value);
+        return input;
+    }
+
     static constexpr nmodint raw(uint64_t value) {
         npre(value < Modulus);
         nmodint result;
@@ -5479,6 +6187,122 @@ class nmodint {
         return result;
     }
 };
+
+template <int Tag = 0> class nmod_dynamic {
+    static inline uint64_t modulus_ = 1;
+    uint64_t value_ = 0;
+
+    template <integral I> static uint64_t normalize(I value) {
+        uint64_t modulus = mod();
+        if constexpr (is_signed_v<I>) {
+            __int128_t remainder = __int128_t(value) % __int128_t(modulus);
+            if (remainder < 0)
+                remainder += modulus;
+            return uint64_t(remainder);
+        } else {
+            return uint64_t(__uint128_t(value) % modulus);
+        }
+    }
+
+  public:
+    static uint64_t mod() noexcept { return modulus_; }
+    static void setmod(uint64_t modulus) {
+        npre(0 < modulus && modulus <= uint64_t(numeric_limits<int64_t>::max()));
+        modulus_ = modulus;
+    }
+    static nmod_dynamic raw(uint64_t value) {
+        npre(value < mod());
+        nmod_dynamic result;
+        result.value_ = value;
+        return result;
+    }
+
+    nmod_dynamic() = default;
+    template <integral I> nmod_dynamic(I value) : value_(normalize(value)) {}
+
+    uint64_t val() const noexcept { return value_; }
+    explicit operator uint64_t() const noexcept { return value_; }
+
+    nmod_dynamic& operator+=(nmod_dynamic other) {
+        __uint128_t sum = __uint128_t(value_) + other.value_;
+        value_ = uint64_t(sum >= mod() ? sum - mod() : sum);
+        return *this;
+    }
+    nmod_dynamic& operator-=(nmod_dynamic other) {
+        value_ = value_ >= other.value_ ? value_ - other.value_ : mod() - (other.value_ - value_);
+        return *this;
+    }
+    nmod_dynamic& operator*=(nmod_dynamic other) {
+        value_ = nmulmod(value_, other.value_, mod());
+        return *this;
+    }
+    nmod_dynamic pow(uint64_t exponent) const {
+        return raw(npowmod(value_, exponent, mod()));
+    }
+    nmaybe<nmod_dynamic> inverse() const {
+        if (!value_)
+            return {};
+        auto bezout = nextgcd(mod(), value_);
+        if (bezout.gcd != 1)
+            return {};
+        __int128_t coefficient = bezout.y % __int128_t(mod());
+        if (coefficient < 0)
+            coefficient += mod();
+        return raw(uint64_t(coefficient));
+    }
+    nmaybe<nmod_dynamic> tryinv() const { return inverse(); }
+    nmod_dynamic inv() const {
+        auto result = inverse();
+        npre(result.ok());
+        return result.val();
+    }
+    nmod_dynamic inv(nmod_dynamic fallback) const {
+        auto result = inverse();
+        return result ? result.val() : move(fallback);
+    }
+    nmod_dynamic& operator/=(nmod_dynamic other) { return *this *= other.inv(); }
+
+    nmod_dynamic operator+() const { return *this; }
+    nmod_dynamic operator-() const { return value_ ? raw(mod() - value_) : *this; }
+    friend nmod_dynamic operator+(nmod_dynamic left, nmod_dynamic right) { return left += right; }
+    friend nmod_dynamic operator-(nmod_dynamic left, nmod_dynamic right) { return left -= right; }
+    friend nmod_dynamic operator*(nmod_dynamic left, nmod_dynamic right) { return left *= right; }
+    friend nmod_dynamic operator/(nmod_dynamic left, nmod_dynamic right) { return left /= right; }
+    friend bool operator==(nmod_dynamic, nmod_dynamic) = default;
+
+    nmod_dynamic& operator++() { return *this += nmod_dynamic(1); }
+    nmod_dynamic operator++(int) {
+        nmod_dynamic copy = *this;
+        ++*this;
+        return copy;
+    }
+    nmod_dynamic& operator--() { return *this -= nmod_dynamic(1); }
+    nmod_dynamic operator--(int) {
+        nmod_dynamic copy = *this;
+        --*this;
+        return copy;
+    }
+
+    friend ostream& operator<<(ostream& output, nmod_dynamic value) { return output << value.value_; }
+    friend istream& operator>>(istream& input, nmod_dynamic& value) {
+        long long raw_value;
+        input >> raw_value;
+        value = nmod_dynamic(raw_value);
+        return input;
+    }
+};
+
+template <uint64_t Modulus> using nmod_static = nmodint<Modulus>;
+template <uint64_t Modulus> using nmod = nmodint<Modulus>;
+template <int Tag = 0> using ndmod = nmod_dynamic<Tag>;
+
+template <int Tag> inline constexpr bool nadd_group<nmod_dynamic<Tag>> = true;
+template <int Tag>
+inline constexpr bool nsemiring_laws<nadd<nmod_dynamic<Tag>>, nmul<nmod_dynamic<Tag>>,
+                                     nmod_dynamic<Tag>> = true;
+template <int Tag>
+inline constexpr bool naction_laws<naddsum_action<nmod_dynamic<Tag>>, nmod_dynamic<Tag>,
+                                   nmod_dynamic<Tag>> = true;
 
 template <uint64_t Modulus> inline constexpr bool nadd_group<nmodint<Modulus>> = true;
 template <uint64_t Modulus> inline constexpr bool nexact_field<nmodint<Modulus>> = nisprime(Modulus);
@@ -6097,6 +6921,229 @@ auto nfps_inverse(const A& series, int terms) {
         result.resize(size);
     }
     return result;
+}
+
+// ---- 55_game.hpp ----
+template <unsigned_integral T = uint64_t> class nxorbasis {
+    static constexpr int bits = numeric_limits<T>::digits;
+    array<T, bits> basis_{};
+    int rank_ = 0;
+
+  public:
+    int len() const noexcept { return rank_; }
+    bool empty() const noexcept { return rank_ == 0; }
+
+    bool ins(T value) {
+        for (int bit = bits; bit-- > 0;)
+            if ((value >> bit) & T{1}) {
+                if (basis_[bit])
+                    value ^= basis_[bit];
+                else {
+                    basis_[bit] = value;
+                    ++rank_;
+                    return true;
+                }
+            }
+        return false;
+    }
+    bool has(T value) const {
+        for (int bit = bits; bit-- > 0;)
+            if ((value >> bit) & T{1})
+                value ^= basis_[bit];
+        return value == T{};
+    }
+    T max(T initial = T{}) const {
+        for (int bit = bits; bit-- > 0;)
+            nchmax(initial, T(initial ^ basis_[bit]));
+        return initial;
+    }
+    T min_nonzero(T fallback = T{}) const {
+        for (T value : basis_)
+            if (value)
+                return value;
+        return fallback;
+    }
+};
+
+template <class P = long double> class nprob {
+    nvector<P> weights_;
+
+    static bool valid_weight(const P& value) {
+        if constexpr (floating_point<P>)
+            return isfinite(value) && !(value < P{});
+        else
+            return !(value < P{});
+    }
+
+  public:
+    using value_type = P;
+
+    nprob() = default;
+    explicit nprob(int count, P value = P{}) : weights_(count, move(value)) {}
+    nprob(initializer_list<P> values) : weights_(values) {}
+
+    int len() const noexcept { return weights_.len(); }
+    bool empty() const noexcept { return weights_.empty(); }
+    P& operator[](int index) { return weights_[index]; }
+    const P& operator[](int index) const { return weights_[index]; }
+    P get(int index, P fallback = P{}) const { return weights_.get(index, move(fallback)); }
+
+    P sum() const {
+        P result{};
+        for (int index = 0; index < len(); ++index)
+            result += weights_[index];
+        return result;
+    }
+    bool nonnegative() const {
+        for (int index = 0; index < len(); ++index)
+            if (!valid_weight(weights_[index]))
+                return false;
+        return true;
+    }
+    bool is_normalized(P total = P{1}) const {
+        if (!nonnegative())
+            return false;
+        P actual = sum();
+        if constexpr (floating_point<P>)
+            return isfinite(actual) && actual == total;
+        else
+            return actual == total;
+    }
+
+    nprob& operator*=(P factor) {
+        for (int index = 0; index < len(); ++index)
+            weights_[index] *= factor;
+        return *this;
+    }
+    friend nprob operator*(nprob distribution, P factor) { return distribution *= factor; }
+    friend nprob operator*(P factor, nprob distribution) { return distribution *= factor; }
+
+    template <class F> auto expect(F evaluate) const {
+        using R = remove_cvref_t<invoke_result_t<F&, int>>;
+        R result{};
+        for (int index = 0; index < len(); ++index)
+            result += weights_[index] * invoke(evaluate, index);
+        return result;
+    }
+    nmaybe<nprob> normalized_copy(P total = P{1}) const {
+        P current = sum();
+        if (!nonnegative() || !(current > P{}))
+            return {};
+        if constexpr (floating_point<P>)
+            if (!isfinite(current) || !isfinite(total))
+                return {};
+        nprob result = *this;
+        for (int index = 0; index < result.len(); ++index)
+            result[index] = result[index] * total / current;
+        return result;
+    }
+    nmaybe<nprob> normalized(P total = P{1}) const {
+        return normalized_copy(total);
+    }
+    nprob& normalize(P total = P{1}) {
+        auto result = normalized_copy(total);
+        npre(result.ok());
+        *this = move(result.val());
+        return *this;
+    }
+
+    int draw(nrng& random = nrng_global, int fallback = npos) const
+        requires floating_point<P>
+    {
+        long double total = static_cast<long double>(sum());
+        if (!nonnegative() || !(total > 0) || !isfinite(total))
+            return fallback;
+        long double unit = ldexp(static_cast<long double>(random() >> 11), -53);
+        long double remaining = unit * total;
+        for (int index = 0; index < len(); ++index) {
+            remaining -= static_cast<long double>(weights_[index]);
+            if (remaining < 0)
+                return index;
+        }
+        return empty() ? fallback : len() - 1;
+    }
+
+    friend bool operator==(const nprob&, const nprob&) = default;
+};
+
+template <class P, class F> auto nexpect(const nprob<P>& distribution, F evaluate) {
+    return distribution.expect(move(evaluate));
+}
+
+template <unsigned_integral T = uint64_t> class nnim {
+  public:
+    nvector<T> h;
+
+  private:
+    T xor_{};
+
+  public:
+    nnim() = default;
+    template <class A>
+        requires nenumerable<const A&>
+    explicit nnim(const A& heaps) {
+        nfor(value, heaps)
+            push(T(value));
+    }
+
+    int len() const noexcept { return h.len(); }
+    bool empty() const noexcept { return h.empty(); }
+    void push(T value) {
+        h.push(value);
+        xor_ ^= value;
+    }
+    bool win() const noexcept { return xor_ != T{}; }
+    T nim_sum() const noexcept { return xor_; }
+    nmaybe<pair<int, T>> winning() const {
+        if (!win())
+            return {};
+        for (int index = 0; index < len(); ++index) {
+            T reduced = h[index] ^ xor_;
+            if (reduced < h[index])
+                return pair<int, T>{index, reduced};
+        }
+        npre(false);
+        return {};
+    }
+    pair<int, T> winning(pair<int, T> fallback) const {
+        auto result = winning();
+        return result ? result.val() : move(fallback);
+    }
+};
+
+template <ngraph_like G> nmaybe<nvector<int>> nsg_dag(const G& graph) {
+    auto order = ntoposort(graph);
+    if (!order)
+        return {};
+    int vertices = ni::ngraph_vertices(graph);
+    nvector<int> grundy(vertices, 0), mark(vertices + 1, npos);
+    for (int position = order->len(); position-- > 0;) {
+        int vertex = (*order)[position];
+        int stamp = position;
+        decltype(auto) adjacency = graph.neighbors(vertex);
+        nfor(edge, adjacency) {
+            int to = nedge_to(edge);
+            npre(0 <= to && to < vertices);
+            if (grundy[to] <= vertices)
+                mark[grundy[to]] = stamp;
+        }
+        int value = 0;
+        while (value <= vertices && mark[value] == stamp)
+            ++value;
+        grundy[vertex] = value;
+    }
+    return grundy;
+}
+
+template <ngraph_like G> nvector<int> nsg_dag(const G& graph, nvector<int> fallback) {
+    auto result = nsg_dag(graph);
+    return result ? move(result.val()) : move(fallback);
+}
+
+template <ngraph_like G> nmaybe<nvector<int>> nsg(const G& graph) { return nsg_dag(graph); }
+
+template <ngraph_like G> nvector<int> nsg(const G& graph, nvector<int> fallback) {
+    return nsg_dag(graph, move(fallback));
 }
 
 // ---- 60_string.hpp ----

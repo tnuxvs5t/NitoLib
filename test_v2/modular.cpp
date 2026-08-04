@@ -22,4 +22,17 @@ int main() {
     ntest(combinations.permute(5, 2).val() == 20);
     ntest(combinations.choose(5, -1).val() == 0 && combinations.choose(5, 8).val() == 0);
     ntest(combinations.choose(1000, 500).val() == 159835829);
+
+    using compatible = nmod<998244353>;
+    compatible x = -3, y = 5;
+    ntest(uint64_t(x + y) == 2 && uint64_t(x * y) == 998244338);
+    ntest(!compatible(0).tryinv() && compatible(0).inv(compatible(7)) == compatible(7));
+
+    ndmod<0>::setmod(17);
+    ndmod<1>::setmod(12);
+    ndmod<0> dynamic_prime = 20;
+    ndmod<1> dynamic_composite = 20;
+    ntest(uint64_t(dynamic_prime) == 3 && uint64_t(dynamic_composite) == 8);
+    ntest(uint64_t(dynamic_prime / ndmod<0>(3)) == 1);
+    ntest(!dynamic_composite.tryinv());
 }

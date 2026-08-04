@@ -41,4 +41,17 @@ int main() {
                     }
                 ntest(count == got.size);
             }
+
+    nbimatch stateful(4, 3);
+    nvector<pair<int, int>> edges{{0, 0}, {0, 1}, {1, 0}, {2, 1}, {2, 2}, {3, 2}};
+    nfor(edge, edges)
+        stateful.add(edge.first, edge.second);
+    int size = stateful.solve();
+    ntest(size == 3 && stateful.pairs().len() == 3);
+    auto cover = stateful.mincover();
+    ntest(cover.l.len() + cover.r.len() == size);
+    nfor(edge, edges) {
+        bool covered = nfind(cover.l, edge.first) != npos || nfind(cover.r, edge.second) != npos;
+        ntest(covered);
+    }
 }

@@ -90,3 +90,91 @@ template <ngraph_like G> nbipartite_matching nhopcroft_karp(const G& graph, int 
     }
     return result;
 }
+
+struct nbicover {
+    nvector<int> l, r;
+};
+
+class nbimatch_hopcroft {
+    int left_vertices_ = 0, right_vertices_ = 0;
+    nvector<nvector<int>> adjacency_;
+    nvector<int> left_match_, right_match_;
+    bool solved_ = false;
+
+  public:
+    nbimatch_hopcroft() = default;
+    nbimatch_hopcroft(int left_vertices, int right_vertices)
+        : left_vertices_(left_vertices), right_vertices_(right_vertices),
+          adjacency_(left_vertices), left_match_(left_vertices, npos),
+          right_match_(right_vertices, npos) {
+        npre(left_vertices >= 0 && right_vertices >= 0);
+    }
+
+    int add(int left, int right) {
+        npre(0 <= left && left < left_vertices_ && 0 <= right && right < right_vertices_);
+        solved_ = false;
+        adjacency_[left].push(right);
+        return adjacency_[left].len() - 1;
+    }
+    int solve() {
+        auto graph = ngraph_view(left_vertices_,
+                                 [this](int left) -> const nvector<int>& { return adjacency_[left]; });
+        auto result = nhopcroft_karp(graph, right_vertices_);
+        left_match_ = move(result.left);
+        right_match_ = move(result.right);
+        solved_ = true;
+        return result.size;
+    }
+    int left(int vertex, int fallback = npos) const {
+        npre(0 <= vertex && vertex < left_vertices_);
+        return left_match_[vertex] == npos ? fallback : left_match_[vertex];
+    }
+    int right(int vertex, int fallback = npos) const {
+        npre(0 <= vertex && vertex < right_vertices_);
+        return right_match_[vertex] == npos ? fallback : right_match_[vertex];
+    }
+    nvector<pair<int, int>> pairs() const {
+        npre(solved_);
+        nvector<pair<int, int>> result;
+        for (int left = 0; left < left_vertices_; ++left)
+            if (left_match_[left] != npos)
+                result.push(pair<int, int>{left, left_match_[left]});
+        return result;
+    }
+    nbicover mincover() const {
+        npre(solved_);
+        nvector<unsigned char> reachable_left(left_vertices_, false),
+            reachable_right(right_vertices_, false);
+        deque<int> queue;
+        for (int left = 0; left < left_vertices_; ++left)
+            if (left_match_[left] == npos) {
+                reachable_left[left] = true;
+                queue.push_back(left);
+            }
+        while (!queue.empty()) {
+            int left = queue.front();
+            queue.pop_front();
+            for (int index = 0; index < adjacency_[left].len(); ++index) {
+                int right = adjacency_[left][index];
+                if (left_match_[left] == right || reachable_right[right])
+                    continue;
+                reachable_right[right] = true;
+                int next_left = right_match_[right];
+                if (next_left != npos && !reachable_left[next_left]) {
+                    reachable_left[next_left] = true;
+                    queue.push_back(next_left);
+                }
+            }
+        }
+        nbicover result;
+        for (int left = 0; left < left_vertices_; ++left)
+            if (!reachable_left[left])
+                result.l.push(left);
+        for (int right = 0; right < right_vertices_; ++right)
+            if (reachable_right[right])
+                result.r.push(right);
+        return result;
+    }
+};
+
+using nbimatch = nbimatch_hopcroft;
