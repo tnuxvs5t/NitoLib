@@ -125,6 +125,12 @@ auto ncollect(A&& source) {
     return result;
 }
 
+template <class G>
+    requires ndiscrete<remove_reference_t<G>>
+auto ntabulate(G&& function) {
+    return ncollect(forward<G>(function));
+}
+
 template <class T> class ndeque {
     deque<T> storage_;
 
