@@ -10,8 +10,9 @@ reference 中复制本文或头文件。公共签名与真实行为以 checked �
 以实现和测试重建结论并立即修正文档。
 
 Nitori v2 是面向算法竞赛的 GNU C++20 单头文件系统。它不是 STL 兼容层，也不是
-企业工程库。它使用统一的有限索引、借用引用、枚举游标、代数操作包和半开区间，
-让同一算法自然作用于连续数组、deque、stride、投影、lambda 引用、矩阵列和对角线。
+企业工程库。它使用统一的有限索引、借用引用、枚举游标、离散函数、代数操作包和
+半开区间，让同一算法自然作用于连续数组、环形 deque、stride、投影、lambda 引用、
+矩阵列、对角线、分块和按状态依赖关系抽出的 DP 子序列。
 
 ---
 
@@ -22,10 +23,10 @@ Nitori v2 是面向算法竞赛的 GNU C++20 单头文件系统。它不是 STL 
 3. [checked 与 unsafe](#3-checked-与-unsafe)
 4. [基础值、哨兵和可选结果](#4-基础值哨兵和可选结果)
 5. [代数操作包与定律](#5-代数操作包与定律)
-6. [引用拓扑：nspan 与 nview](#6-引用拓扑nspan-与-nview)
+6. [引用拓扑与离散函数：nspan、nview、nfunc](#6-引用拓扑与离散函数nspannviewnfunc)
 7. [枚举协议与组合视图](#7-枚举协议与组合视图)
 8. [拥有型序列与通用算法](#8-拥有型序列与通用算法)
-9. [机制、scratch、arena 与有限对象](#9-机制scratcharena-与有限对象)
+9. [机制、内存、关联对象与 AST](#9-机制内存关联对象与-ast)
 10. [代数数据结构](#10-代数数据结构)
 11. [图、树、流与匹配](#11-图树流与匹配)
 12. [整数、模运算与组合数学](#12-整数模运算与组合数学)
@@ -36,7 +37,8 @@ Nitori v2 是面向算法竞赛的 GNU C++20 单头文件系统。它不是 STL 
 17. [典型装配配方](#17-典型装配配方)
 18. [调试、测试与提交工作流](#18-调试测试与提交工作流)
 19. [扩展 Nitori 的规则](#19-扩展-nitori-的规则)
-20. [完整公共符号索引](#20-完整公共符号索引)
+20. [v1 到 v2 的迁移桥梁](#20-v1-到-v2-的迁移桥梁)
+21. [完整公共符号索引](#21-完整公共符号索引)
 
 ---
 
@@ -74,6 +76,7 @@ unsafe 不是“更宽松”的版本。它要求输入、下标、定律和所�
 ```text
 容器/对象提供能力
 → view 把位置映射为真实引用
+→ 离散函数把枚举位置、语义 key 和函数值接起来
 → 算法只约束它需要的最小能力
 → 数据结构显式要求代数定律
 → checked 诊断错误，unsafe 把同一前提交给优化器
@@ -96,9 +99,11 @@ Nitori 公共 API 不提供 iterator。遍历使用 `nfor`/`nfori` 或显式游�
 
 ### 2.2 所有权
 
-- `nvector`、`ndeque`、`narray`、`nmatrix` 等拥有存储。
+- `nvector`、`ndeque`、`narray`、`nmatrix`、`nmap`、`nset` 等拥有存储。
 - `nspan`、`nview`、`nall`、`nsub`、`nstride`、`nproject`、`nzip`、
   `nproduct`、`nwindows` 和 `ngraph_view` 借用 owner。
+- `nfunc(domain,evaluate)`、`nrestrict`、`ngather`、`ncompose` 等离散函数适配器
+  对左值参数借用、对右值参数接管所有权；但 evaluator 自己捕获的引用仍由用户负责。
 - 组合器对左值 owner 只保存引用；对 `nspan/nview/组合 view` 则复制或移动 view 包装，
   让中间 view 可以安全嵌套，但仍不延长最底层 owner 的生命周期。
 - owner 发生扩容、销毁或破坏索引拓扑的修改后，旧 view 可能失效。
@@ -184,9 +189,16 @@ nchmin(a, candidate);  // 变小时赋值并返回 true
 nchmax(a, candidate);  // 变大时赋值并返回 true
 nlen(object);          // 优先 integral len()，否则 integral size()；转 int 前检查范围
 nbitceil(n);           // 至少为 1 的二次幂上取整，要求 0 <= n <= 2^30
+
+nrng random(seed);
+random();              // uint64_t
+random(bound);         // [0,bound)
+random(first, last);   // [first,last)
+nseed(seed);           // 同时重置 nrng_global 和默认 nhash salt
 ```
 
-比较器：`nless<>`、`ngreater<>`、`nequal<>`。
+比较器：`nless<>`、`ngreater<>`、`nequal<>`。`nhash<T>` 是带进程随机盐的哈希器，
+并为 `pair` 提供组合特化；需要可复现实验时在创建哈希容器前调用 `nseed`。
 
 ---
 
@@ -272,6 +284,15 @@ assert(seg.fold(0, 3) == "abcd");
 
 `nseg` 和 `nfold` 保持顺序，不假设交换。谎报定律会使算法错误；concept 不会替你证明。
 
+通用幺半群快速幂：
+
+```cpp
+auto x = npow(base, exponent, operation);
+```
+
+非负指数只要求幺半群；负指数要求 `operation` 另外声明并实现群逆元。复杂度
+`O(log |exponent|)` 次合并，`LLONG_MIN` 也不会因取负溢出。
+
 ### 5.4 自定义 lazy action
 
 作用协议固定为：
@@ -292,7 +313,7 @@ tree 最常见的隐蔽 WA。`naction_laws` 声明 tag 单位、compose 结合�
 
 ---
 
-## 6. 引用拓扑：nspan 与 nview
+## 6. 引用拓扑与离散函数：nspan、nview、nfunc
 
 ### 6.1 `nspan<T>`：连续借用
 
@@ -412,6 +433,123 @@ auto blocks = ncollect(nproject(nwindows(a, width), [](auto window) {
 })); // nvector<nvector<T>>
 ```
 
+### 6.7 离散函数：`nview` 的上层胶水
+
+`nview` 回答“第 `i` 个位置引用谁”；离散函数再增加一层语义，回答“第 `i` 个位置
+代表哪个离散自变量，以及函数在该自变量上的值是什么”。给定有限域
+`D = [d_0,d_1,...,d_{n-1}]` 和 evaluator `phi`：
+
+```text
+f.key(i) = d_i       // 枚举位置 i 对应的语义自变量
+f[i]     = phi(d_i)  // 第 i 项的函数值，可为真实引用
+f(x)     = phi(x)    // 直接按语义自变量求值，不要求 x 已列在 D 中
+```
+
+构造和最小例子：
+
+```cpp
+auto square = nfunc(nrange(6), [](int x) { return x * x; });
+
+square.len();       // 6
+square.key(4);      // 4
+square[4];          // 16：按枚举位置
+square(4);          // 16：按语义自变量
+```
+
+`operator()(x)` 不做“x 是否在有限域中”的成员检查；有限域规定枚举边界，evaluator
+规定求值能力。若函数只在列出的 key 上有定义，应由 evaluator 使用 `npre` 或改用
+`npartial` 表达真正的部分函数。
+
+`ndiscrete<F>` 检查 indexed value 与 `key(i)` 两层接口。它不是 `nmap`：域不要求唯一、
+有序或可哈希，求值不需要先把 `(key,value)` 存进表。它也不是 v1 稀疏部分函数；需要
+运行时绑定/解绑键值时使用 `nfunc_hash`/`npartial`，需要普通字典时使用 `nmap`。
+
+#### 域、值、键值对与实例化
+
+```cpp
+auto keys    = nkeys(f);       // 零复制 key view
+auto values  = nvalues(f);     // 零复制 value view
+auto entries = nentries(f);    // pair<key-reference,value-reference> view
+
+auto value_copy = ntabulate(f);             // 独立 nvector<Value>
+auto same       = ncollect(f);               // 与 ntabulate 等价
+auto table_copy = ncollect(nentries(f));     // 独立 pair 值表
+```
+
+复制 `f`、`nkeys(f)` 或 `nvalues(f)` 仍是复制访问描述符，不自动复制底层数据；
+`ntabulate`/`ncollect` 才创建独立 value owner。`nentries` 的即时元素保留引用类别，便于
+`nforkv(key,value,f)` 原地改值；收集后会递归去掉 `pair/tuple` 中的引用。
+
+域参数遵循统一 lifetime bridge：左值域被借用，右值域由离散函数拥有。因此下式不会
+悬垂：
+
+```cpp
+auto f = nfunc(nvector<int>{10, 20, 30}, [](int x) { return x + 1; });
+```
+
+但 lambda 捕获的 `&storage` 仍只是普通 C++ 引用；`storage` 必须存活，结构修改也不能
+使 evaluator 返回的引用失效。
+
+#### `nrestrict` 与 `ngather`：语义选择和位置选择必须分开
+
+```cpp
+auto r = nrestrict(f, domain);     // domain 中每项就是新的语义自变量
+auto g = ngather(f, positions);    // positions 中每项是 f 的枚举位置
+```
+
+- `nrestrict(f,{x...})` 重新列出函数的语义定义域，并以 `f(x)` 求值。
+- `ngather(f,{i...})` 从原枚举中选第 `i` 项，保留原来的 `f.key(i)` 与 `f[i]`。
+- `ngather` 允许重复位置；若值是引用，重复项有意别名同一对象。
+- `g.position(j)` 返回第 `j` 项来自源函数的哪个位置。
+
+当原域恰好是 `nrange(n)` 时，自变量与位置数值相同，看起来两者等价；换成坐标、状态
+编号或压缩后的 key 就不再等价。不要凭数值巧合混用这两个齿轮。
+
+#### 分块、子序列与组合
+
+```cpp
+auto sub = nsubfunc(f, l, r);       // 按源枚举位置取 [l,r)
+auto one = nblock(f, block, width); // 第 block 块，尾块可短
+auto all = nblocks(f, width);       // view of discrete-function blocks
+
+auto h = ncompose(outer, inner);    // h(x) = outer(inner(x))
+auto y = nmap_values(f, transform); // transform(f(x))，key 不变
+```
+
+`nsubfunc`、`nblock`、`nblocks` 都保留语义 key 和 value 引用，因此每个块仍可直接进入
+通用算法：
+
+```cpp
+nvector<int> a{9,1,8,2,7,3,6,4};
+auto cell = nfunc(nrange(a.len()), [&](int i) -> int& { return a[i]; });
+
+nfor(block, nblocks(cell, 3))
+    nsort(block);
+// a == {1,8,9, 2,3,7, 4,6}
+```
+
+子序列 DP 中，依赖关系本来就是一组离散位置。`ngather` 把“按前驱表取状态”压成一个
+可枚举函数，而不复制 DP：
+
+```cpp
+nvector<int> dp(n, 1);
+auto state = nfunc(nrange(n), [&](int i) -> int& { return dp[i]; });
+
+for (int v = 0; v < n; ++v) {
+    auto previous = ngather(state, predecessor[v]);
+    nforkv(from, best, previous)
+        nchmax(dp[v], best + 1);
+}
+```
+
+这里 `from` 是原状态的语义 key，`best` 是 `dp[from]` 的引用。`nforkv` 与 `nfor`
+一样只有一层真实 `for`：`break` 会退出整个枚举，`continue` 会进入下一项。
+
+主要复杂度：除参数对象自身的 move/copy 成本外，适配器只建立 holder/访问描述，
+不逐元素复制；索引/求值为 evaluator 自身复杂度；`ntabulate` 为 `O(n)` 时间和空间；
+`nblocks` 只建立块描述，逐块算法成本由所调用算法决定。若 `ngather` 含重复别名，
+原地排序等依赖独立交换位置的算法通常没有合理语义，应先去重位置或显式实例化。
+
 ---
 
 ## 7. 枚举协议与组合视图
@@ -444,10 +582,14 @@ nfor(x, sequence) {
 nfori(i, x, sequence) {
     // i 是游标编号
 }
+
+nforkv(key, value, keyed_sequence) {
+    // 离散函数取 semantic key/value；map 取映射键和值
+}
 ```
 
-两者都只建立一个具有普通 C++ 语义的循环：`break` 立即结束整个 `nfor` / `nfori`，
-`continue` 进入下一次枚举，`sequence` 只求值一次。宏内部不得用额外循环模拟元素绑定。
+三者都只建立一个具有普通 C++ 语义的循环：`break` 立即结束整个宏循环，`continue`
+进入下一次枚举，`sequence` 只求值一次。宏内部不得用额外循环模拟元素绑定。
 
 ### 7.3 `nrange`
 
@@ -494,17 +636,40 @@ auto w = nwindows(a, 3, 2);   // 宽 3、起点步长 2 的 nsub 视图序列
 | `reserve/resize/clear` | 容量与长度管理 |
 | `push(args...)` | `emplace_back` 语义并返回新元素引用 |
 | `pop()` / `pop(fallback)` | 取走尾元素；空时前者失败、后者回退 |
-| `front/back` | 非空首尾元素 |
+| `front/back` | 引用访问；另有带 fallback 的按值访问 |
+| `del(i)` | 保序删除位置 `i`，线性移动后缀 |
+| `swapdel(i)` | 取走 `i` 并以末项补洞，不保序 |
+| `operator+=` | 追加一项 |
 
-公开接口故意不是 STL 的 `.size()`/`.push_back()`。
+公开接口故意不是 STL 的 `.size()`/`.push_back()`。`nvector_stl<T>` 是同一实现的兼容
+别名，不表示另一种后端。
 
 ### 8.2 `ndeque<T>`
 
-提供 `len/empty`、索引与 `get`、`pushl/pushr`、`popl/popr`、带 fallback 的
-pop、`front/back/clear`。它不连续，但满足普通 `nsort` 所需的可交换索引能力；
-Nitori 对非连续路径使用原地 heapsort。
+`ndeque<T>` 默认是自主环形缓冲 `ndeque_ring<T>`；`ndeque_stl<T>` 是行为对照/迁移
+后端。两者都提供 `len/empty`、索引与 `get`、`pushl/pushr`、`popl/popr`、带 fallback
+的 pop、`front/back/clear` 与 `operator+=`。环形版本另有 `cap/reserve`。
 
-### 8.3 `narray<T,Rank>`
+deque 不连续，但满足普通 `nsort` 所需的可交换索引能力；Nitori 对非连续路径使用
+原地 heapsort。因此不会再出现“STL 套壳有索引却进不了通用算法”的层间矛盾。
+
+### 8.3 `nheap_binary<T,C>`
+
+默认 `nheap<T,C>` 是真正的二叉堆后端 `nheap_binary<T,C>`，比较器表示“谁应位于堆顶”；
+默认 `nless<T>` 因而得到最小堆。
+
+```cpp
+nheap<int> q;
+q.push(4); q.push(1); q.push(7);
+q.top();              // 1
+q.pop();              // 取走 1
+q.replace(5);         // 非空时替换堆顶并下沉
+```
+
+也可从任意 `nenumerable` 在 `O(n)` 建堆。`push/pop/replace` 为 `O(log n)`，`top` 为
+`O(1)`；提供 `len/empty/reserve/clear` 与 `top/pop(fallback)`。
+
+### 8.4 `narray<T,Rank>`
 
 ```cpp
 narray<int, 3> cube({2, 3, 4});
@@ -519,7 +684,7 @@ cube.shape();
 总体积必须能放入 `int`。可变参数坐标只接受整数，并在转成 `int` 前验证表示范围，
 不会把超大 `long long` 静默截断成另一个合法坐标。
 
-### 8.4 通用序列算法
+### 8.5 通用序列算法
 
 | API | 前提 | 复杂度 |
 |---|---|---|
@@ -527,15 +692,17 @@ cube.shape();
 | `nreverse_inplace(a,l,r)` | 可交换；默认全区间 | `O(r-l)` |
 | `nfind(a,x,fallback)` | 可读 indexed | `O(n)` |
 | `nlower/nupper(a,x,cmp)` | 已按 cmp 排序 | `O(log n)` |
+| `nfind_sorted(a,x,cmp,fallback)` | 已排序；按 cmp 等价查找 | `O(log n)` |
 | `nfold(a,l,r,op)` | op 为幺半群 | `O(r-l)`，保持顺序 |
 | `nunique_compact(a,equal)` | 相邻等价元素压缩 | `O(n)`，返回保留长度但不 resize |
 | `nunique(a,equal)` | 另需 `resize` | `O(n)`，并缩短容器 |
+| `nsort_unique(a,cmp,equal)` | 可排序且可 resize | `O(n log n)`，排序后去重 |
 
 `nunique` 只压缩相邻等价项；通常先 `nsort(a)`。
 
 ---
 
-## 9. 机制、scratch、arena 与有限对象
+## 9. 机制、内存、关联对象与 AST
 
 ### 9.1 扫描
 
@@ -594,7 +761,26 @@ pool.rollback(mark);
 handle 是当前 arena 中的整数下标。扩容可能使引用失效，但 handle 仍有效；rollback
 删除后的 handle 不再有效并可能被后续 `make` 复用。
 
-### 9.6 `npartition`
+### 9.6 `npool<T>`：可删除、可复用 handle
+
+`narena` 的 handle 是当前连续前缀的 0-based 下标，适合整体 rollback；`npool<T>`
+（实现名 `npool_dynamic<T>`）提供独立删除和槽位复用，handle 从 1 开始，`0` 永远无效：
+
+```cpp
+npool<Node> pool;
+int h = pool.make(args...);
+pool[h];
+pool.get(h);       // 无效/已删除返回 nullptr
+pool.del(h);       // 析构对象；后续 make 可复用 h
+pool.len();        // 当前存活对象数
+pool.cap();        // 已分配过的 handle 上界
+```
+
+另有 `reserve/clear/empty`。删除后旧 handle 不是代际句柄：若槽位被复用，数值相同的
+旧 handle 会指向新对象；需要防 ABA 时由上层附加 generation。扩容也可能使已取得的
+`T&/T*` 失效，整数 handle 本身仍可重新查询。
+
+### 9.7 `npartition`
 
 由任意整数 labels 构造，首次出现顺序被压成稠密类编号。
 
@@ -606,9 +792,9 @@ p[i]; p.same(a,b);
 auto groups = p.groups();
 ```
 
-别名：`npart`。
+别名：`npart`、`npart_dense`。
 
-### 9.7 `nperm`
+### 9.8 `nperm`
 
 ```cpp
 nperm id(n);
@@ -623,6 +809,116 @@ auto pushed = p.push(a); // result[p(i)] = a[i]
 ```
 
 构造映射必须是 `[0,n)` 上的双射。
+
+### 9.9 有序集合、多重集和后端
+
+```cpp
+nset<int> s{4,1,4};   // 默认 nset_fhq，唯一集合
+nbag<int> b;          // 默认 nset_fhq<...,Multi=true>，保留重数
+
+s.ins(x); s.del(x); s.delall(x);
+s.has(x); s.count(x); s.get(x);
+s.rank(x);            // 严格小于 x 的元素数，重数计入
+s.kth(k);             // 0-based，第 k 项；越界为空 nmaybe
+s.lower(x); s.upper(x);
+s.min(); s.max();
+```
+
+集合按序枚举，并支持 `| & - ^` 及其赋值版本。可选后端：
+
+| 类型 | 结构 | 搜索/更新/rank/kth | 说明 |
+|---|---|---|---|
+| `nset_fhq<T,C,Multi,A>` | 随机 FHQ treap | 期望 `O(log n)` | 默认；支持重数和 augmentation |
+| `nset_splay<T,C,Multi,A>` | splay | 摊还 `O(log n)` | 访问会旋转；支持重数和 augmentation |
+| `nset_stl<T,C>` | `std::set` 参考后端 | 搜索/更新 `O(log n)`，rank/kth `O(n)` | 仅唯一集合，不支持 AST augmentation |
+
+`nseed(seed)` 可固定 FHQ priority 流和默认哈希盐，便于可复现对拍。比较器必须满足严格
+弱序；等价定义为 `!cmp(a,b) && !cmp(b,a)`。
+
+### 9.10 哈希表、映射和关系
+
+```cpp
+nmap<K,V> a;          // 默认 nmap_flat：开放寻址 + 稠密 entry 数组
+nmap_hash<K,V> b;     // unordered_map 参考后端
+nmap_stl<K,V> c;      // nmap_hash 的兼容别名
+
+a.ins(key, value);    // 已存在不覆盖
+a.set(key, value);    // 插入或覆盖，返回 V&
+a[key];               // 缺失则值初始化
+a(key);               // 必须存在
+a.get(key); a.has(key); a.del(key);
+nforkv(key, value, a) { /* value 是 V& */ }
+```
+
+平均查找/更新 `O(1)`，最坏受哈希碰撞影响。`nmap_flat` 删除时会把最后 entry 移入空洞，
+扩容会重排 bucket，因此不要依赖枚举顺序或跨结构修改保存 entry 引用。
+
+`nrel<L,R>` 是有限二元关系：`add/del/has`、`image(left)`、`preimage(right)` 和集合
+运算。当前 `nrel_scan` 后端以边数组线性扫描，单次查询/修改最坏 `O(E)`；它用于小型
+胶水关系，不冒充图邻接或高性能数据库索引。
+
+### 9.11 部分函数、双射与坐标压缩
+
+```cpp
+npartial<A,B> f;      // 同义：nfunc_hash<A,B>、底层 npartial_hash
+f.bind(x, y);         // x 未绑定则插入；已绑定同值返回 true，不同值返回 false
+f.set(x, y);          // 覆盖
+f.to(x); f(x); f.unbind(x);
+
+nbije<A,B> bij;       // 同义：nbije_hash；ninj 当前是同一一一映射契约
+bij.bind(a, b);       // 两侧都不能与不同对象冲突
+bij.to(a); bij.from(b);
+bij.unbindl(a); bij.unbindr(b); bij.set(a,b);
+auto inverse = ~bij;
+auto composition = outer * inner;
+```
+
+`nfunc_hash` 是“键可能尚未绑定”的关联对象，与 6.7 的 `nfunc(domain,evaluator)` 有意
+分名；后者是无需存表的有限 keyed view。
+
+坐标压缩建立值到 `[0,k)` rank 的双射：
+
+```cpp
+auto rank = ncompress(values);       // 任意 Nitori enumerable
+auto rank2 = ncompress_stl(stl);     // STL range 桥
+rank.to(value);                      // 不存在返回 npos
+rank.from(index);                    // const T* 或 fallback
+rank(index);                         // 必须存在的反向值
+```
+
+类型 `nbije_rank<T,C>` 构建为 `O(n log n)`，查询 `O(log n)`。
+
+### 9.12 可扩展有序树 AST
+
+FHQ 和 splay 不是封死的容器。模板参数 `A` 描述子树信息：
+
+```cpp
+struct sum_augment {
+    using info_type = long long;
+    long long id() const { return 0; }
+    long long one(const int& value, int count) const { return 1LL * value * count; }
+    long long op(long long left, long long right) const { return left + right; }
+};
+
+using bag = nset_fhq<int, nless<int>, true, sum_augment>;
+bag t;
+t.ins(5, 3);
+auto root = t.root();
+root.info(); root.len(); root.left(); root.right();
+```
+
+`naugment<A,T>` 检查 `id/one/op` 接口；`nnode<S>` 是只读快照，暴露 `val/count/len/info`
+和左右子树。`nwalk(tree,decide)` 以 `nbranch::left/take/right` 实现自定义下降；
+`nfirst_prefix`/`nlast_suffix` 依赖 augmentation 做前缀/后缀单调定位。对应成员
+`walk/first_prefix/last_suffix` 只是短桥。
+
+两种聚合定位都要求 predicate 随前缀/后缀扩展具有正确单调性；它们只利用子树聚合
+下降，不会替调用者证明“首次为真”之后不会再次变假。
+
+节点快照携带 epoch。任何可能改变拓扑的操作都会令旧快照 `current()==false`；尤其
+splay 的 `has/get/rank/...` 也可能旋转，不能把 `nnode` 跨下一次树操作保存。FHQ 的纯
+查询当前不改拓扑，但公共安全规则仍是“用完即弃”。`nempty_augment<T>` 是默认空信息，
+`nnode_tree`/`naugmented_tree` 则允许上层算法约束这套 AST 能力，而不绑定某个树后端。
 
 ---
 
@@ -752,6 +1048,35 @@ nrun_mo(queries, universe, add, remove, answer); // 左右操作相同
 调度器按引用转发回调，不复制回调状态；简化重载的左右移动会调用同一个 `add/remove`
 对象，也支持不可复制 functor。
 
+### 10.9 Disjoint Sparse Table：`nsparse<T,O>`
+
+`nsparse` 的名字兼容经典 sparse table，但实现是 disjoint sparse table：只要求有序
+幺半群，不要求幂等，也不要求交换。因此字符串拼接等操作也能 `O(1)` 查询：
+
+```cpp
+nsparse<string, nconcat> table(words);
+table.fold(l, r);                 // [l,r)，空区间返回 op.id()
+table.fold(l, r, fallback);       // 空区间改用 fallback
+table[i];
+```
+
+预处理 `O(n log n)` 时间和空间，非空区间查询 `O(1)`。合并严格保持从左到右的顺序；
+若只需 `min/max/gcd`，默认 `nmin<T>` 仍可直接用。
+
+### 10.10 带势能并查集：`npotential_dsu<T>`
+
+维护可加群意义下的差值约束：
+
+```cpp
+npotential_dsu<long long> d(n);
+d.bind(left, right, delta); // 要求 potential(right)-potential(left)==delta
+auto x = d.diff(left, right);
+```
+
+`bind` 在两个连通块间合并；同块时只检查新约束是否一致并返回 `bool`。`diff` 在不连通
+时返回空 `nmaybe`，另有 fallback 重载。类型需支持 `+=`、一元负号和相等比较。
+路径压缩与按大小合并给出摊还逆 Ackermann 复杂度。
+
 ---
 
 ## 11. 图、树、流与匹配
@@ -781,12 +1106,26 @@ graph.neighbors(vertex); // 返回任意可枚举邻接对象，可按值或按�
 ### 11.2 显式和隐式图
 
 ```cpp
-ngraph_list<long long> g(n);
-g.add(u, v, w);       // 有向弧
-g.add2(u, v, w);      // 两条反向弧
-g.vertices(); g.arcs();
-g.neighbors(u);       // nspan<const narc<W>>
+ngraph<long long> g(n, expected_edges); // 默认 ngraph_forward
+int id = g.add(u, v, w);                // 有向弧，返回稳定 edge id
+auto [a,b] = g.add2(u, v, w);           // 两条反向弧
+g.len(); g.edges(); g.degree(u);
+g.neighbors(u); g.arcs(); g.vertices();
+g.find(u,v); g.has(u,v); g.weight(id); g.set(id,new_weight);
 ```
+
+三种显式后端：
+
+| 类型 | 拓扑 | 适用场景 |
+|---|---|---|
+| `ngraph_forward<W>` / `ngraph<W>` | forward-star，动态追加弧 | 默认竞赛图；低常数、edge id、权值可改 |
+| `ngraph_csr<W>` | CSR，构造后拓扑静态 | 密集遍历、缓存局部性；可由任意 `ngraph_like` 构建 |
+| `ngraph_list<W>` | `vector<vector<narc<W>>>` | 最朴素参考/隐式接口对照 |
+
+`ngraph_forward/csr` 的规范弧是 `nedge<WRef>{from,to,id,w}`，遍历可直接修改非 const
+图的 `edge.w`；`ngraph_list` 的邻接项是 `narc<W>{to,weight}`。高层算法只通过
+`nedge_to/nedge_weight` 消除表示差异。`reverse()` 返回反图；CSR 仍只冻结拓扑，
+`set/weight` 可以修改权值。
 
 隐式图：
 
@@ -799,24 +1138,57 @@ auto grid_graph = ngraph_view(rows * cols, [&](int v) {
 算法依赖 `ngraph_like`，不依赖 `ngraph_list`。算法保留 `neighbors` 的返回类别：按引用
 返回的邻接对象不会被隐式复制，按值生成的临时邻接对象则存活到本次遍历结束。
 
+通用枚举桥：
+
+```cpp
+auto vertices = nvertices(graph); // nrange(0,V)
+auto arcs = narcs(graph);          // 统一 nedge view，借用左值 graph
+```
+
+`narcs` 逐顶点展开邻接，并正确接管 `neighbors(v)` 按值返回的临时邻接 view；它拒绝从
+临时 graph 借用。若后端有自身 `arcs()`，通常可少一次通用适配。
+
+过滤不会复制图或邻接：
+
+```cpp
+auto light = ngraph_where(graph, [](const auto& e) {
+    return nedge_weight(e) <= limit;
+});
+auto d = ndijkstra(light, source);
+```
+
+`ngraph_where` 是只读 `ngraph_like`，保留所有顶点，只过滤弧，并借用左值 graph；谓词
+按值存入 view。构造 `O(1)`，遍历成本等于扫描原弧，`edges()` 因而是 `O(V+E)`。
+
 ### 11.3 遍历与最短路
 
 | API | 前提 | 返回 | 复杂度 |
 |---|---|---|---|
 | `nbfs(g,s)` | 无权图 | `npos` 表示不可达的距离 | `O(V+E)` |
+| `nbfs_path(g,s)` | 无权图 | 距离、父亲和路径恢复 | `O(V+E)` |
 | `n01bfs(g,s)` | 权仅 0/1 | `npos` 表示不可达 | `O(V+E)` |
 | `ndijkstra<D>(g,s,inf)` | 权非负，距离严格小于 `inf` 且和不溢出 | 距离向量 | `O((V+E)logV)` |
+| `ndijkstra_path<D>(g,s,inf)` | 同上 | 距离、父亲和路径恢复 | `O((V+E)logV)` |
 
 `ndijkstra` 的默认 `inf` 使用 `D` 的真实顺序上界（浮点为正无穷），而不是保留余量的
 `ninf<D>`。`inf` 本身必须非负且不能为 NaN；若合法最短路可能等于该哨兵，请改用
 更宽的距离类型或显式策略。
 
+`npath_result<D>` 公开 `d`、`p`、`bad`，并提供 `reach(v)`、`dist(v,fallback)`、
+`operator[]` 和 `path(v)`；源点父亲指向自己，不可达点路径为空。
+
 ### 11.4 DAG、SCC 与 LCA
 
 ```cpp
-auto order = ntoposort(g); // 有环返回空 nmaybe
-auto components = nscc(g); // npartition，迭代 Kosaraju
+auto order = ntoposort(g);          // 有环返回空 nmaybe
+auto same = ntopo(g);               // 同义；另有 fallback 重载
+auto c1 = nscc(g);                  // 默认迭代 Kosaraju
+auto c2 = nscc_kosaraju(g);         // 显式同后端
+auto c3 = nscc_tarjan(g);           // 递归 Tarjan
 ```
+
+拓扑排序和 SCC 均为 `O(V+E)`。`nscc_tarjan` 的递归深度可能达到 `V`；极深图优先默认
+迭代 Kosaraju。
 
 `nlca tree(g, root)` 要求图严格描述一棵以 root 为根的树，接受两种且仅两种存储：
 
@@ -834,6 +1206,26 @@ tree.kth_on_path(a, b, k);    // 超出路径返回 npos
 ```
 
 构建 `O(V log V)`，查询 `O(log V)`。
+
+`nhld` 提供另一种树上桥梁：
+
+```cpp
+nhld h(tree, root);
+h.position(v); h.vertex(pos);
+h.lca(a,b);
+auto segments = h.path(a,b, edge_mode);
+auto [l,r] = h.subtree(v, edge_mode);
+h.each(a,b, callback, edge_mode);
+```
+
+`nhld_segment{l,r,rev}` 始终使用 `[l,r)`；`rev` 指明该段在原路径上是否逆序，非交换
+路径聚合必须保留它。构建 `O(V+E)`，一条路径拆为 `O(log V)` 段。输入和 `nlca` 一样
+必须是严格树（单向父子弧或成对双向弧）。
+
+`nlca_binary<W>` 是 v1 风格的带权/森林脚手架，接口为 `lca/dist/kth/jump`。它按 BFS
+建立每个连通块，调用者必须保证输入本来就是森林；与严格 `nlca` 不同，它不审计额外
+环边。新代码需要拓扑诊断时优先 `nlca`，需要带权距离或多棵树时可用
+`nlca_binary<W>` 并显式承担森林前提。
 
 ### 11.5 Rerooting
 
@@ -858,7 +1250,7 @@ auto answer = nreroot(
 `2(V-1)`，连通、无自环且无额外环。checked profile 会验证这套树拓扑契约；仅满足
 弧数而方向或重数错误也会失败。复杂度 `O(V+E)` 次回调，prefix/suffix 保持 merge 顺序。
 
-### 11.6 Prim MST
+### 11.6 MST：Prim 与 Kruskal
 
 ```cpp
 auto mst = nprim<long long>(g, root);
@@ -871,18 +1263,51 @@ if (mst) {
 无连通生成树返回空。无向边必须以对称弧提供；边权转换和总权累加必须能由 `D`
 表示，checked profile 会验证。复杂度 `O(E log E)`。
 
-### 11.7 最大流
+Kruskal 同时支持不连通图，返回最小生成森林：
 
 ```cpp
-nmaxflow<long long> flow(n);
-flow.add(u, v, capacity);
-auto value = flow.flow(source, sink);
-auto side = flow.mincut(source); // 残量图中 source 可达标记
+auto forest = nkruskal(g);
+auto custom = nkruskal(g, [](const auto& edge) { return cost(edge); });
+
+forest.weight;       // 同义兼容字段 forest.cost
+forest.edges;        // 选中的 (from,to)
+forest.edge;         // 对应规范弧 id
+forest.components;
+forest.connected();
 ```
 
-容量类型必须是排除 `bool` 的整数，容量非负，`source != sink`，顶点数不超过
-`INT_MAX/2`。总流量与残量加法必须能由容量类型表示，checked profile 会在累加前验证。
-对象只允许调用一次 `flow`，之后不能继续 `add`。实现为非递归 push-relabel；
+复杂度 `O(E log E)`。若无向边以两条对称弧提供，DSU 会只选择其中一条；平行边允许。
+`nprim` 的 `nmst_result` 也填 `weight/cost/edges/components`，但不保证可还原通用图的
+规范 edge id。
+
+### 11.7 最大流
+
+默认 `nflow<C>` 是可复用 Dinic 后端 `nflow_dinic<C>`：
+
+```cpp
+nflow<long long> flow(n, expected_edges);
+int id = flow.add(u, v, capacity, reverse_capacity);
+auto sent = flow(source, sink, limit); // 同 flow.flow(...)
+flow.used(id);
+auto side = flow.cut(source);          // 当前残量图中 source 可达
+flow.reset();                          // 恢复初始容量
+```
+
+多次 `flow` 会在当前残量图上继续增广；`reset` 后可重算。只有在一次无 `limit` 的增广
+确实达到最大流后，`cut(source)` 才具有最小割语义。容量是排除 `bool` 的非负整数，
+`source != sink`，残量与累计流不得溢出。一般网络的标准最坏界 `O(V^2E)`；DFS 递归
+深度最坏为 `V`。
+
+`nmaxflow<C>` 保留独立的非递归 push-relabel 实现，适合与 Dinic 对拍或特定稠密图：
+
+```cpp
+nmaxflow<long long> reference(n);
+reference.add(u,v,c);
+auto value = reference.flow(s,t);
+auto side = reference.mincut(s);
+```
+
+它是一次性对象：开始 `flow` 后不能再 `add` 或再次求流。顶点数不超过 `INT_MAX/2`，
 基础最坏界 `O(V^3)`。
 
 ### 11.8 二分图最大匹配
@@ -898,6 +1323,20 @@ result.right[v];  // 匹配的左点或 npos
 
 实现非递归，复杂度 `O(E sqrt(V))`，内部复制一次邻接以支持显式栈分层搜索。
 
+需要逐条加边、重复求解和最小点覆盖时使用状态对象：
+
+```cpp
+nbimatch matching(left_vertices, right_vertices); // nbimatch_hopcroft
+matching.add(l, r);
+int size = matching.solve();
+matching.left(l); matching.right(r);
+auto pairs = matching.pairs();
+nbicover cover = matching.mincover(); // cover.l / cover.r
+```
+
+每次加边会令旧解失效；`pairs/mincover` 要求之后已经 `solve()`。`mincover` 使用
+Kőnig 定理从最大匹配恢复最小点覆盖，额外 `O(V+E)`。
+
 ---
 
 ## 12. 整数、模运算与组合数学
@@ -909,17 +1348,24 @@ result.right[v];  // 匹配的左点或 npos
 | API | 语义 |
 |---|---|
 | `nmag/nabs` | 无符号绝对值，能表示有符号最低值的幅度 |
-| `ngcd` | 非负无符号 gcd |
+| `ngcd` | 默认二进制 gcd；非负无符号结果 |
+| `ngcd_euclid/ngcd_binary` | 显式选择欧几里得/二进制后端 |
 | `nlcm` | 检查无符号结果溢出 |
 | `nfloor_div/nceil_div` | 数学向下/向上整除，除数不可零 |
-| `nmod(value,modulus)` | 规范到 `[0,modulus)`，modulus > 0 |
+| `nmodulo(value,modulus)` | 标量余数规范到 `[0,modulus)`，modulus > 0 |
 | `nextgcd(a,b)` | 至多 64-bit 输入；`{gcd,x,y}` 满足 `ax+by=gcd`，系数为 `__int128_t` |
 | `nmulmod` | uint64 乘法模，内部 `__uint128_t` |
 | `npowmod` | uint64 模快速幂 |
-| `nisprime` | 对全部 uint64 确定性的 Miller–Rabin bases |
+| `nisprime` / `nisprime_miller` | 对全部 uint64 确定性的 Miller–Rabin bases |
+| `nisprime_trial` | 试除参考实现 |
 | `nprimes(limit)` | 线性筛返回 `<= limit` 的所有素数 |
+| `npollard(value)` | Pollard-Rho 找一个非平凡因子；质数返回自身 |
+| `nfactor/nfactor_rho` | uint64 完整质因数，按非降序且保留重数 |
 
-### 12.2 静态模整数 `nmodint<M>`
+`nmod(x,m)` 不再是标量函数，因为 v2 恢复了 v1 的模整数类型名 `nmod<M>`；机械迁移
+标量余数时必须改成 `nmodulo(x,m)`，不能让同名承担两个互斥语义。
+
+### 12.2 静态与动态模整数
 
 ```cpp
 using mint = nmodint<998244353>;
@@ -928,12 +1374,29 @@ a.val();
 a += b; a -= b; a *= b; a /= b;
 auto p = a.pow(exponent);
 auto inv = a.inverse();       // gcd(a,M)!=1 时为空
+auto same = a.tryinv();       // 兼容同义接口
+auto safe = a.inv(fallback);  // 不可逆时 fallback
 auto raw = mint::raw(value);  // 要求 value < M
 mint::mod();
 ```
 
 除法要求被除数存在乘法逆元；模数不必为质数，但 composite modulus 下并非每个非零值
 都可逆。加法群定律已向 `nadd` 声明。
+
+别名：
+
+```cpp
+nmodint<M>       // 核心静态实现
+nmod_static<M>   // 显式后端名
+nmod<M>          // v1 兼容短名
+
+ndmod<Tag>       // nmod_dynamic<Tag>
+ndmod<Tag>::setmod(modulus);
+```
+
+每个动态 `Tag` 拥有独立的进程内模数，所有该类型对象共享它；`setmod` 要求正模数且
+不应在已有对象仍参与计算时改模。动态模无法在编译期证明模数为质数，因此不会声明
+`nexact_field`，不能进入要求精确域的高斯消元/NTT 接口。
 
 ### 12.3 阶乘组合表 `ncomb<Mint>`
 
@@ -972,6 +1435,68 @@ auto c3 = nconv_xor(a,b);
 变换与 OR/AND/XOR 卷积均为 `O(n log n)`。整数 XOR 逆变换依赖每项能被 `n` 精确整除；
 模类型要求 `n` 可逆。
 
+### 12.5 分数、同余与筛表
+
+```cpp
+nfrac<long long> x(numerator, denominator); // 自动约分，分母规范为正
+x.p; x.q;                                  // 公开规范化分子/分母
+x.floor(); x.ceil();
+x.trydiv(y);                               // 除零返回空
+
+ncongruence c(a, m);       // x == a (mod m)，m > 0，a 自动规范
+c.has(x);
+auto merged = ncrt(c1, c2); // 不相容为空；不要求模数互质
+```
+
+`nfrac<T>` 支持四则、比较、一元负号与 fallback 除法；中间算术仍受 `T` 表示范围约束，
+不是任意精度有理数。`ncrt` 使用 `int64_t` 模数/余数并检查合并后的 lcm 可表示。
+
+```cpp
+nprime_table sieve(limit);
+sieve.p;             // 素数表
+sieve.phi[x];
+sieve.mu[x];
+sieve.isprime(x);
+sieve.factor(x);     // vector<pair<prime,exponent>>
+sieve.divisors(x);   // 正因数
+```
+
+线性筛预处理 `O(limit)` 时间和空间；表内分解复杂度与质因数个数相关。
+
+### 12.6 概率、Nim、异或基与 SG
+
+`nprob<P>` 是有限离散权重 owner，不偷偷假设已归一化：
+
+```cpp
+nprob<double> p{1,2,3};
+p.sum(); p.nonnegative();
+auto q = p.normalized();                 // 总权非正或含负权时为空
+q->expect([](int i) { return value(i); });
+int sample = p.draw(rng, fallback);       // 另有全局 nrng 重载
+auto e = nexpect(p, evaluator);
+```
+
+归一化和期望为 `O(n)`；抽样当前也是线性扫描，适合小状态/随机台架，不是 alias table。
+
+```cpp
+nxorbasis<uint64_t> basis;
+basis.ins(x); basis.has(x); basis.max(seed); basis.len();
+
+nnim<unsigned> game(heaps);
+game.nim_sum(); game.win(); game.winning(); // 返回 (heap,new_value)
+```
+
+异或基每次操作 `O(bit-width)`。`nnim` 的 heap 类型必须无符号，普通 Nim 的必胜修改由
+异或和直接恢复。
+
+```cpp
+auto grundy = nsg_dag(game_graph); // 有环返回空 nmaybe
+auto same = nsg(game_graph);       // 默认同义
+```
+
+每个顶点的后继必须是合法状态；实现先拓扑排序，再取 mex，总复杂度
+`O(V+E+Σ outdegree)` 及相应临时空间。一般有环博弈不能直接套 SG DAG。
+
 ---
 
 ## 13. 矩阵、线性代数与多项式
@@ -1006,6 +1531,23 @@ auto p = nmatpow(square, exponent, add, multiply);
 为 `O(n^3 log exponent)`。操作包必须满足 `nsemiring`，包括显式的跨操作定律声明；
 concept 仍不能替调用者证明声明为真。
 
+`nmat<T,Add,Mul>` 是建立在同一 `nmatrix` 存储上的代数绑定 facade，恢复 v1 的短代码：
+
+```cpp
+nmat<long long> a{{1,2},{3,4}};
+auto id = nmat<long long>::eye(2);
+auto c = a + b;
+auto d = a * b;
+auto p = a.pow(k);
+auto t = a.trans();
+a.get(row, col, fallback);
+```
+
+`nmatrix` 负责拥有与 view 拓扑，`nmat` 负责把固定 `Add/Mul` 绑定进运算符；两者不是
+互相替代的重复矩阵。`nmat` 的 concept 只要求两个幺半群，调用者仍必须保证矩阵乘法
+真正需要的分配律、零吸收等跨操作定律；需要编译期显式审计时使用
+`nmatmul/nmatpow` 的 `nsemiring` 接口。
+
 ### 13.3 RREF、行列式与线性方程
 
 ```cpp
@@ -1013,13 +1555,20 @@ nvector<int> pivots;
 int rank = nrref(matrix, &pivots); // 原地化为 RREF
 T det = ndeterminant(square);      // 按值复制输入
 auto solution = nlinear_solve(A, b);
+
+T same_det = ndet(square);         // 兼容短名
+auto inverse = ninverse(square);   // 奇异时为空 nmaybe
+auto legacy = ngauss(A, b);        // 总返回 result，以 consistent 标记无解
 ```
 
 `nlinear_solve`：
 
 - 无解：空 `nmaybe`。
-- 有解：`particular` 为特解，`basis` 为齐次解空间基。
+- 有解：`particular`（兼容字段 `one`）为特解，`basis` 为齐次解空间基，`rank` 为秩。
 - 任意解形如 `particular + Σ c_i*basis[i]`。
+
+`ngauss` 返回同一个 `nlinear_solution<T>` 形状，但无解时 `consistent == false`；
+`nlinear_solve` 则用空 `nmaybe` 表示无解。新代码优先后者，迁移旧模板时可保留前者。
 
 这些算法要求 `nexact_field_element<T>`：`T{}` 是零、`T{1}` 是一、非零 pivot 可除。
 素数模 `nmodint` 自动满足；普通整数、合数模和浮点数默认在编译期拒绝。整数行列式
@@ -1044,6 +1593,19 @@ NTT 前提（素数模由 `nexact_field` 在编译期约束）：
 `nconv_auto` 仅在两边长度至少 32 且上述条件成立时选择 NTT，否则使用朴素卷积。
 输入为空时结果为空。
 
+`nntt_info<Mint>` 是 primitive-root 快速入口。内建为 `998244353`、`1004535809`、
+`469762049` 提供根 3；其他适用 `nmodint<M>` 会在首次使用时自动分解 `M-1` 搜根。
+若为另一个常用 `nmodint<M>` 补 trait，必须保证：
+
+```cpp
+template<> struct nntt_info<nmodint<M>> {
+    static constexpr bool ok = true;
+    static constexpr uint64_t root = ...; // 真正的本原根
+};
+```
+
+错误 root 会静默产生错误卷积，测试必须与 `nconv_naive` 随机对拍。
+
 ### 13.5 多项式/FPS 工具
 
 系数按低次到高次排列：
@@ -1059,6 +1621,30 @@ auto inv = nfps_inverse(a, terms);// a[0] 非零且可逆
 静默执行截断除法；合数模即使个别元素可逆，也不冒充全域。
 FPS 逆使用 Newton 迭代，复杂度由 `nconv` 后端决定；NTT 可用时约为 `O(M(n)log n)`。
 
+拥有型 facade `npoly<T>` 会自动删除尾部零系数，零多项式表示为空：
+
+```cpp
+npoly<mint> f{1,2,3};
+f.len(); f.deg(); f[i]; f.at(i); f(x);
+f + g; f - g; f * g;
+f.deriv(); f.integral(); f.cut(terms);
+f.inv(terms); f.log(terms); f.exp(terms);
+```
+
+`operator[]` 越过次数返回零值，`at` 则要求真实系数位置。`inv` 要求常数项非零，
+`log` 要求常数项 1，`exp` 要求常数项 0；除法相关接口只接受浮点或精确域。
+
+线性递推桥：
+
+```cpp
+auto recurrence = nberlekamp(sequence);       // Berlekamp–Massey
+auto value = nrec_nth(initial, recurrence, k);// 空 nmaybe 表示信息不足
+```
+
+返回的递推满足 `a[n] = Σ recurrence[i] * a[n-i-1]`。BM 要求系数具备域除法，当前由
+表达式实例化约束，调用者必须选精确域；`nrec_nth` 使用多项式模快速幂，阶数 `d` 时
+为 `O(d^2 log k)`，另有 fallback 重载。
+
 ---
 
 ## 14. 字符串、Trie 与 AC 自动机
@@ -1073,7 +1659,7 @@ nz_function(sequence);       // z[0]=n
 nkmp_find(text, pattern);    // 返回全部起点；空 pattern 匹配 0..n
 ```
 
-均为线性复杂度。
+兼容短名分别是 `nprefix`、`nzfunc`、`nkmp`。均为线性复杂度。
 
 ### 14.2 Manacher
 
@@ -1085,6 +1671,7 @@ pal.pal(l, r);               // [l,r) 是否回文，空串为 true
 ```
 
 奇半径包含中心；偶半径中心位于 `right_center-1` 与 `right_center` 之间。
+结果类型名为 `npalindrome_index`，兼容别名 `nmanacher_result`。
 
 ### 14.3 后缀数组与 LCP
 
@@ -1127,6 +1714,8 @@ ac.match(text, [&](int inclusive_end, int pattern_id) {
 });
 
 long long total = ac.count(text);
+auto all = ac.matches(text); // nvector<nmatch>{start,end,id}，区间 [start,end)
+ac.each(text, callback);     // callback(start,end,id)，统一半开区间
 int next_state = ac.step(state, symbol);
 ```
 
@@ -1141,8 +1730,8 @@ int next_state = ac.step(state, symbol);
 
 ```cpp
 npoint<T> p{x,y};
-p += q; p -= q; p *= scale;
-p + q; p - q; p * scale;
+p += q; p -= q; p *= scale; p /= scale;
+p + q; p - q; p * scale; p / scale;
 
 ndot(a,b);
 ncross(a,b);
@@ -1150,6 +1739,12 @@ norient(a,b,c);       // (b-a) x (c-a)
 ndist2(a,b);
 non_segment(p,a,b);   // 含端点
 nsegment_intersect(a,b,c,d);
+
+nsign(value);
+nsgn_eps(value, eps);
+norient(a,b,c,eps);             // 返回 -1/0/1
+nonseg(a,b,p,eps);              // epsilon 版本，注意参数顺序
+nsegment_intersect(a,b,c,d,eps);
 ```
 
 integral 坐标的差、乘积与累加使用 `__int128_t`，并在转换和运算前验证结果可表示；
@@ -1163,19 +1758,25 @@ integral 坐标的差、乘积与累加使用 `__int128_t`，并在转换和运�
 auto hull = nconvex_hull(points, keep_collinear);
 auto twice_signed_area = npolygon_area2(polygon);
 auto diameter_squared = nconvex_diameter2(points);
+int where = npoint_in_poly(polygon, point, eps);
 ```
 
 凸包去重并以逆时针顺序返回；默认移除边上中间共线点。全共线时，默认只返回两端。
 凸包 `O(n log n)`，面积 `O(n)`，直径包含建 hull 为 `O(n log n)`。
+`npoint_in_poly` 返回 `1` 内部、`0` 边界、`-1` 外部；空多边形返回外部。
 
 ### 15.3 直线交点
 
 ```cpp
 auto point = nline_intersection(a,b,c,d);
+
+nline2<long double> x{origin, direction};
+auto same = nline_intersect(x, y, epsilon);
 ```
 
-输入表示两条无限直线。平行或重合返回空；否则返回 `npoint<long double>`。
-当前用 `denominator == 0`，浮点输入需要调用者理解精度边界。
+`nline_intersection(a,b,c,d)` 以两组点表示无限直线，平行或重合返回空；该旧入口当前
+使用 `denominator == 0`。`nline2<T>{p,v}` 明确使用点加方向向量，`nline_intersect`
+接受 epsilon。两者成功时都返回 `npoint<long double>`，浮点输入的误差策略仍由调用者负责。
 
 ### 15.4 Li Chao Tree
 
@@ -1191,16 +1792,35 @@ nlichao<long long, ngreater<__int128_t>> maximum(left, right);
 `nline_function<T>` 保存 slope/intercept；integral 求值扩为 `__int128_t` 并检查乘加范围。
 整条线插入和查询 `O(log(domain width))`，线段插入 `O(log^2(domain width))`，节点按需创建。
 
+坐标已离散时，不要用巨大整数域硬撑动态树：
+
+```cpp
+nlichao_static<long long> tree(coordinates);
+tree.add(nline<long long>{slope, intercept});
+tree.addseg(line, x_left, x_right); // 只覆盖离散坐标中的 [x_left,x_right)
+tree.addidx(line, l, r);            // 按压缩下标 [l,r)
+tree.get(x);                        // x 不在坐标表时为空
+tree(x, fallback);
+```
+
+构造会排序去重坐标，`x` 公开展示规范坐标表；`hasx` 检查是否可查询。整线插入和查询
+`O(log n)`，线段插入 `O(log^2 n)`，空间 `O(n)`。`nline<T>{m,b}` 是压缩后端短线型，
+可转换为动态后端的 `nline_function<T>`。
+
 ### 15.5 离散单峰搜索
 
 ```cpp
 auto argmin = nunimodal_arg(first, last, function);
 auto argmax = nunimodal_arg(first, last, function, ngreater<>{});
+
+auto x = nternary_min(left, right, continuous_function, iterations);
 ```
 
 搜索整数 `[first,last)`，要求非空且目标相对比较器单峰。返回一个最优位置，约
 `O(log range)` 次求值，尾部至多四点暴力。每轮固定先求左探针、再求右探针，
 不依赖函数实参的未指定求值顺序。
+`nternary_min` 用于浮点闭区间上的近似单峰最小值位置，默认 100 轮，返回最终区间中点；
+它不提供误差证明，精度由区间宽度、轮数和函数数值稳定性共同决定。
 
 ---
 
@@ -1272,7 +1892,39 @@ auto selected = nview(k, [&](int i) -> int& { return storage[index[i]]; });
 nsort(selected);
 ```
 
-### 17.3 滑动窗口最小值
+### 17.3 把数组升级为可分块离散函数
+
+```cpp
+nvector<int> a(n);
+auto cell = nfunc(nrange(n), [&](int i) -> int& { return a[i]; });
+
+nfor(block, nblocks(cell, width)) {
+    // block.key(i) 是原数组位置，block[i] 是 a[原位置] 的引用
+    nsort(block);
+}
+```
+
+这不是复制分块：构造为 `O(1)`，尾块自动缩短。块内操作直接写回 `a`。若只要快照，
+在边界处调用 `ntabulate(block)`。
+
+### 17.4 用依赖表装配子序列 DP
+
+```cpp
+nvector<int> dp(n, 1);
+auto state = nfunc(nrange(n), [&](int i) -> int& { return dp[i]; });
+
+for (int v = 0; v < n; ++v) {
+    auto incoming = ngather(state, predecessor[v]);
+    nforkv(from, best, incoming)
+        nchmax(dp[v], best + transition(from, v));
+}
+```
+
+`predecessor[v]` 存源函数的枚举位置；若它存的本来是语义状态 key，则应改用
+`nrestrict(state, predecessor[v])`。先分清 position/key，能消掉大量“数值恰好相同”
+掩盖的 WA。
+
+### 17.5 滑动窗口最小值
 
 ```cpp
 nqueue_agg<int, nmin<int>> q;
@@ -1283,7 +1935,7 @@ for (int i = 0; i < n; ++i) {
 }
 ```
 
-### 17.4 隐式网格 BFS
+### 17.6 隐式网格 BFS
 
 邻接 accessor 可以返回按需生成的 indexed/view 对象；算法不要求先构造所有边。
 
@@ -1296,7 +1948,7 @@ auto graph = ngraph_view(rows * cols, [&](int v) {
 auto distance = nbfs(graph, source);
 ```
 
-### 17.5 随机对拍台架
+### 17.7 随机对拍台架
 
 ```text
 小规模生成器
@@ -1329,8 +1981,11 @@ v2 自身的 property tests 就采用这一模式；复杂结构不能靠样例�
 常见错误：
 
 - 把 STL `.size/.push_back` 写法带入 Nitori。
+- 把 `nfor` 当成宏技巧而忘记它必须保持单层 `for` 的 `break/continue` 语义。
 - 在 owner 扩容后继续使用旧 view。
 - projection 返回值而不是 `T&`，随后期待 `nsort` 修改 owner。
+- 混淆离散函数的枚举位置 `i`、语义 key `f.key(i)` 与直接求值 `f(x)`。
+- 复制 view/离散函数后误以为已经复制元素；真正实例化应使用 `ncollect/ntabulate`。
 - Fenwick 区间 fold 使用了没有 inverse 的操作。
 - 对非交换 operation 改变左右合并顺序。
 - lazy `compose` 把 newer/older 写反。
@@ -1410,7 +2065,14 @@ python3 tools/audit_v2.py
 
 不要为了复用 STL 算法给 `ndeque` 或 view 补 iterator。直接实现 Nitori 能力版本。
 
-### 19.3 保护 view 生命周期
+### 19.3 离散函数先写清 position/key/value
+
+新增离散函数适配器必须明确三件事：输入序列中的整数代表源枚举位置还是语义 key，
+结果是否保留原 key，value 是引用还是值。位置选择基于 `ngather`，语义重定义域基于
+`nrestrict`；不要再创造一个含糊的 `select`。只有真正需要运行时查找/绑定时才落到
+`nmap/npartial`，不要把零分配函数胶水退化成哈希表。
+
+### 19.4 保护 view 生命周期
 
 - 借用 API 接受左值 owner。
 - 不在 view 中拥有元素副本。
@@ -1418,12 +2080,12 @@ python3 tools/audit_v2.py
 - 对临时 owner 的危险入口显式删除。
 - 测试 owner 修改和非连续访问。
 
-### 19.4 代数结构必须写出定律
+### 19.5 代数结构必须写出定律
 
 新增操作包写 `static constexpr nlaw laws`，单位元和逆元必须与运算一致。新增 lazy
 action 必须测试非交换 tag 组合；新增 segment 聚合必须用字符串拼接等非交换对象测试顺序。
 
-### 19.5 每个新算法的证据包
+### 19.6 每个新算法的证据包
 
 至少包含：
 
@@ -1438,86 +2100,230 @@ action 必须测试非交换 tag 组合；新增 segment 聚合必须用字符�
 
 ---
 
-## 20. 完整公共符号索引
+## 20. v1 到 v2 的迁移桥梁
 
-本索引用于搜索，不代替各章节的前提说明。
+v2 不再以“删掉旧能力换一个小而美的壳”为目标。它复用 v1 的竞赛经验，但把每个
+能力重新放进统一的所有权、view、枚举、代数和后端层级。迁移原则是：有真实替代就
+给出明确路径；没有等价替代就保留名字或单独后端，禁止静默消失。
 
-### 配置与基础
+### 20.1 已恢复的实现族
+
+| v1/习惯入口 | v2 主入口 | 后端或说明 |
+|---|---|---|
+| `nvector` | `nvector` | 自主 owner；`nvector_stl` 为同实现别名 |
+| `ndeque` | `ndeque` | 默认真正环形 `ndeque_ring`；`ndeque_stl` 为参考后端 |
+| `nheap` | `nheap` | 默认真正二叉堆 `nheap_binary` |
+| `nset` / `nbag` | 同名 | 默认 FHQ；另有 `nset_splay/nset_stl` |
+| `nmap` | `nmap` | 默认开放寻址 `nmap_flat`；另有 `nmap_hash/nmap_stl` |
+| `nrel` | `nrel` | 当前线性关系后端 `nrel_scan` |
+| 稀疏函数/部分函数 | `nfunc_hash` / `npartial` | 哈希绑定表，不与新 `nfunc` 混义 |
+| `nbije` / `ninj` | 同名 | 双向哈希实现 `nbije_hash` |
+| rank 双射/压缩 | `nbije_rank` / `ncompress` | STL 输入另用 `ncompress_stl` |
+| 可扩展有序树 AST | `nnode` + `naugment` | FHQ/splay 都实现，带 epoch 快照诊断 |
+| `npool` | `npool` | 1-based 可删除复用 handle；与 `narena` 分离 |
+| `nsparse` | `nsparse` | 升级为任意有序幺半群的 disjoint sparse table |
+| 势能并查集 | `npotential_dsu` | 差值约束与一致性检查 |
+| `ngraph` | `ngraph` | 默认 `ngraph_forward`；另有 `ngraph_csr/ngraph_list` |
+| 图过滤/遍历 | `ngraph_where/nvertices/narcs` | 零复制 capability view |
+| BFS/Dijkstra 路径 | `nbfs_path/ndijkstra_path` | `npath_result` 统一恢复路径 |
+| topo/SCC | `ntopo`、`nscc_*` | 默认迭代 Kosaraju，另有 Tarjan |
+| HLD/LCA | `nhld`、`nlca_binary` | 严格树入口仍为 `nlca` |
+| MST | `nprim/nkruskal` | 连通树或最小生成森林 |
+| `nflow` | `nflow_dinic` / `nflow` | 可 reset、限流、查边流量；push-relabel 保留为 `nmaxflow` |
+| `nbimatch` | `nbimatch_hopcroft` / `nbimatch` | 状态式加边、pairs、最小点覆盖 |
+| `nmod` / `ndmod` | 同名类型 | 静态/动态模整数，核心名 `nmodint/nmod_dynamic` |
+| 因数分解 | `npollard/nfactor` | uint64 Pollard-Rho；trial/miller 后端也可显式选 |
+| 概率/博弈 | `nprob/nnim/nxorbasis/nsg` | 各自保持清楚数学前提 |
+| `nmat` | `nmat` | 建立在现代 `nmatrix` owner/view 存储上 |
+| `npoly` | `npoly` | owner facade；卷积/FPS 函数接口仍可单独使用 |
+| 离散 Li Chao | `nlichao_static` | 坐标压缩；动态整数域入口仍为 `nlichao` |
+| 字符串短名 | `nprefix/nzfunc/nkmp` | 严格核心名仍保留 |
+| 几何短名 | `nonseg/nline2/nline_intersect` | epsilon 与精确入口并存 |
+
+### 20.2 五个有意的语义拆分
+
+1. **`nfunc`**：v2 的 `nfunc(domain,evaluator)` 是 `nview` 上层有限 keyed view；v1
+   关联式部分函数迁到 `nfunc_hash/npartial`。一个负责零分配组合，一个负责运行时绑定。
+2. **`nmod`**：`nmod<M>` 恢复为模整数类型；标量数学余数必须写 `nmodulo(x,m)`。
+3. **`nmatrix` / `nmat`**：前者负责存储、行列/对角 view 和显式 semiring 算法；后者
+   绑定 `Add/Mul`，提供 `+/*/pow/trans/eye` 的竞赛短桥。
+4. **`narena` / `npool`**：前者 0-based 连续 bump + rollback，后者 1-based 独立删除和
+   槽位复用。不能再用同一名字掩盖两种互斥生命周期。
+5. **`nlichao` / `nlichao_static`**：前者在线整数域动态开点，后者预知坐标、排序去重并
+   只允许查询离散点。
+
+### 20.3 循环宏迁移
+
+```cpp
+nfor(x, sequence)          // 单层循环
+nfori(i, x, sequence)      // 单层循环 + 枚举编号
+nforkv(k, v, sequence)     // 单层循环 + semantic key/value
+nrep(i, count)
+nrrep(i, count)
+```
+
+v2 的宏只展开成一个 range-for。`break` 退出整个宏循环，`continue` 前进一项，序列/
+次数只求值一次。旧内部辅助名 `nfor0/nfor1/nfori0/nfori1/nforkv0/nforkv1` 和
+`nrep0/nrep1/nrrep0/nrrep1` 不再是公共 API；它们的存在本来只是宏实现细节。
+
+### 20.4 不迁移实现内部名字
+
+旧 cursor/view 的实现名（例如 `nrange_cursor`、`nspan_cursor`、`nzip_cursor`、
+`nproduct_cursor`）和模块标签（例如 `nassoc`、`nfinite`、`nlinear`、`ngeom`）不构成
+用户能力，v2 不承诺逐字保留。公开替代分别是 `nenumerate/nenumerator_t`、对应 view
+构造器和本章索引中的真实算法类型。若旧代码直接依赖这些内部名字，应改写到能力接口，
+而不是再造一套冻结内部布局的兼容壳。
+
+根目录旧 `Nitori.h`、`Nitori_naive` 和旧报告都不是 v2 权威源。checked 与 unsafe
+来自同一组 `v2_src` 语义模块，不维护第三份“naive”实现；参考验证由独立暴力/property
+tests 承担。
+
+### 20.5 迁移验证顺序
+
+```text
+先以 v2/Nitori.h 编译
+→ 修正名字拆分和 [l,r)
+→ 检查 owner/view 与 position/key/value
+→ 运行旧样例和 v2 独立测试
+→ 用暴力对拍关键算法
+→ 最后换 v2_unsafe/Nitori.h 再编译运行
+```
+
+不要直接全局替换类型名后切 unsafe；checked 的契约失败正是迁移期要保留的诊断台架。
+
+---
+
+## 21. 完整公共符号索引
+
+本索引列出面向用户的稳定搜索入口，不代替各章节前提。`ni` 命名空间及 `ni_n*`
+宏支撑是实现细节；头文件中仅为拼装模板而暴露的 holder/cursor 类型也不是独立能力。
+
+### 配置、基础、检查与随机
 
 ```text
 npre nassert nversion nunsafe
 npos nwide_t ninf nninf nmaybe
-nchmin nchmax nlen nbitceil nless ngreater nequal
+nchmin nchmax nlen nbitceil
+nless ngreater nequal
+nrng nseed_value nrng_global nhash_seed nseed nhash
 ```
 
 ### 代数
 
 ```text
-nlaw nhas_law ndeclares nsemigroup nmonoid ngroup ncommutative_monoid nsemiring_laws nsemiring
-nexact_field nexact_field_element naction_laws naction nadd_group nadd nmul nxor nmin nmax naddsum_action
+nlaw nhas_law ndeclares nsemigroup nmonoid ngroup ncommutative_monoid
+nsemiring_laws nsemiring nexact_field nexact_field_element
+naction_laws naction nadd_group
+nadd nmul nxor nmin nmax naddsum_action npow
 ```
 
-### 引用、枚举与序列
+### 引用、枚举与组合 view
 
 ```text
 nspan nview nindexed nindex_reference_t nindex_value_t
 nreference_indexed nswappable_indexed ncontiguous_indexed nresizable nview_object nviewable_indexed
-nall nsub nstride ncollect
-nrange_t nrange nrep nrrep nenumerator_t nenumerable nenumerate nfor nfori nreverse nproject
-nzip_view nzip nproduct_view nproduct nwindow_view nwindows
-nvector ndeque narray
-nsort nreverse_inplace nfind nlower nupper nfold nunique_compact nunique
+nall nsub nstride
+nrange_t nrange nenumerator_t nenumerable nenumerate
+nkeyvalue_enumerable nfor nfori nforkv nrep nrrep
+nreverse nproject nzip_view nzip nproduct_view nproduct nwindow_view nwindows
+ncollect ntabulate
 ```
 
-### 机制、内存与有限对象
+### 离散函数
+
+```text
+ndiscrete_function ndiscrete nfunction_key_reference_t nfunction_key_t nfunc
+nfunction_keys_view nkeys nvalues nfunction_entries_view nentries nrestrict
+ncomposed_function ncompose nmap_values ngathered_function ngather
+nsubfunc nblock nfunction_blocks_view nblocks
+```
+
+### 拥有型序列与算法
+
+```text
+nvector nvector_stl ndeque_ring ndeque_stl ndeque
+nheap_binary nheap narray
+nsort nreverse_inplace nfind nlower nupper nfind_sorted nfold
+nunique_compact nunique nsort_unique
+```
+
+### 机制、内存、有限对象、关联对象与 AST
 
 ```text
 nscan nsuffix_scan nfirst_true nlast_true nrollback
-nscratch narena
-npartition npart nperm
+nscratch narena npool_dynamic npool
+npartition npart npart_dense nperm
+nbranch nnode nnode_tree nwalk naugment nempty_augment naugmented_tree nfirst_prefix nlast_suffix
+nset_fhq nset_splay nset_stl nset nbag
+nmap_flat nmap_hash nmap_stl nmap
+nrel_scan nrel npartial_hash nfunc_hash npartial
+nbije_hash nbije_rank nbije ninj ncompress ncompress_stl
 ```
 
-### 数据结构与离线
+### 数据结构与离线算法
 
 ```text
 nfenwick nseg nseg_iter nlazyseg nlazy_addsum
-nqueue_agg ndsu nrollback_dsu ndsu_rollback
-npersistent_seg nwavelet
+nqueue_agg ndsu nrollback_dsu ndsu_rollback npotential_dsu
+npersistent_seg nwavelet nsparse
 ninterval_query nmo_order nrun_mo
 ```
 
-### 图与树
+### 图、树、流与匹配
 
 ```text
-narc nedge_to nedge_weight ngraph_view ngraph_like ngraph_list
-nbfs ndijkstra ntoposort nscc nlca nreroot n01bfs
-nmst_result nprim nmaxflow
-nbipartite_matching nhopcroft_karp
+narc nedge nedge_to nedge_weight ncapadd
+ngraph_view ngraph_like ngraph_list ngraph_forward ngraph_csr ngraph
+nvertices ngraph_arcs_view narcs ngraph_where_view ngraph_where
+npath_result nbfs_path ndijkstra_path nbfs ndijkstra n01bfs
+ntoposort ntopo nscc nscc_kosaraju nscc_tarjan
+nlca nhld_segment nhld nlca_binary nreroot
+nmst_result nprim nkruskal
+nmaxflow nflow_dinic nflow
+nbipartite_matching nhopcroft_karp nbicover nbimatch_hopcroft nbimatch
 ```
 
-### 整数、组合、线性代数与多项式
+### 整数、模运算、组合与博弈
 
 ```text
-ninteger nmag nabs ngcd nlcm nfloor_div nceil_div nmod
-nextgcd_result nextgcd nmulmod npowmod nisprime nprimes
-nmodint ncomb
+ninteger nmag nabs ngcd_euclid ngcd_binary ngcd nlcm
+nfloor_div nceil_div nmodulo nextgcd_result nextgcd
+nmulmod npowmod nisprime nisprime_trial nisprime_miller nprimes npollard nfactor nfactor_rho
+nfrac ncongruence ncrt nprime_table
+nmodint nmod_static nmod nmod_dynamic ndmod ncomb
 nsubmask_range nsubmasks
 nzeta_subset nmobius_subset nzeta_superset nmobius_superset
 nfwht_xor nconv_or nconv_and nconv_xor
-nmatrix nmatrix_like nmatrix_identity nmatmul nmatpow
-nrref ndeterminant nlinear_solution nlinear_solve
-nconv_naive nconv_ntt nconv_auto nconv
-npoly_derivative npoly_integral npoly_evaluate nfps_inverse
+nxorbasis nprob nexpect nnim nsg_dag nsg
 ```
 
-### 字符串、几何、优化与 I/O
+### 矩阵、线性代数与多项式
 
 ```text
-nprefix_function nz_function nkmp_find npalindrome_index nmanacher
-nsuffix_array nlcp_array ntrie nac
-npoint ndot ncross norient ndist2 non_segment nsegment_intersect
-nconvex_hull npolygon_area2 nconvex_diameter2 nline_intersection
-nline_function nlichao nunimodal_arg
+nmatrix nmatrix_like nmatrix_identity nmatmul nmatpow nmat
+nrref ndeterminant ndet ninverse nlinear_solution nlinear_solve ngauss
+nntt_info nconv_naive nconv_ntt nconv_auto nconv
+npoly_derivative npoly_integral npoly_evaluate nfps_inverse npoly
+nberlekamp nrec_nth
+```
+
+### 字符串与自动机
+
+```text
+nprefix_function nprefix nz_function nzfunc nkmp_find nkmp
+npalindrome_index nmanacher nmanacher_result
+nsuffix_array nlcp_array
+nmatch ntrie nac
+```
+
+### 几何、优化与 I/O
+
+```text
+npoint ndot ncross norient ndist2 nsgn_eps nsign
+non_segment nonseg nsegment_intersect
+nline2 nline_intersect nline_intersection
+nconvex_hull npolygon_area2 npoint_in_poly nconvex_diameter2
+nline_function nlichao nline nlichao_static nunimodal_arg nternary_min
 ninput noutput nin nout nread nprint nprintln
 ```
 
