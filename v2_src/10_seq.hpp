@@ -72,6 +72,7 @@ template <class T> class nvector {
         npre(!empty());
         return storage_.front();
     }
+    T front(T fallback) const { return empty() ? move(fallback) : storage_.front(); }
     T& back() {
         npre(!empty());
         return storage_.back();
@@ -80,9 +81,33 @@ template <class T> class nvector {
         npre(!empty());
         return storage_.back();
     }
+    T back(T fallback) const { return empty() ? move(fallback) : storage_.back(); }
+
+    void del(int index) {
+        npre(0 <= index && index < len());
+        storage_.erase(storage_.begin() + index);
+    }
+    T swapdel(int index) {
+        npre(0 <= index && index < len());
+        T result = move(storage_[index]);
+        if (index + 1 < len())
+            storage_[index] = move(storage_.back());
+        storage_.pop_back();
+        return result;
+    }
+    nvector& operator+=(const T& value) {
+        push(value);
+        return *this;
+    }
+    nvector& operator+=(T&& value) {
+        push(move(value));
+        return *this;
+    }
 
     friend bool operator==(const nvector&, const nvector&) = default;
 };
+
+template <class T> using nvector_stl = nvector<T>;
 
 namespace ni {
 template <class T> struct nowned_value_impl {
@@ -131,14 +156,14 @@ auto ntabulate(G&& function) {
     return ncollect(forward<G>(function));
 }
 
-template <class T> class ndeque {
+template <class T> class ndeque_stl {
     deque<T> storage_;
 
   public:
     using value_type = T;
 
-    ndeque() = default;
-    ndeque(initializer_list<T> values) : storage_(values) {}
+    ndeque_stl() = default;
+    ndeque_stl(initializer_list<T> values) : storage_(values) {}
 
     int len() const noexcept {
         npre(storage_.size() <= size_t(INT_MAX));
@@ -189,6 +214,7 @@ template <class T> class ndeque {
         npre(!empty());
         return storage_.front();
     }
+    T front(T fallback) const { return empty() ? move(fallback) : storage_.front(); }
     T& back() {
         npre(!empty());
         return storage_.back();
@@ -197,8 +223,171 @@ template <class T> class ndeque {
         npre(!empty());
         return storage_.back();
     }
+    T back(T fallback) const { return empty() ? move(fallback) : storage_.back(); }
     void clear() noexcept { storage_.clear(); }
+
+    ndeque_stl& operator+=(const T& value) {
+        pushr(value);
+        return *this;
+    }
+    ndeque_stl& operator+=(T&& value) {
+        pushr(move(value));
+        return *this;
+    }
 };
+
+template <class T> class ndeque_ring {
+    vector<optional<T>> storage_;
+    int first_ = 0, size_ = 0;
+
+    int physical(int index) const {
+        npre(cap() > 0);
+        return (first_ + index) & (cap() - 1);
+    }
+    void rebuild(int capacity) {
+        npre(capacity > size_ && has_single_bit(unsigned(capacity)));
+        auto next = vector<optional<T>>(size_t(capacity));
+        for (int index = 0; index < size_; ++index)
+            next[index].emplace(move_if_noexcept((*this)[index]));
+        storage_.swap(next);
+        first_ = 0;
+    }
+    void grow() {
+        npre(cap() <= INT_MAX / 2);
+        rebuild(cap() ? 2 * cap() : 1);
+    }
+
+  public:
+    using value_type = T;
+
+    ndeque_ring() = default;
+    ndeque_ring(const ndeque_ring&) = default;
+    ndeque_ring& operator=(const ndeque_ring&) = default;
+    ndeque_ring(ndeque_ring&& other) noexcept
+        : storage_(move(other.storage_)), first_(exchange(other.first_, 0)),
+          size_(exchange(other.size_, 0)) {}
+    ndeque_ring& operator=(ndeque_ring&& other) noexcept {
+        if (this != addressof(other)) {
+            storage_ = move(other.storage_);
+            first_ = exchange(other.first_, 0);
+            size_ = exchange(other.size_, 0);
+        }
+        return *this;
+    }
+    ndeque_ring(initializer_list<T> values) {
+        reserve(int(values.size()));
+        for (const T& value : values)
+            pushr(value);
+    }
+
+    int len() const noexcept { return size_; }
+    int cap() const noexcept {
+        npre(storage_.size() <= size_t(INT_MAX));
+        return int(storage_.size());
+    }
+    bool empty() const noexcept { return size_ == 0; }
+    void reserve(int capacity) {
+        npre(capacity >= 0);
+        if (capacity <= cap())
+            return;
+        unsigned target = bit_ceil(unsigned(capacity));
+        npre(target <= unsigned(INT_MAX));
+        rebuild(int(target));
+    }
+
+    T& operator[](int index) {
+        npre(0 <= index && index < size_);
+        return *storage_[physical(index)];
+    }
+    const T& operator[](int index) const {
+        npre(0 <= index && index < size_);
+        return *storage_[physical(index)];
+    }
+    T* get(int index) noexcept {
+        return 0 <= index && index < size_ ? addressof(*storage_[physical(index)]) : nullptr;
+    }
+    const T* get(int index) const noexcept {
+        return 0 <= index && index < size_ ? addressof(*storage_[physical(index)]) : nullptr;
+    }
+    T get(int index, T fallback) const {
+        return 0 <= index && index < size_ ? (*this)[index] : move(fallback);
+    }
+
+    template <class... A> T& pushr(A&&... arguments) {
+        if (size_ == cap())
+            grow();
+        int index = physical(size_);
+        npre(!storage_[index]);
+        storage_[index].emplace(forward<A>(arguments)...);
+        ++size_;
+        return *storage_[index];
+    }
+    template <class... A> T& pushl(A&&... arguments) {
+        if (size_ == cap())
+            grow();
+        first_ = (first_ - 1) & (cap() - 1);
+        npre(!storage_[first_]);
+        storage_[first_].emplace(forward<A>(arguments)...);
+        ++size_;
+        return *storage_[first_];
+    }
+    T popr() {
+        npre(!empty());
+        int index = physical(size_ - 1);
+        T result = move(*storage_[index]);
+        storage_[index].reset();
+        --size_;
+        if (!size_)
+            first_ = 0;
+        return result;
+    }
+    T popl() {
+        npre(!empty());
+        int index = first_;
+        T result = move(*storage_[index]);
+        storage_[index].reset();
+        --size_;
+        first_ = size_ ? (first_ + 1) & (cap() - 1) : 0;
+        return result;
+    }
+    T popr(T fallback) { return empty() ? move(fallback) : popr(); }
+    T popl(T fallback) { return empty() ? move(fallback) : popl(); }
+
+    T& front() {
+        npre(!empty());
+        return (*this)[0];
+    }
+    const T& front() const {
+        npre(!empty());
+        return (*this)[0];
+    }
+    T front(T fallback) const { return empty() ? move(fallback) : (*this)[0]; }
+    T& back() {
+        npre(!empty());
+        return (*this)[size_ - 1];
+    }
+    const T& back() const {
+        npre(!empty());
+        return (*this)[size_ - 1];
+    }
+    T back(T fallback) const { return empty() ? move(fallback) : (*this)[size_ - 1]; }
+
+    void clear() noexcept {
+        for (int index = 0; index < size_; ++index)
+            storage_[physical(index)].reset();
+        first_ = size_ = 0;
+    }
+    ndeque_ring& operator+=(const T& value) {
+        pushr(value);
+        return *this;
+    }
+    ndeque_ring& operator+=(T&& value) {
+        pushr(move(value));
+        return *this;
+    }
+};
+
+template <class T> using ndeque = ndeque_ring<T>;
 
 template <class T, class C = nless<T>> class nheap_binary {
     nvector<T> values_;

@@ -28,4 +28,18 @@ int main() {
         reference.pop_back();
     }
     ntest(d.empty() && d.popl(8) == 8);
+
+    ndeque_ring<string> ring{"b", "c"};
+    ring.pushl("a");
+    ring.pushr("d");
+    auto copy = ring;
+    auto moved = move(copy);
+    ntest(moved.len() == 4 && moved[0] == "a" && moved[3] == "d");
+    ntest(copy.empty());
+    nsort(moved, ngreater<>());
+    ntest(moved[0] == "d" && moved[3] == "a");
+
+    ndeque_stl<int> reference_backend{3, 1, 2};
+    nsort(reference_backend);
+    ntest(reference_backend[0] == 1 && reference_backend[2] == 3);
 }

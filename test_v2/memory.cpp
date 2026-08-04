@@ -23,4 +23,16 @@ int main() {
     ntest(arena.len() == 1 && arena.get(child) == nullptr);
     int reused = arena.make(root, 12);
     ntest(reused == child && arena[reused].value == 12);
+
+    npool<record> pool;
+    pool.reserve(8);
+    int first_handle = pool.make(npos, 3);
+    int second_handle = pool.make(first_handle, 7);
+    ntest(first_handle == 1 && second_handle == 2 && pool.len() == 2);
+    pool.del(first_handle);
+    ntest(pool.get(first_handle) == nullptr && pool.len() == 1);
+    int recycled = pool.make(second_handle, 11);
+    ntest(recycled == first_handle && pool[recycled].parent == second_handle);
+    pool.clear();
+    ntest(pool.empty() && pool.cap() == 0);
 }
