@@ -22,6 +22,17 @@ template <signed_integral T> class nrange_t {
         return int(count);
     }
     constexpr bool empty() const { return len() == 0; }
+    constexpr int position(T value) const {
+        __int128_t distance = step_ > 0 ? __int128_t(value) - __int128_t(first_)
+                                        : __int128_t(first_) - __int128_t(value);
+        if (distance < 0)
+            return npos;
+        __int128_t stride = step_ > 0 ? __int128_t(step_) : -__int128_t(step_);
+        if (distance % stride != 0)
+            return npos;
+        __int128_t index = distance / stride;
+        return index < len() ? int(index) : npos;
+    }
     constexpr T operator[](int index) const {
         npre(0 <= index && index < len());
         return T(__int128_t(first_) + __int128_t(index) * __int128_t(step_));

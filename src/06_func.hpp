@@ -109,7 +109,8 @@ template <class A> using nfunction_key_t = remove_cvref_t<nfunction_key_referenc
 
 template <class D, class F>
     requires nindexed<remove_reference_t<D>> &&
-             (is_lvalue_reference_v<D&&> || constructible_from<remove_cvref_t<D>, D&&>)
+             (is_lvalue_reference_v<D&&> || constructible_from<remove_cvref_t<D>, D&&>) &&
+             invocable<F&, nindex_reference_t<remove_reference_t<D>>>
 constexpr auto nfunc(D&& domain, F evaluate) {
     auto holder = ni::nhold_object(forward<D>(domain));
     return ndiscrete_function<decltype(holder), F>(move(holder), move(evaluate));

@@ -12,6 +12,7 @@
 23_ordered.hpp
 24_map.hpp
 25_relation.hpp
+26_func_more.hpp
 30_ds.hpp
 31_lazy.hpp
 32_dsu_queue.hpp
