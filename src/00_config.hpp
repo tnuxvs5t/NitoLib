@@ -1,8 +1,8 @@
 #include <bits/stdc++.h>
 using namespace std;
 
-#if defined(NITORI_V2_CHECKED) == defined(NITORI_V2_UNSAFE)
-#error "exactly one Nitori v2 profile must be selected"
+#if defined(NITORI_X_CHECKED) == defined(NITORI_X_UNSAFE)
+#error "exactly one Nitori X profile must be selected"
 #endif
 
 namespace ni {
@@ -12,7 +12,7 @@ namespace ni {
 }
 } // namespace ni
 
-#if defined(NITORI_V2_UNSAFE)
+#if defined(NITORI_X_UNSAFE)
 #if defined(__GNUC__) || defined(__clang__)
 #define npre(expr)                                                                                                    \
     do {                                                                                                              \
@@ -33,7 +33,7 @@ namespace ni {
 #define nassert(expr) npre(expr)
 
 inline constexpr int nversion = 20000;
-#if defined(NITORI_V2_UNSAFE)
+#if defined(NITORI_X_UNSAFE)
 inline constexpr bool nunsafe = true;
 #else
 inline constexpr bool nunsafe = false;

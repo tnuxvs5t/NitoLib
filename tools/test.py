@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile and run v2 tests through anonymous Linux memfd executables."""
+"""Compile and run Nitori X tests through anonymous Linux memfd executables."""
 
 from __future__ import annotations
 
@@ -13,11 +13,11 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parents[1]
-TEST_ROOT = ROOT / "test_v2"
+TEST_ROOT = ROOT / "test"
 
 
 def compile_to_memfd(source: Path, profile: str, sanitize: bool) -> int:
-    fd = os.memfd_create(f"nitori-v2-{source.stem}", 0)
+    fd = os.memfd_create(f"nitori-x-{source.stem}", 0)
     flags = [
         "g++",
         "-std=gnu++20",
@@ -32,7 +32,7 @@ def compile_to_memfd(source: Path, profile: str, sanitize: bool) -> int:
     else:
         flags += ["-O2"]
     if profile == "unsafe":
-        flags += ["-DNITORI_TEST_UNSAFE=1", "-DNDEBUG"]
+        flags += ["-DNITORI_X_TEST_UNSAFE=1", "-DNDEBUG"]
     flags += [str(source), "-o", f"/proc/self/fd/{fd}"]
     result = subprocess.run(flags, cwd=ROOT, pass_fds=(fd,))
     if result.returncode:
@@ -70,7 +70,7 @@ def main() -> int:
         selected = {name.removesuffix(".cpp") for name in args.tests}
         sources = [source for source in sources if source.stem in selected]
     if not sources:
-        print("no matching v2 tests", file=sys.stderr)
+        print("no matching Nitori X tests", file=sys.stderr)
         return 2
 
     for profile in profiles:
@@ -91,7 +91,7 @@ def main() -> int:
             elif code != 0:
                 print(f"failed with exit code {code}: {source}", file=sys.stderr)
                 return 1
-    print("v2 test bench passed")
+    print("Nitori X test bench passed")
     return 0
 
 

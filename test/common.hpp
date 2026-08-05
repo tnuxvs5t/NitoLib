@@ -1,9 +1,9 @@
 #pragma once
 
-#ifdef NITORI_TEST_UNSAFE
-#include "../v2_unsafe/Nitori.h"
+#ifdef NITORI_X_TEST_UNSAFE
+#include "../Nitori_unsafe.h"
 #else
-#include "../v2/Nitori.h"
+#include "../Nitori.h"
 #endif
 
 #define ntest(expr)                                                                                                   \

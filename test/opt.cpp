@@ -1,7 +1,77 @@
-#include"../Nitori.h"
+#include "common.hpp"
 
-int main(){
-    assert(nfirst_true(0,100,[](int x){return x*x>=900;})==30);assert(nfirst_true(0,10,[](int){return false;},77)==77&&nfirst_true(0,10,[](int){return true;},77)==0);assert(nlast_true(0,20,[](int x){return x*x<100;}).val()==9&&nlast_true(0,20,[](int){return false;},88)==88&&nlast_true(0,20,[](int){return true;}).val()==20&&nlast_true(7,7,[](int){return true;}).val()==7&&!nlast_true(7,7,[](int){return false;}));double x=nternary_min(-10.,10.,[](double y){return(y-2)*(y-2)+3;});assert(abs(x-2)<1e-7);
-    nvector<long long>xs{-5,-2,0,1,4,9};nlichao<long long>q(xs);vector<nline<long long>>all{{2,3},{-1,7},{0,4}};for(auto f:all)q.add(f);nfor(v,xs){__int128 z=(__int128(1)<<120);for(auto f:all)z=min(z,f(v));assert(q.get(v).val()==z);}assert(!q.get(3)&&q.get(3,__int128(77))==77);nlichao<long long>seg(xs);seg.addseg({1,0},-2,5);seg.addseg({-2,10},0,10);nrep(i,xs.len()){nmaybe<__int128>z;if(-2<=xs[i]&&xs[i]<5)z=xs[i];if(0<=xs[i]&&xs[i]<10){__int128 y=-2*__int128(xs[i])+10;if(!z||y<z.val())z=y;}assert(bool(seg.get(xs[i]))==bool(z));if(z)assert(seg.get(xs[i]).val()==z.val());}
-    nprob<double>pr{1,2,3};assert(pr.sum()==6);auto pn=pr.normalized();assert(pn&&abs(pn->sum()-1)<1e-12&&abs(pn->expect([](int i){return double(i);})-4.0/3)<1e-12);nseed(8);assert(0<=pr.draw()&&pr.draw()<3);nnim<unsigned>nim(nvector<unsigned>{3,4,5});assert(nim.win()&&nim.winning().val().second<nim.h[nim.winning().val().first]);
+int main() {
+    nlichao<long long> minimum(-100, 101);
+    ntest(!minimum.query(0));
+    minimum.add(2, 3);
+    minimum.add(-1, 7);
+    ntest(minimum.query(-10).val() == -17);
+    ntest(minimum.query(10).val() == -3);
+
+    mt19937 random(0x71c4a0U);
+    struct segment_line {
+        long long slope, intercept, left, right;
+    };
+    for (int repeat = 0; repeat < 220; ++repeat) {
+        nlichao<long long> tree(-50, 51);
+        nvector<segment_line> lines;
+        int count = 1 + random() % 80;
+        for (int i = 0; i < count; ++i) {
+            long long slope = int(random() % 41) - 20;
+            long long intercept = int(random() % 101) - 50;
+            long long left = int(random() % 101) - 50;
+            long long right = left + 1 + random() % (51 - left);
+            lines.push(slope, intercept, left, right);
+            tree.add_segment(slope, intercept, left, right);
+        }
+        for (long long x = -50; x <= 50; ++x) {
+            nmaybe<__int128_t> brute;
+            for (int i = 0; i < lines.len(); ++i)
+                if (lines[i].left <= x && x < lines[i].right) {
+                    __int128_t value = __int128_t(lines[i].slope) * x + lines[i].intercept;
+                    if (!brute || value < brute.val())
+                        brute = value;
+                }
+            auto got = tree.query(x);
+            ntest(bool(got) == bool(brute));
+            if (got)
+                ntest(got.val() == brute.val());
+        }
+    }
+
+    nlichao<long long, ngreater<__int128_t>> maximum(-20, 21);
+    maximum.add(3, -2);
+    maximum.add(-4, 5);
+    for (long long x = -20; x <= 20; ++x)
+        ntest(maximum.query(x).val() == max(3 * x - 2, -4 * x + 5));
+
+    auto bowl = [](long long x) { return (x - 37) * (x - 37) + 9; };
+    ntest(nunimodal_arg(-100LL, 101LL, bowl) == 37);
+    auto hill = [](long long x) { return 1000 - (x + 11) * (x + 11); };
+    ntest(nunimodal_arg(-100LL, 101LL, hill, ngreater<>{}) == -11);
+
+    nvector<long long> calls;
+    ntest(nunimodal_arg(0LL, 10LL, [&](long long x) {
+              calls.push(x);
+              return (x - 4) * (x - 4);
+          }) == 4);
+    ntest(calls.len() >= 2 && calls[0] == 3 && calls[1] == 6);
+
+    nvector<long long> coordinates{-10, -3, 0, 4, 4, 11};
+    nlichao_static<long long> compressed(coordinates);
+    ntest(compressed.len() == 5 && compressed.hasx(4) && !compressed.hasx(5));
+    compressed.add(nline<long long>{2, 3});
+    compressed.add(nline<long long>{-1, 7});
+    ntest(compressed.get(-10).val() == -17);
+    ntest(compressed.get(11).val() == -4);
+    ntest(!compressed.get(5) && compressed(5, __int128_t(123)) == 123);
+
+    nlichao_static<long long> segmented(coordinates);
+    segmented.addseg(nline<long long>{1, 0}, -3, 11);
+    ntest(!segmented.get(-10));
+    ntest(segmented.get(-3).val() == -3 && segmented.get(4).val() == 4);
+    ntest(!segmented.get(11));
+
+    auto continuous = [](long double x) { return (x - 2.5L) * (x - 2.5L); };
+    ntest(abs(nternary_min(-10.0L, 10.0L, continuous) - 2.5L) < 1e-9L);
 }

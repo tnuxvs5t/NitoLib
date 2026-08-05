@@ -1,12 +1,12 @@
-# NitoriSTL v2 contributor contract
+# Nitori X contributor contract
 
-This repository develops Nitori v2, a GNU++20 single-header competitive-programming
-system. Before changing the library, read the canonical artifacts:
+Nitori X is a GNU++20 single-header competitive-programming system. Before changing the
+library, read the canonical artifacts:
 
 ```text
-Public checked implementation: /home/tnuzy/NitoriSTL/v2/Nitori.h
+Public checked implementation: /home/tnuzy/NitoriSTL/Nitori.h
 Canonical user document:       /home/tnuzy/NitoriSTL/NITORI_DOCUMENT.md
-Semantic source order:          /home/tnuzy/NitoriSTL/v2_src/manifest.txt
+Semantic source order:          /home/tnuzy/NitoriSTL/src/manifest.txt
 ```
 
 No skill, asset, contest directory, report or cache is an API authority. Do not create
@@ -14,12 +14,13 @@ another Nitori reference document or header snapshot.
 
 ## Product boundary
 
-- `v2/Nitori.h` is the checked generated header.
-- `v2_unsafe/Nitori.h` is the optimizer-assumption generated header.
-- Both come from the same ordered `v2_src/*.hpp` modules.
-- `test_v2/` is the independent valid-input and property test suite.
-- The root legacy `Nitori.h`, `REPORT.md`, old tests and old build artifacts are not v2
-  implementation sources and must not be consulted to invent v2 behavior.
+- `Nitori.h` is the checked generated header and canonical public implementation.
+- `Nitori_unsafe.h` is the optimizer-assumption generated header.
+- Both come from the same ordered `src/*.hpp` modules.
+- `test/` is the independent valid-input, death and property test suite.
+- `bench/` and `tools/` belong to the maintained Nitori X evidence bench.
+- Legacy implementations, reports, build artifacts and copied headers do not belong in
+  this repository.
 
 ## Design laws
 
@@ -48,25 +49,26 @@ storage backend, static capacity, persistence or rollback.
 
 ## Change workflow
 
-1. Search the checked header, canonical Document and nearest v2 test for the exact symbol.
+1. Search `Nitori.h`, the canonical Document and the nearest test for the exact symbol.
 2. Identify the public contract, mathematical invariant, failure boundary and complexity.
-3. Edit semantic modules in `v2_src/`; never edit generated headers independently.
+3. Edit semantic modules in `src/`; never edit generated headers independently.
 4. Use `apply_patch` for every repository file creation, change, move or deletion.
 5. Add the smallest fixed regression test and an independent brute/property test when
    the algorithm is subtle.
-6. Run the narrow checked/unsafe test before the full gate.
+6. Run the narrow checked/unsafe test before any wider gate.
 7. Update `NITORI_DOCUMENT.md` whenever public API, semantics, laws, complexity or recipes
    change. Do not add another reference file.
 
 ```bash
 cd /home/tnuzy/NitoriSTL
-python3 tools/amalgamate_v2.py
-python3 tools/amalgamate_v2.py --check
-python3 tools/test_v2.py TEST_STEM
-python3 tools/test_v2.py
-python3 tools/audit_v2.py
+python3 tools/amalgamate.py
+python3 tools/amalgamate.py --check
+python3 tools/test.py TEST_STEM
+python3 tools/test.py
+python3 tools/audit.py
 ```
 
+Full tests and sanitizer audits are milestone gates, not a reflex after every local edit.
 Tests compile through Linux `memfd`; do not leave build binaries in the repository.
 
 ## Review checklist
@@ -81,6 +83,6 @@ Tests compile through Linux `memfd`; do not leave build binaries in the reposito
 [ ] ordered operations preserve left-to-right meaning
 [ ] complexity matches the implementation and total constraints
 [ ] fixed and randomized tests cover the failure mode
-[ ] both profiles and sanitizers pass
-[ ] no duplicate authority was created
+[ ] both profiles pass the validation budget selected for this change
+[ ] no duplicate authority or legacy artifact was created
 ```

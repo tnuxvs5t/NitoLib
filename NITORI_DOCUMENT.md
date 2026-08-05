@@ -1,12 +1,12 @@
-# Nitori Competitive Programming v2
+# Nitori X
 
 > 从第一份可提交程序，到零成本 view、离散函数与竞赛算法装配的唯一权威文档
 >
 > 适用版本：`nversion == 20000`
 >
-> checked 头文件：`/home/tnuzy/NitoriSTL/v2/Nitori.h`
+> checked 头文件：`/home/tnuzy/NitoriSTL/Nitori.h`
 >
-> unsafe 头文件：`/home/tnuzy/NitoriSTL/v2_unsafe/Nitori.h`
+> unsafe 头文件：`/home/tnuzy/NitoriSTL/Nitori_unsafe.h`
 
 本文同时承担两件事：前半部分让第一次接触 Nitori 的选手尽快写题，后半部分提供
 可检索、可验证的完整 API 契约。不要先背完整符号表；先掌握下面这条主线：
@@ -16,12 +16,12 @@
 → 明确物化 ncollect → 数据结构/图论/数学 → nfunc 与自定义扩展
 ```
 
-Nitori v2 是面向算法竞赛的 GNU C++20 单头文件系统。它不是给 STL 名字机械加 `n`，
+Nitori X 是面向算法竞赛的 GNU C++20 单头文件系统。它不是给 STL 名字机械加 `n`，
 也不是要求选手先学一套工程框架。它要解决的是：让一份算法能够直接作用在 vector、
 deque、矩阵行列、步长序列、lambda 映射位置和离散函数上，同时保持代码短、引用真实、
 复杂度明确，并在训练阶段尽早抓住越界和错误前提。
 
-本文是 Nitori v2 唯一的用户文档原稿。不得在 skill、比赛目录、assets 或其他
+本文是 Nitori X 唯一的用户文档原稿。不得在 skill、比赛目录、assets 或其他
 reference 中复制本文或头文件。公共签名与真实行为以 checked 头文件为最终事实；
 数学前提、使用语义、复杂度和工作流以本文为最终说明。若二者不一致，停止扩散，
 以实现和测试重建结论并立即修正文档。
@@ -78,7 +78,7 @@ reference 中复制本文或头文件。公共签名与真实行为以 checked �
 17. [典型装配配方](#17-典型装配配方)
 18. [调试、测试与提交工作流](#18-调试测试与提交工作流)
 19. [扩展 Nitori 的规则](#19-扩展-nitori-的规则)
-20. [v1 到 v2 的迁移桥梁](#20-v1-到-v2-的迁移桥梁)
+20. [旧版到 Nitori X 的迁移桥梁](#20-旧版到-nitori-x-的迁移桥梁)
 21. [完整公共符号索引](#21-完整公共符号索引)
 
 ---
@@ -97,12 +97,12 @@ Nitori 读入数据、保存序列、遍历、排序、切片、输出，并知�
 ```
 
 训练和调试时使用 checked 头。可以把
-`/home/tnuzy/NitoriSTL/v2/Nitori.h` 放在源码旁边，也可以保留权威文件并添加 include
+`/home/tnuzy/NitoriSTL/Nitori.h` 放在源码旁边，也可以保留权威文件并添加 include
 路径：
 
 ```bash
 g++ -std=gnu++20 -O2 -Wall -Wextra \
-    -I/home/tnuzy/NitoriSTL/v2 solution.cpp
+    -I/home/tnuzy/NitoriSTL solution.cpp
 ```
 
 最小环境自检：
@@ -118,7 +118,7 @@ int main() {
 }
 ```
 
-如果 `nmatrix`、`nsub`、`nassign` 等 v2 名字突然“未声明”，先检查实际包含了哪个
+如果 `nmatrix`、`nsub`、`nassign` 等名字突然“未声明”，先检查实际包含了哪个
 `Nitori.h`。`#include "Nitori.h"` 会优先搜索源码所在目录；附近残留的 v1/旧副本会
 覆盖 `-I` 路径。保留上面的 `nversion` 自检，或者用编译器的 include trace 定位，
 不要在错误头文件上继续猜 API。
@@ -543,19 +543,19 @@ C++ concept 只能验证语法，不能证明结合律、单位元、交换律�
 
 | 项目 | checked | unsafe |
 |---|---|---|
-| 文件 | `v2/Nitori.h` | `v2_unsafe/Nitori.h` |
+| 文件 | `Nitori.h` | `Nitori_unsafe.h` |
 | `nunsafe` | `false` | `true` |
 | `npre(false)` | 打印表达式、文件、行号后 `abort()` | `__builtin_unreachable()` |
 | 合法输入语义 | 与 unsafe 相同 | 与 checked 相同 |
 | 用途 | 训练、开发、调试、性质测试 | 已验证的竞赛提交 |
 
-两个头文件由 `v2_src/manifest.txt` 的同一语义源生成。任何手改生成头都会被
+两个头文件由 `src/manifest.txt` 的同一语义源生成。任何手改生成头都会被
 freshness 审计拒绝。
 
 ```bash
 cd /home/tnuzy/NitoriSTL
-python3 tools/amalgamate_v2.py --check
-python3 tools/audit_v2.py
+python3 tools/amalgamate.py --check
+python3 tools/audit.py
 ```
 
 ---
@@ -1896,7 +1896,7 @@ Kőnig 定理从最大匹配恢复最小点覆盖，额外 `O(V+E)`。
 | `npollard(value)` | Pollard-Rho 找一个非平凡因子；质数返回自身 |
 | `nfactor/nfactor_rho` | uint64 完整质因数，按非降序且保留重数 |
 
-`nmod(x,m)` 不再是标量函数，因为 v2 恢复了 v1 的模整数类型名 `nmod<M>`；机械迁移
+`nmod(x,m)` 不再是标量函数，因为 Nitori X 保留模整数类型名 `nmod<M>`；机械迁移
 标量余数时必须改成 `nmodulo(x,m)`，不能让同名承担两个互斥语义。
 
 ### 12.2 静态与动态模整数
@@ -2496,7 +2496,7 @@ auto distance = nbfs(graph, source);
 → 缩小并手算
 ```
 
-v2 自身的 property tests 就采用这一模式；复杂结构不能靠样例一次通过证明正确。
+Nitori X 自身的 property tests 就采用这一模式；复杂结构不能靠样例一次通过证明正确。
 
 ### 17.8 二维 DP 行的初始化与检查点复制
 
@@ -2554,29 +2554,29 @@ nassign(weight, items, &item::weight);
 - NTT 长度不整除 `mod-1`。
 - unsafe 中依赖 checked 的错误恢复；unsafe 没有恢复语义。
 
-### 18.2 v2 测试命令
+### 18.2 Nitori X 测试命令
 
 ```bash
 cd /home/tnuzy/NitoriSTL
 
 # 确认生成头没有漂移
-python3 tools/amalgamate_v2.py --check
+python3 tools/amalgamate.py --check
 
 # 最窄双 profile 测试
-python3 tools/test_v2.py seq poly matching
+python3 tools/test.py seq poly matching
 
 # 全量 checked + unsafe
-python3 tools/test_v2.py
+python3 tools/test.py
 
 # 单 profile sanitizer
-python3 tools/test_v2.py --profile checked --sanitize
-python3 tools/test_v2.py --profile unsafe --sanitize
+python3 tools/test.py --profile checked --sanitize
+python3 tools/test.py --profile unsafe --sanitize
 
 # 完整发布门禁
-python3 tools/audit_v2.py
+python3 tools/audit.py
 
 # 确定性微基准（数值依机器而变）
-python3 tools/bench_v2.py
+python3 tools/bench.py
 ```
 
 测试编译到 Linux `memfd`，不会在仓库留下二进制。
@@ -2586,19 +2586,19 @@ python3 tools/bench_v2.py
 正式语义模块列于：
 
 ```text
-/home/tnuzy/NitoriSTL/v2_src/manifest.txt
+/home/tnuzy/NitoriSTL/src/manifest.txt
 ```
 
 修改模块后：
 
 ```bash
-python3 tools/amalgamate_v2.py
-python3 tools/amalgamate_v2.py --check
-python3 tools/test_v2.py <相关测试>
-python3 tools/audit_v2.py
+python3 tools/amalgamate.py
+python3 tools/amalgamate.py --check
+python3 tools/test.py <相关测试>
+python3 tools/audit.py
 ```
 
-禁止直接编辑 `v2/Nitori.h` 或 `v2_unsafe/Nitori.h`。
+禁止直接编辑 `Nitori.h` 或 `Nitori_unsafe.h`。
 
 ---
 
@@ -2659,15 +2659,15 @@ action 必须测试非交换 tag 组合；新增 segment 聚合必须用字符�
 
 ---
 
-## 20. v1 到 v2 的迁移桥梁
+## 20. 旧版到 Nitori X 的迁移桥梁
 
-v2 不再以“删掉旧能力换一个小而美的壳”为目标。它复用 v1 的竞赛经验，但把每个
+Nitori X 不以“删掉旧能力换一个小而美的壳”为目标。它复用旧版竞赛经验，但把每个
 能力重新放进统一的所有权、view、枚举、代数和后端层级。迁移原则是：有真实替代就
 给出明确路径；没有等价替代就保留名字或单独后端，禁止静默消失。
 
 ### 20.1 已恢复的实现族
 
-| v1/习惯入口 | v2 主入口 | 后端或说明 |
+| 旧版/习惯入口 | Nitori X 主入口 | 后端或说明 |
 |---|---|---|
 | `nvector` | `nvector` | 自主 owner；`nvector_stl` 为同实现别名 |
 | `ndeque` | `ndeque` | 默认真正环形 `ndeque_ring`；`ndeque_stl` 为参考后端 |
@@ -2701,9 +2701,9 @@ v2 不再以“删掉旧能力换一个小而美的壳”为目标。它复用 v
 
 ### 20.2 六个有意的语义拆分
 
-1. **`nspan` / `nview`**：v2 只保留 `nview<T,Accessor>`。连续性由 accessor 是否暴露
+1. **`nspan` / `nview`**：Nitori X 只保留 `nview<T,Accessor>`。连续性由 accessor 是否暴露
    `data()` 静态决定；`nview<T>` 就是原连续借用的零开销入口，不再维护两套切片体系。
-2. **`nfunc`**：v2 的 `nfunc(domain,evaluator)` 是 `nview` 上层有限 keyed view；v1
+2. **`nfunc`**：Nitori X 的 `nfunc(domain,evaluator)` 是 `nview` 上层有限 keyed view；旧版
    关联式部分函数迁到 `nfunc_hash/npartial`。一个负责零分配组合，一个负责运行时绑定。
 3. **`nmod`**：`nmod<M>` 恢复为模整数类型；标量数学余数必须写 `nmodulo(x,m)`。
 4. **`nmatrix` / `nmat`**：前者负责存储、行列/对角 view 和显式 semiring 算法；后者
@@ -2723,7 +2723,7 @@ nrep(i, count)
 nrrep(i, count)
 ```
 
-v2 的宏只展开成一个 range-for。`break` 退出整个宏循环，`continue` 前进一项，序列/
+Nitori X 的宏只展开成一个 range-for。`break` 退出整个宏循环，`continue` 前进一项，序列/
 次数只求值一次。旧内部辅助名 `nfor0/nfor1/nfori0/nfori1/nforkv0/nforkv1` 和
 `nrep0/nrep1/nrrep0/nrrep1` 不再是公共 API；它们的存在本来只是宏实现细节。
 
@@ -2731,23 +2731,23 @@ v2 的宏只展开成一个 range-for。`break` 退出整个宏循环，`continu
 
 旧 cursor/view 的实现名（例如 `nrange_cursor`、`nspan_cursor`、`nzip_cursor`、
 `nproduct_cursor`）和模块标签（例如 `nassoc`、`nfinite`、`nlinear`、`ngeom`）不构成
-用户能力，v2 不承诺逐字保留。公开替代分别是 `nenumerate/nenumerator_t`、对应 view
+用户能力，Nitori X 不承诺逐字保留。公开替代分别是 `nenumerate/nenumerator_t`、对应 view
 构造器和本章索引中的真实算法类型。若旧代码直接依赖这些内部名字，应改写到能力接口，
 而不是再造一套冻结内部布局的兼容壳。
 
-根目录旧 `Nitori.h`、`Nitori_naive` 和旧报告都不是 v2 权威源。checked 与 unsafe
-来自同一组 `v2_src` 语义模块，不维护第三份“naive”实现；参考验证由独立暴力/property
-tests 承担。
+旧实现、`Nitori_naive`、迁移报告和构建产物已经移出仓库。checked 与 unsafe 来自
+同一组 `src` 语义模块，不维护第三份“naive”实现；参考验证由独立暴力/property tests
+承担。
 
 ### 20.5 迁移验证顺序
 
 ```text
-先以 v2/Nitori.h 编译
+先以 Nitori.h 编译
 → 修正名字拆分和 [l,r)
 → 检查 owner/view 与 position/key/value
-→ 运行旧样例和 v2 独立测试
+→ 运行旧样例和 Nitori X 独立测试
 → 用暴力对拍关键算法
-→ 最后换 v2_unsafe/Nitori.h 再编译运行
+→ 最后换 Nitori_unsafe.h 再编译运行
 ```
 
 不要直接全局替换类型名后切 unsafe；checked 的契约失败正是迁移期要保留的诊断台架。
@@ -2895,9 +2895,9 @@ ninput noutput nin nout nread nprint nprintln
 
 ## 权威维护声明
 
-Nitori v2 的公共事实只允许存在于：
+Nitori X 的公共事实只允许存在于：
 
-1. `/home/tnuzy/NitoriSTL/v2/Nitori.h`：checked 公共实现；
+1. `/home/tnuzy/NitoriSTL/Nitori.h`：checked 公共实现；
 2. `/home/tnuzy/NitoriSTL/NITORI_DOCUMENT.md`：本文。
 
 全局 Codex skill 只能引用这两个路径并给出使用流程，不得保存 header、API 表、recipes

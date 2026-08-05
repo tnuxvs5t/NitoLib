@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile and execute the deterministic unsafe-profile v2 microbench through memfd."""
+"""Compile and execute the deterministic unsafe-profile Nitori X microbench."""
 
 from __future__ import annotations
 
@@ -9,11 +9,11 @@ import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "bench" / "v2_bench.cpp"
+SOURCE = ROOT / "bench" / "bench.cpp"
 
 
 def main() -> int:
-    fd = os.memfd_create("nitori-v2-bench", 0)
+    fd = os.memfd_create("nitori-x-bench", 0)
     compile_result = subprocess.run(
         [
             "g++",
