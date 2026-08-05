@@ -1,24 +1,65 @@
-# Nitori v2 权威文档
+# Nitori Competitive Programming v2
 
-> 适用版本：`nversion == 20000`  
-> 权威 checked 头文件：`/home/tnuzy/NitoriSTL/v2/Nitori.h`  
-> 权威 unsafe 头文件：`/home/tnuzy/NitoriSTL/v2_unsafe/Nitori.h`
+> 从第一份可提交程序，到零成本 view、离散函数与竞赛算法装配的唯一权威文档
+>
+> 适用版本：`nversion == 20000`
+>
+> checked 头文件：`/home/tnuzy/NitoriSTL/v2/Nitori.h`
+>
+> unsafe 头文件：`/home/tnuzy/NitoriSTL/v2_unsafe/Nitori.h`
+
+本文同时承担两件事：前半部分让第一次接触 Nitori 的选手尽快写题，后半部分提供
+可检索、可验证的完整 API 契约。不要先背完整符号表；先掌握下面这条主线：
+
+```text
+输入输出 → nvector 与循环 → 通用算法 → nview → projection
+→ 明确物化 ncollect → 数据结构/图论/数学 → nfunc 与自定义扩展
+```
+
+Nitori v2 是面向算法竞赛的 GNU C++20 单头文件系统。它不是给 STL 名字机械加 `n`，
+也不是要求选手先学一套工程框架。它要解决的是：让一份算法能够直接作用在 vector、
+deque、矩阵行列、步长序列、lambda 映射位置和离散函数上，同时保持代码短、引用真实、
+复杂度明确，并在训练阶段尽早抓住越界和错误前提。
 
 本文是 Nitori v2 唯一的用户文档原稿。不得在 skill、比赛目录、assets 或其他
 reference 中复制本文或头文件。公共签名与真实行为以 checked 头文件为最终事实；
 数学前提、使用语义、复杂度和工作流以本文为最终说明。若二者不一致，停止扩散，
 以实现和测试重建结论并立即修正文档。
 
-Nitori v2 是面向算法竞赛的 GNU C++20 单头文件系统。它不是 STL 兼容层，也不是
-企业工程库。它使用统一的有限索引、借用引用、枚举游标、离散函数、代数操作包和
-半开区间，让同一算法自然作用于连续数组、环形 deque、stride、投影、lambda 引用、
-矩阵列、对角线、分块和按状态依赖关系抽出的 DP 子序列。
+---
+
+## 怎样阅读本文
+
+### 第一次使用：只读这些
+
+1. 第 1 章：写出第一份完整程序；
+2. 第 2 章：记住 `int` 下标、`[l,r)` 和 owner/view 生命周期；
+3. 第 6 章：理解 `nview`、projection 与 `ncollect` 的区别；
+4. 第 8 章：按表查容器和序列算法；
+5. 第 16 章：查 I/O 边界。
+
+### 正在做题：按题型跳转
+
+| 题目特征 | 先看 |
+|---|---|
+| 区间查询、区间修改、滑动窗口、并查集 | 第 10 章 |
+| BFS、最短路、树、流、匹配 | 第 11 章 |
+| gcd、模运算、组合、博弈、异或基 | 第 12 章 |
+| 矩阵、线性方程、卷积、多项式 | 第 13 章 |
+| KMP、后缀数组、Trie、AC 自动机 | 第 14 章 |
+| 几何、Li Chao、单峰优化 | 第 15 章 |
+| 想把多个组件装成短代码 | 第 17 章 |
+
+### 开发 Nitori：再读这些
+
+第 3、5、9、18、19、20、21 章面向 profile、代数定律、AST、测试、扩展、迁移和
+公共符号审计。普通做题不需要先读完。
 
 ---
 
 ## 目录
 
-1. [快速开始](#1-快速开始)
+1. [十分钟快速开始](#1-十分钟快速开始)
 2. [不可违反的全局约定](#2-不可违反的全局约定)
 3. [checked 与 unsafe](#3-checked-与-unsafe)
 4. [基础值、哨兵和可选结果](#4-基础值哨兵和可选结果)
@@ -42,48 +83,414 @@ Nitori v2 是面向算法竞赛的 GNU C++20 单头文件系统。它不是 STL 
 
 ---
 
-## 1. 快速开始
+## 1. 十分钟快速开始
 
-### 1.1 训练、开发和调试
+这一章不要求理解模板、concept、游标或代数定律。目标只有一个：十分钟后，你能用
+Nitori 读入数据、保存序列、遍历、排序、切片、输出，并知道何时会产生副本。
+
+### 1.1 准备头文件
+
+源代码始终写：
 
 ```cpp
-#include "/home/tnuzy/NitoriSTL/v2/Nitori.h"
+#include "Nitori.h"
+```
+
+训练和调试时使用 checked 头。可以把
+`/home/tnuzy/NitoriSTL/v2/Nitori.h` 放在源码旁边，也可以保留权威文件并添加 include
+路径：
+
+```bash
+g++ -std=gnu++20 -O2 -Wall -Wextra \
+    -I/home/tnuzy/NitoriSTL/v2 solution.cpp
+```
+
+最小环境自检：
+
+```cpp
+#include "Nitori.h"
+
+static_assert(nversion == 20000);
+static_assert(!nunsafe); // 训练阶段应该成立
 
 int main() {
-    nvector<int> a{5, 1, 4, 1};
-    nsort(a);
-    nprintln(a[0], a[1], a[2], a[3]);
+    nprintln("Nitori ready");
 }
 ```
 
+如果 `nmatrix`、`nsub`、`nassign` 等 v2 名字突然“未声明”，先检查实际包含了哪个
+`Nitori.h`。`#include "Nitori.h"` 会优先搜索源码所在目录；附近残留的 v1/旧副本会
+覆盖 `-I` 路径。保留上面的 `nversion` 自检，或者用编译器的 include trace 定位，
+不要在错误头文件上继续猜 API。
+
+不要在题解里写机器相关的绝对 include 路径。最终提交使用 `deploynitori` 生成一个
+自包含源文件：
+
 ```bash
-g++ -std=gnu++20 -O2 -Wall -Wextra solution.cpp
+deploynitori --checked solution.cpp -o submit.cpp
 ```
 
-### 1.2 已验证后的比赛提交
+只有 checked 版本已经通过样例、边界和对拍后，才考虑：
 
-把 include 改为：
+```bash
+deploynitori --unsafe solution.cpp -o submit.cpp
+```
+
+`deploynitori --unsafe` 会先编译 checked bundle，再生成并独立编译 unsafe bundle。
+
+### 1.2 第一份完整程序
+
+下面的程序读入整数序列，排序、去重并输出：
 
 ```cpp
-#include "/home/tnuzy/NitoriSTL/v2_unsafe/Nitori.h"
+#include "Nitori.h"
+
+int main() {
+    int n;
+    nin >> n;
+
+    nvector<int> a(n);
+    nrep(i, n)
+        nin >> a[i];
+
+    nsort(a);
+    nunique(a);
+
+    nprintln(a.len());
+    nrep(i, a.len()) {
+        if (i)
+            nout.write(' ');
+        nout << a[i];
+    }
+    nout.write('\n');
+}
 ```
 
-unsafe 不是“更宽松”的版本。它要求输入、下标、定律和所有前置条件已经成立，
-否则行为未定义并可能被 `-O2` 激进优化。
-
-### 1.3 最小心智模型
+输入：
 
 ```text
-容器/对象提供能力
-→ view 把位置映射为真实引用
-→ 离散函数把枚举位置、语义 key 和函数值接起来
-→ 算法只约束它需要的最小能力
-→ 数据结构显式要求代数定律
-→ checked 诊断错误，unsafe 把同一前提交给优化器
+7
+4 1 4 2 1 9 2
 ```
 
-Nitori 公共 API 不提供 iterator。遍历使用 `nfor`/`nfori` 或显式游标；随机访问
-使用 `len()` 与 `operator[]`；所有区间统一为 `[l,r)`。
+输出：
+
+```text
+4
+1 2 4 9
+```
+
+这份程序已经覆盖最常用的六个入口：
+
+| 写法 | 含义 |
+|---|---|
+| `nin >> x` | 快速输入 |
+| `nvector<T>` | 拥有型动态数组 |
+| `a.len()` | 返回 `int` 长度 |
+| `nrep(i,n)` | 枚举 `0..n-1` |
+| `nsort(a)` | 原地排序 |
+| `nprintln(...)`、`nout` | 快速输出 |
+
+### 1.3 从 STL 迁移时先记这张表
+
+| 常见 STL 写法 | Nitori 写法 | 备注 |
+|---|---|---|
+| `vector<T>` | `nvector<T>` | owner，真正拥有元素 |
+| `a.size()` | `a.len()` | 返回 `int`，便于竞赛下标 |
+| `a.push_back(x)` | `a.push(x)` | 返回新元素引用 |
+| `a.pop_back()` | `a.pop()` | 返回被取走的值 |
+| `sort(a.begin(),a.end())` | `nsort(a)` | 同样适用于非连续 view/deque |
+| `reverse(...)` | `nreverse_inplace(range)` | `nreverse(range)` 本身是倒序 view |
+| `fill(...)` | `nfill(range,value)` | 接受矩阵行、切片、lambda view |
+| `copy(source,destination)` | `nassign(destination,source)` | 目标在前，要求等长 |
+| `find(...)` | `nfind` / `nfind_if` | 返回 `int` 位置，失败为 `npos` |
+| `lower_bound(...)` | `nlower(a,x)` | 返回插入位置 |
+| range-for | `nfor(x,a)` | 保留引用类别 |
+| `for(int i=0;i<n;++i)` | `nrep(i,n)` | 普通单层循环语义 |
+
+不要把 `.data()`、指针加法和 STL iterator 当作默认逃生通道。先检查算法是否已经接受
+range；若没有，优先补正确的最小能力接口，而不是把 view 拆回裸指针。
+
+### 1.4 输入、输出和三种循环
+
+```cpp
+int n;
+long long limit;
+nin >> n >> limit;
+
+nvector<long long> a(n);
+nrep(i, n)
+    nin >> a[i];
+
+nfor(value, a)
+    value *= 2;                  // value 通常是元素引用
+
+nfori(index, value, a)
+    nchmax(value, 1LL * index);  // 同时取得枚举位置
+
+nprintln(n, limit);
+```
+
+倒序循环：
+
+```cpp
+nrrep(i, n) {
+    // i = n-1, n-2, ..., 0
+}
+```
+
+`nfor`、`nfori`、`nforkv`、`nrep`、`nrrep` 都只有一层真实 `for`。因此：
+
+- `break` 退出整个当前宏循环；
+- `continue` 进入下一项；
+- range/count 只求值一次；
+- 可以正常嵌套，但库不会暗中再套一层循环。
+
+`nforkv(key,value,object)` 用于 map 和离散函数，初学时可以等需要键值枚举再学。
+
+### 1.5 第一个容器工具箱
+
+#### `nvector<T>`
+
+```cpp
+nvector<int> a;          // 空
+nvector<int> b(10);      // 10 个值初始化元素
+nvector<int> c(10, -1);  // 10 个 -1
+nvector<int> d{3, 1, 4};
+
+a.reserve(100);
+a.push(7);
+a.push(9);
+int last = a.pop();
+
+a.front();
+a.back();
+a.resize(20, 0);
+a.clear();
+```
+
+#### `ndeque<T>`
+
+```cpp
+ndeque<int> q;
+q.pushl(1);
+q.pushr(2);
+int left = q.popl();
+int right = q.popr();
+```
+
+`ndeque` 支持索引但不保证连续；`nsort(q)` 仍然可用。
+
+#### `nheap<T>`
+
+```cpp
+nheap<int> heap; // 默认最小堆
+heap.push(5);
+heap.push(2);
+heap.push(8);
+
+int minimum = heap.top();
+int removed = heap.pop();
+```
+
+先用这三个就能覆盖大量入门题。set、map、图和数据结构按题目需要再查对应章节。
+
+### 1.6 第一组通用算法
+
+```cpp
+nvector<int> a{4, 1, 3, 1, 5};
+
+nfill(nsub(a, 1, 3), 0);                 // a = {4,0,0,1,5}
+int first_zero = nfind(a, 0);             // 1
+bool has_five = ncontains(a, 5);          // true
+int zeros = ncount(a, 0);                 // 2
+int positive = ncount_if(a, [](int x) { return x > 0; });
+bool all_small = nall_of(a, [](int x) { return x < 10; });
+int maximum_at = nargmax(a);              // 4
+
+nsort(a);
+int first_at_least_three = nlower(a, 3);
+```
+
+复制或投影写入统一使用 `nassign`：
+
+```cpp
+nvector<int> source{1, 2, 3};
+nvector<long long> destination(3);
+
+nassign(destination, source, [](int x) {
+    return 1LL * x * x;
+});
+// destination == {1,4,9}
+```
+
+`nassign` 不暗中分配，也不提供隐藏的重叠快照。需要保留 source 原值时先显式
+`ncollect(source)`。完整契约见 8.5。
+
+### 1.7 `nview`：引用一组位置，不复制元素
+
+这是 Nitori 最重要的抽象。先看最小例子：
+
+```cpp
+nvector<int> a{9, 4, 7, 1, 8};
+
+auto middle = nsub(a, 1, 4); // 引用 a 的 [1,4)
+nsort(middle);
+// a == {9,1,4,7,8}
+```
+
+`middle` 不是新数组。它只保存“第 `i` 项应该访问 `a[1+i]`”这条规则，因此排序会写回
+`a`。其他常用 view：
+
+```cpp
+auto all = nall(a);
+auto backwards = nreverse(a);
+auto every_second = nstride(a, 0, a.len(), 2);
+auto pairs = nzip(a, backwards);
+auto windows = nwindows(a, 3);
+```
+
+lambda 也能定义位置映射，而且返回真实引用时可以直接修改和排序：
+
+```cpp
+auto even_positions = nview((a.len() + 1) / 2,
+    [&](int i) -> int& { return a[2 * i]; });
+
+nsort(even_positions);
+```
+
+二维对象仍然使用同一套算法：
+
+```cpp
+nmatrix<int> matrix(4, 4, 0);
+nfill(matrix.row(1), -1);
+nsort(matrix.column(2));
+nsort(matrix.diagonal());
+```
+
+### 1.8 view 的复制、物化与写入
+
+这是新人最容易混淆的地方：
+
+```cpp
+auto view = nreverse(nsub(a, 1, 4));
+auto alias = view;           // O(1)：复制访问描述，仍引用 a
+auto copy = ncollect(view);  // O(n)：建立独立 nvector
+```
+
+记忆表：
+
+| 操作 | 是否复制元素 | 修改后是否写回 owner |
+|---|---:|---:|
+| `auto b = view` | 否 | 是 |
+| `nall/nsub/nreverse/nstride/nproject` | 否 | 是 |
+| `ncollect(view)` | 是 | 否 |
+| `nassign(destination,view)` | 写入既有目标 | 取决于 destination |
+
+矩阵 DP 不需要 `.data()` 或 `std::copy`：
+
+```cpp
+nmatrix<long long> rows(blocks, width, 0);
+nvector<long long> dp(width, 0);
+
+nassign(rows.row(block), dp);
+nfill(rows.row(block), nninf<long long>);
+```
+
+生命周期规则只有一句话：**view 不拥有最底层 owner；owner 必须活着，而且不能发生使
+引用失效的扩容或结构修改。**
+
+### 1.9 两种 projection，作用完全不同
+
+假设：
+
+```cpp
+struct item {
+    int key;
+    int payload;
+};
+
+nvector<item> items{{3, 30}, {1, 10}, {2, 20}};
+```
+
+算法 projection 只决定“按什么观察和比较”，交换的仍是完整记录：
+
+```cpp
+nsort(items, nless<>{}, &item::key);
+// (key,payload) 关系保持，顺序变成 (1,10),(2,20),(3,30)
+```
+
+`nproject` 则建立字段引用 view，排序时只交换字段：
+
+```cpp
+auto keys = nproject(items, &item::key);
+nsort(keys); // 只重新排列 key；payload 留在原位置
+```
+
+大多数“按字段排序记录”的题目需要第一种。只有确实想单独操作某一列/字段时才使用
+`nproject`。
+
+### 1.10 一个真正体现 Nitori 的 0/1 背包转移
+
+普通写法用倒序下标保证每件物品只使用一次。Nitori 可以把这个依赖方向直接表达为
+两个倒序 view：
+
+```cpp
+auto relax = [&](auto&& dp, int weight, long long value) {
+    const int width = nlen(dp);
+    auto destination = nreverse(nsub(dp, weight, width));
+    auto source = nreverse(nsub(dp, 0, width - weight));
+
+    nfor(cell, nzip(destination, source)) {
+        auto&& [to, from] = cell;
+        if (from != nninf<long long>)
+            nchmax(to, from + value);
+    }
+};
+```
+
+这里没有 iterator、裸指针或容器特判。只要 `dp` 是可写 indexed range，同一段代码就能
+作用于 `nvector`、矩阵行、切片或 lambda view。倒序不是装饰：它保护“读取旧层状态”
+这个 0/1 背包不变量。
+
+### 1.11 checked 调试，unsafe 提交
+
+训练时默认 checked。常见错误会在离问题最近的位置中止：
+
+- 下标越界；
+- 非法 `[l,r)`；
+- `nassign` 两侧长度不等；
+- 空堆取 top；
+- 非法图顶点；
+- 读入溢出；
+- 违反已编码的结构前提。
+
+推荐最小流程：
+
+```text
+checked 编译
+→ 跑样例
+→ 跑空、单点、极值边界
+→ 小规模暴力对拍
+→ 再生成 unsafe 提交
+```
+
+unsafe 不会修复错误，也不是“忽略 assert 继续跑”。其中 `npre(condition)` 会把
+condition 当作优化器可以相信的事实；条件为假时行为未定义。
+
+### 1.12 十分钟检查点
+
+如果你已经能回答下面七个问题，就可以停止阅读教程，直接做题并按需查后文：
+
+1. 为什么长度使用 `a.len()` 而不是 `.size()`？
+2. `nrep`、`nrrep`、`nfor` 分别适合什么循环？
+3. 为什么所有区间都写成 `[l,r)`？
+4. `nsub(a,l,r)` 会不会复制元素？
+5. 怎样得到 view 的独立副本？
+6. `nsort(items,cmp,projection)` 与 `nsort(nproject(items,projection))` 有什么区别？
+7. 为什么训练时应使用 checked？
+
+如果第 4～6 题仍不确定，重读 1.7～1.9；那是 Nitori 与普通容器模板最关键的区别。
 
 ---
 
