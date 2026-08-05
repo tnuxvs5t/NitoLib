@@ -1,1 +1,8 @@
 /build/
+
+# Abel is a separate project and must not enter the NitoLib repository.
+/Abel/
+/abel/
+/.abel/
+abel.toml
+abel.lock
