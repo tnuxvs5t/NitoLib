@@ -2499,6 +2499,161 @@ template <class A, class C> void nheap_sort(A& a, C& compare) {
 }
 } // namespace ni
 
+// Basic write operations deliberately take the destination first. They mutate
+// lvalue owners or temporary view descriptors without copying the owner.
+template <class A, class X>
+    requires nviewable_indexed<A&&> && nreference_indexed<remove_reference_t<A>> &&
+             requires(remove_reference_t<A>& destination, const X& value) {
+                 destination[0] = value;
+             }
+void nfill(A&& destination, const X& value) {
+    int size = nlen(destination);
+    for (int i = 0; i < size; ++i)
+        destination[i] = value;
+}
+
+template <class D, class S, class P = nidentity>
+    requires nviewable_indexed<D&&> && nreference_indexed<remove_reference_t<D>> &&
+             nenumerable<S&&> &&
+             requires(remove_reference_t<D>& destination,
+                      nenumerator_t<S&&>& cursor, P& projection) {
+                 destination[0] = invoke(projection, cursor.val());
+             }
+void nassign(D&& destination, S&& source, P projection = {}) {
+    int size = nlen(destination);
+    auto cursor = nenumerate(forward<S>(source));
+    constexpr bool sized_source = requires { nlen(source); };
+    if constexpr (sized_source)
+        npre(size == nlen(source));
+    for (int i = 0; i < size; ++i) {
+        if constexpr (!sized_source)
+            npre(cursor.ok());
+        destination[i] = invoke(projection, cursor.val());
+        cursor.next();
+    }
+    if constexpr (!sized_source)
+        npre(!cursor.ok());
+}
+
+template <class A, class B>
+    requires nviewable_indexed<A&&> && nviewable_indexed<B&&> &&
+             nswappable_indexed<remove_reference_t<A>> &&
+             nswappable_indexed<remove_reference_t<B>> &&
+             requires(remove_reference_t<A>& left, remove_reference_t<B>& right) {
+                 ranges::swap(left[0], right[0]);
+             }
+void nswap_ranges(A&& left, B&& right) {
+    int size = nlen(left);
+    npre(size == nlen(right));
+    for (int i = 0; i < size; ++i)
+        ranges::swap(left[i], right[i]);
+}
+
+template <class A, class F, class P = nidentity>
+    requires nenumerable<A&&>
+int nfind_if(A&& sequence, F predicate, P projection = {}, int fallback = npos) {
+    nfori(index, value, forward<A>(sequence))
+        if (invoke(predicate, invoke(projection, value)))
+            return index;
+    return fallback;
+}
+
+template <class A, class X, class P = nidentity>
+    requires nenumerable<A&&>
+bool ncontains(A&& sequence, const X& value, P projection = {}) {
+    nfor(element, forward<A>(sequence))
+        if (invoke(projection, element) == value)
+            return true;
+    return false;
+}
+
+template <class A, class X, class P = nidentity>
+    requires nenumerable<A&&>
+int ncount(A&& sequence, const X& value, P projection = {}) {
+    int result = 0;
+    nfor(element, forward<A>(sequence))
+        result += invoke(projection, element) == value;
+    return result;
+}
+
+template <class A, class F, class P = nidentity>
+    requires nenumerable<A&&>
+int ncount_if(A&& sequence, F predicate, P projection = {}) {
+    int result = 0;
+    nfor(element, forward<A>(sequence))
+        result += bool(invoke(predicate, invoke(projection, element)));
+    return result;
+}
+
+template <class A, class F, class P = nidentity>
+    requires nenumerable<A&&>
+bool nall_of(A&& sequence, F predicate, P projection = {}) {
+    nfor(element, forward<A>(sequence))
+        if (!invoke(predicate, invoke(projection, element)))
+            return false;
+    return true;
+}
+
+template <class A, class F, class P = nidentity>
+    requires nenumerable<A&&>
+bool nany_of(A&& sequence, F predicate, P projection = {}) {
+    nfor(element, forward<A>(sequence))
+        if (invoke(predicate, invoke(projection, element)))
+            return true;
+    return false;
+}
+
+template <class A, class F, class P = nidentity>
+    requires nenumerable<A&&>
+bool nnone_of(A&& sequence, F predicate, P projection = {}) {
+    return !nany_of(forward<A>(sequence), move(predicate), move(projection));
+}
+
+template <class A, class B, class E = nequal<>,
+          class PA = nidentity, class PB = nidentity>
+    requires nenumerable<A&&> && nenumerable<B&&>
+bool nsame(A&& left, B&& right, E equal = {},
+           PA left_projection = {}, PB right_projection = {}) {
+    auto left_cursor = nenumerate(forward<A>(left));
+    auto right_cursor = nenumerate(forward<B>(right));
+    while (left_cursor.ok() && right_cursor.ok()) {
+        if (!invoke(equal, invoke(left_projection, left_cursor.val()),
+                    invoke(right_projection, right_cursor.val())))
+            return false;
+        left_cursor.next();
+        right_cursor.next();
+    }
+    return !left_cursor.ok() && !right_cursor.ok();
+}
+
+template <class A, class C = nless<>, class P = nidentity>
+    requires nindexed<A> && invocable<P&, nindex_reference_t<const A>>
+int nargmin(const A& sequence, C compare = {}, P projection = {}) {
+    int size = nlen(sequence);
+    if (size == 0)
+        return npos;
+    int best = 0;
+    for (int i = 1; i < size; ++i)
+        if (invoke(compare, invoke(projection, sequence[i]),
+                   invoke(projection, sequence[best])))
+            best = i;
+    return best;
+}
+
+template <class A, class C = nless<>, class P = nidentity>
+    requires nindexed<A> && invocable<P&, nindex_reference_t<const A>>
+int nargmax(const A& sequence, C compare = {}, P projection = {}) {
+    int size = nlen(sequence);
+    if (size == 0)
+        return npos;
+    int best = 0;
+    for (int i = 1; i < size; ++i)
+        if (invoke(compare, invoke(projection, sequence[best]),
+                   invoke(projection, sequence[i])))
+            best = i;
+    return best;
+}
+
 template <class A, class C = nless<>, class P = nidentity>
     requires nviewable_indexed<A&&> && nswappable_indexed<remove_reference_t<A>>
 void nsort(A&& a, C compare = {}, P projection = {}) {

@@ -755,6 +755,64 @@ cube.shape();
 
 ### 8.5 通用序列算法
 
+#### 基本写入台架
+
+| API | 语义与前提 | 复杂度 |
+|---|---|---|
+| `nfill(destination,value)` | 把可写 indexed 目标的每个位置赋成 `value` | `O(n)`，零额外空间 |
+| `nassign(destination,source,projection)` | 目标与任意 enumerable 源等长；从左到右投影、写入 | `O(n)`，零额外空间 |
+| `nswap_ranges(left,right)` | 要求等长且两侧元素可交换；逐位置交换 | `O(n)`，零额外空间 |
+
+目标参数始终在前。写入算法接受左值 owner，也接受 `nsub(...)`、`matrix.row(...)` 等
+临时 view 描述符；owner 本身不会被按值复制。
+
+```cpp
+nfill(matrix.row(r), NEG);
+nassign(checkpoint.row(block), dp);
+nassign(keys, records, &record::key);
+nswap_ranges(nsub(a, l, r), nsub(b, x, x + r - l));
+```
+
+`nassign` 不偷偷物化 source，也不承诺类似 `memmove` 的重叠快照语义。它严格从左到右
+读写；若较早的写入会改变较晚位置所读到的 source，这个变化就是实际语义。需要原值快照时
+应在边界上明确物化：
+
+```cpp
+auto snapshot = ncollect(source);
+nassign(destination, snapshot);
+```
+
+这条约束避免一个看似方便的基本操作在热路径中暗藏分配。checked profile 会拒绝
+`nassign` / `nswap_ranges` 的长度不等；对没有 `nlen` 的 source，`nassign` 会通过
+游标耗尽位置验证等长。unsafe profile 要求调用者已经保证等长。
+
+#### 基本读取台架
+
+| API | 语义与前提 | 复杂度 |
+|---|---|---|
+| `nfind_if(a,predicate,projection,fallback)` | 返回第一个满足谓词的枚举位置；失败返回 `fallback`，默认 `npos` | 最坏 `O(n)` |
+| `ncontains(a,x,projection)` | 是否存在 `projection(element) == x` | 最坏 `O(n)` |
+| `ncount(a,x,projection)` | 统计投影值等于 `x` 的元素数 | `O(n)` |
+| `ncount_if(a,predicate,projection)` | 统计投影后满足谓词的元素数 | `O(n)` |
+| `nall_of/nany_of/nnone_of(a,predicate,projection)` | 全称、存在与全否定判断，支持短路 | 最坏 `O(n)` |
+| `nsame(a,b,equal,proj_a,proj_b)` | 两个 enumerable 锁步比较；长度不同也返回 false | 最坏 `O(n)` |
+| `nargmin/nargmax(a,compare,projection)` | 返回最小/最大投影值的 indexed 位置 | `O(n)` |
+
+读取算法只要求它真正使用的能力：查找、计数、量词与 `nsame` 接受任意
+`nenumerable`；只有必须返回可重用随机访问位置的 `nargmin/nargmax` 要求 indexed。
+量词在空序列上分别是 `true / false / true`。`nargmin/nargmax` 在空序列上返回
+`npos`，相等时保留第一个位置。
+
+projection 的默认值是 `nidentity{}`。成员指针与 lambda 都可以直接作为 projection：
+
+```cpp
+int first_heavy = nfind_if(edges, [](int w) { return w > limit; }, &edge::weight);
+int cheapest = nargmin(edges, nless<>{}, &edge::cost);
+bool same_keys = nsame(records, keys, nequal<>{}, &record::key, nidentity{});
+```
+
+#### 排序、二分、折叠与去重
+
 | API | 前提 | 复杂度 |
 |---|---|---|
 | `nsort(a,cmp,proj)` | viewable + `nswappable_indexed`，cmp 在投影 key 上为严格弱序 | `O(n log n)`；连续走 `std::sort`，否则 heapsort |
@@ -767,7 +825,6 @@ cube.shape();
 | `nunique(a,equal,proj)` | 另需 `resize` | `O(n)`，并缩短容器 |
 | `nsort_unique(a,cmp,equal,proj)` | 可排序且可 resize | `O(n log n)`，排序后去重 |
 
-projection 的默认值是 `nidentity{}`，所以旧的值序列调用不增加语法或运行时成本。
 `nunique` 只压缩相邻等价项；通常先用相同 projection 执行 `nsort`。
 
 ---
@@ -2034,6 +2091,28 @@ auto distance = nbfs(graph, source);
 
 v2 自身的 property tests 就采用这一模式；复杂结构不能靠样例一次通过证明正确。
 
+### 17.8 二维 DP 行的初始化与检查点复制
+
+`nmatrix::row` 是可写 view，不需要降级到 `.data()`、指针加法或 `std::copy`：
+
+```cpp
+nmatrix<ll> checkpoint(blocks + 1, S + 1, NEG);
+nvector<ll> dp(S + 1, NEG);
+
+nfill(checkpoint.row(block), NEG);
+nassign(checkpoint.row(block), dp);
+```
+
+若需要从记录序列抽取一列，也仍然是同一个写入原语：
+
+```cpp
+nvector<int> weight(items.len());
+nassign(weight, items, &item::weight);
+```
+
+这里的桥梁是“可写 indexed 目标 + enumerable 源 + projection”，不是连续内存。
+因此相同代码可落在 vector、deque、矩阵行/列、步长 view 或 lambda 映射 view 上。
+
 ---
 
 ## 18. 调试、测试与提交工作流
@@ -2319,7 +2398,9 @@ nsubfunc nblock nblocks
 ```text
 nvector nvector_stl ndeque_ring ndeque_stl ndeque
 nheap_binary nheap narray
-nsort nreverse_inplace nfind nlower nupper nfind_sorted nfold
+nfill nassign nswap_ranges
+nfind_if ncontains ncount ncount_if nall_of nany_of nnone_of nsame
+nargmin nargmax nsort nreverse_inplace nfind nlower nupper nfind_sorted nfold
 nunique_compact nunique nsort_unique
 ```
 
