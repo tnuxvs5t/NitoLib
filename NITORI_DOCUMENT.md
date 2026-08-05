@@ -34,7 +34,7 @@ reference 中复制本文或头文件。公共签名与真实行为以 checked �
 
 1. 第 1 章：写出第一份完整程序；
 2. 第 2 章：记住 `int` 下标、`[l,r)` 和 owner/view 生命周期；
-3. 第 6 章：理解 `nview`、projection 与 `ncollect` 的区别；
+3. 第 6 章：先理解 `nview`、projection 与 `ncollect`；只有需要语义 key 时再读 6.8；
 4. 第 8 章：按表查容器和序列算法；
 5. 第 16 章：查 I/O 边界。
 
@@ -48,6 +48,7 @@ reference 中复制本文或头文件。公共签名与真实行为以 checked �
 | 矩阵、线性方程、卷积、多项式 | 第 13 章 |
 | KMP、后缀数组、Trie、AC 自动机 | 第 14 章 |
 | 几何、Li Chao、单峰优化 | 第 15 章 |
+| 状态 key、分块对应、惰性分流、连续段组合 | 第 6.8 节 |
 | 想把多个组件装成短代码 | 第 17 章 |
 
 ### 开发 Nitori：再读这些
@@ -909,10 +910,29 @@ auto blocks = ncollect(nproject(nwindows(a, width), [](auto window) {
 })); // nvector<nvector<T>>
 ```
 
-### 6.8 离散函数：`nview` 的上层胶水
+### 6.8 `nfunc`：用结构成本购买语义清晰
 
-`nview` 回答“第 `i` 个位置引用谁”；离散函数再增加一层语义，回答“第 `i` 个位置
-代表哪个离散自变量，以及函数在该自变量上的值是什么”。给定有限域
+> **重量级边界：`nfunc` 不是 `nview` 的替代品。**
+>
+> `nview` 是位置到引用的轻量访问拓扑，适合内层循环、逐行/逐块临时建立和批量创建；
+> `nfunc` 是它上面的语义层，可能拥有 domain 快照、哈希索引、分段边界、共享状态或
+> 用户捕获的 evaluator。不要在每个元素、每条边、每次 DP 转移或热点循环中批量创建
+> `nfunc`。通常一组数据只建立少数几个有名字的 `nfunc`，再用 view 或循环完成密集计算。
+
+先用这张表决定要不要拿起这个重工具：
+
+| 需求 | 应使用 | 原因 |
+|---|---|---|
+| 第 `i` 项引用哪个元素；切片、倒序、步长、矩阵行列 | `nview` | 只表达位置拓扑，通常是小描述符 |
+| 热点循环中建立很多同形窗口、块、行 | `nview` / `nsub` / `nstride` | 不为每个对象建立语义索引 |
+| 让枚举位置携带另一套状态 key | `nfunc` / `nanchors` | 明确区分 position 与 key |
+| 按 key 求值、组合离散映射、给 DP 加哨兵状态 | `nfunc` / `ncompose` / `nbranch` | 需要函数语义而不只是引用拓扑 |
+| 把连续段作为可再次组合的离散对象 | `nruns` | 一次扫描建立段边界和起点索引 |
+| 只想得到独立副本 | `ncollect` / `ntabulate` | 物化 owner，不需要函数层 |
+
+#### 三个接口，三种问题
+
+`nfunc` 给一个有限枚举加上语义自变量。给定有限 support
 `D = [d_0,d_1,...,d_{n-1}]` 和 evaluator `phi`：
 
 ```text
@@ -920,6 +940,19 @@ f.key(i) = d_i       // 枚举位置 i 对应的语义自变量
 f[i]     = phi(d_i)  // 第 i 项的函数值，可为真实引用
 f(x)     = phi(x)    // 直接按语义自变量求值，不要求 x 已列在 D 中
 ```
+
+最快的记法是：
+
+```text
+key(i)  position -> semantic key
+f[i]    position -> value
+f(x)    semantic key -> value
+```
+
+**方括号永远接收枚举位置，圆括号永远接收语义参数。** 即使 support 恰好是
+`nrange(n)`，也不要靠“位置和 key 数值相同”混用两者。
+
+#### 第一件事：把求值规则挂到有限 support 上
 
 构造和最小例子：
 
@@ -941,7 +974,11 @@ square(4);          // 16：按语义自变量
 部分函数；需要运行时绑定/解绑键值时使用 `nfunc_hash`/`npartial`，需要普通字典时使用
 `nmap`。
 
-#### 按枚举绑定与重新锚定
+这一形式通常构造为 `O(1)`，但 evaluator 可以捕获任意状态，库不承诺它必然是
+view 大小、无分配或适合海量复制。若只需 `a[index[i]]` 这样的密集位置访问，仍应写成
+`nview`。
+
+#### 第二件事：按枚举绑定两套序列
 
 第二个参数也可以是 indexed value source：
 
@@ -963,23 +1000,40 @@ values 左值仍被借用并保持写回。domain 还必须能成为函数索引
   `f(key)` 期望 `O(1)`；
 - 不存在隐藏线性查询退化。无法建立受支持索引的 key 类型应改用 evaluator 构造。
 
+这正是 `nfunc` 与 `nview` 的成本分界：普通可哈希 domain 会在构造期建立索引，以换取
+之后按 key 的期望 `O(1)` 查询。不要为了少写一个下标，在 `O(n)` 次外层迭代里反复
+构造这个表；把函数提升到循环外复用，或退回位置 view。
+
+#### 第三件事：重新锚定，而不是重新求值
+
 `nanchors(source,anchors)` 按枚举位置为 source 换一套 key：
 
-```cpp
-auto same = nanchors(nrange(100, 90, -2), nrange(0, 5));
-```
-
-满足：
-
 ```text
-same.key(i) = anchors[i]
-same[i]     = source[i]
+result.key(i) = anchors[i]
+result[i]     = source[i]
 ```
 
-它与 `nrestrict(source,domain)` 不同：`nanchors` 保留第 `i` 个 value 并替换其 key；
-`nrestrict` 把 domain 中每项当作语义参数并计算 `source(key)`。
+例如把倒序块号和正向位置按枚举序号绑定：
 
-#### 域、值、键值对与实例化
+```cpp
+auto schedule = nfunc(nrange(blocks - 1, -1, -1),
+                      nrange(0, blocks * width, width));
+
+nforkv(block, begin, schedule) {
+    // block 倒序，begin 正序
+}
+```
+
+若正向位置已经是一个 source，等价的重新锚定写成：
+
+```cpp
+auto schedule = nanchors(positions, nrange(blocks - 1, -1, -1));
+```
+
+`nanchors` 与 `nrestrict` 完全不同：前者保留第 `i` 个 value、替换它的 key；后者把
+新 domain 中每项当作语义参数，重新调用源函数。
+
+#### 看、改、复制：先分清别名和 owner
 
 ```cpp
 auto keys    = nkeys(f);       // 零复制 key view
@@ -1010,7 +1064,7 @@ auto f = nfunc(nvector<int>{10, 20, 30}, [](int x) { return x + 1; });
 只借用左值 values。values 的元素可原地修改，但其长度和索引拓扑在函数存活期间必须
 稳定；checked 访问会验证长度仍与 domain 一致。
 
-#### 惰性分流：有限 support 与求值域分离
+#### 第四件事：用 `nbranch` 惰性扩展求值域
 
 ```cpp
 auto state = nfunc(nrange(n), [&](int i) -> long long& { return dp[i]; });
@@ -1026,7 +1080,10 @@ safe(5);  // dp[5]
 的公共结果类型。`f[-1]` 仍然非法，因为 `[]` 始终接收枚举位置；扩展的是 `f(-1)` 的
 语义求值。若还要枚举 `-1`，显式使用 `nrestrict(safe,nrange(-1,n))`。
 
-#### `nrestrict` 与 `ngather`：语义选择和位置选择必须分开
+这是 DP 哨兵、边界状态和分段定义最直接的用法。predicate 与两个分支都可以很重，
+但每次求值只执行被选中的分支；不要先算出 alternative 再传入，破坏惰性。
+
+#### 第五件事：选择 key，还是选择 position
 
 ```cpp
 auto r = nrestrict(f, domain);     // domain 中每项就是新的语义自变量
@@ -1041,7 +1098,19 @@ auto g = ngather(f, positions);    // positions 中每项是 f 的枚举位置
 当原域恰好是 `nrange(n)` 时，自变量与位置数值相同，看起来两者等价；换成坐标、状态
 编号或压缩后的 key 就不再等价。不要凭数值巧合混用这两个齿轮。
 
-#### 分块、子序列与组合
+常用适配器按“改变什么”整理如下：
+
+| 适配器 | 输入中的项目表示 | 结果保留什么 |
+|---|---|---|
+| `nrestrict(f,domain)` | 语义 key | 新 support，值为 `f(key)` |
+| `ngather(f,positions)` | 源枚举位置 | 原 key 与原 value 引用 |
+| `nsubfunc(f,l,r)` | 位置区间 `[l,r)` | 该段原 key/value |
+| `nblock(f,b,w)` | 第 `b` 个位置块 | 尾块自动缩短 |
+| `nblocks(f,w)` | 全部位置块 | 一个轻量 block view |
+| `ncompose(outer,inner)` | 函数组合 | `outer(inner(x))` |
+| `nmap_values(f,g)` | 值变换 | key 不变，值为 `g(f(x))` |
+
+#### 第六件事：分块、组合和子序列
 
 ```cpp
 auto sub = nsubfunc(f, l, r);       // 按源枚举位置取 [l,r)
@@ -1064,7 +1133,7 @@ nfor(block, nblocks(cell, 3))
 // a == {1,8,9, 2,3,7, 4,6}
 ```
 
-#### 连续分段：`nruns`
+#### 第七件事：用 `nruns` 把连续段升级成可组合对象
 
 `nruns(source,together)` 扫描相邻 value；`together(previous,current)` 为真时留在同一段，
 否则开始新段。省略 together 时使用 `nequal<>`。结果仍是离散函数：第 `j` 项的 key 是
@@ -1109,11 +1178,39 @@ for (int v = 0; v < n; ++v) {
 这里 `from` 是原状态的语义 key，`best` 是 `dp[from]` 的引用。`nforkv` 与 `nfor`
 一样只有一层真实 `for`：`break` 会退出整个枚举，`continue` 会进入下一项。
 
-主要复杂度：evaluator 形式的求值为 evaluator 自身复杂度；按枚举绑定和 `nanchors`
-使用 domain locator 或构造索引，不允许隐藏线性查询；`nbranch` 增加一次 predicate 和一个
-选中分支；`nruns` 的边界成本见上；`ntabulate` 为 `O(n)` 时间和空间；`nblocks` 只建立
-块描述，逐块算法成本由所调用算法决定。若 `ngather` 含重复别名，原地排序等依赖独立
-交换位置的算法通常没有合理语义，应先去重位置或显式实例化。
+#### 成本台账：不要把重工具当免费语法糖
+
+| 操作 | 构造 | 单次访问/求值 | 额外状态 |
+|---|---:|---:|---:|
+| `nfunc(domain,evaluator)` | 通常 `O(1)` | evaluator 自身复杂度 | holder + evaluator 捕获 |
+| `nfunc(nrange,values)` | `O(1)` | `O(1)` | domain 与 value holder |
+| `nfunc(generic_hashable_domain,values)` | 期望 `O(n)` | 期望 `O(1)` 按 key 查询 | `O(n)` key 索引 |
+| `nanchors(source,anchors)` | 取决于 anchors locator；通常 `O(1)` 或期望 `O(n)` | 通常或期望 `O(1)` | 与 anchors domain 相同 |
+| `nbranch` | 通常 `O(1)` | predicate + 一个选中分支 | base/predicate/alternative |
+| `nrestrict` / `ngather` / `nsubfunc` | 通常 `O(1)` | 源函数成本 | domain/position holder |
+| `nblocks` | `O(1)` | 生成每个块描述为 `O(1)` | 一个 block view |
+| `nruns` | `O(n)` 扫描 | `O(1)` 按段位置，期望 `O(1)` 按起点 | `O(k)` 边界与索引 |
+| `ncollect` / `ntabulate` | `O(n)` | 物化后 `O(1)` 索引 | `O(n)` 独立 owner |
+
+`nfunc` 家族追求的是**正确的结构复杂度**，不是一律零分配。需要按 key 查询时就建立
+索引，需要连续段时就保存边界；它拒绝用隐藏的 `O(n)` 线性查找假装接口轻巧。代价应
+在粗粒度边界支付一次，然后被算法复用。
+
+若 `ngather` 含重复位置，多个结果会别名同一 value；原地排序等依赖独立交换位置的
+算法通常没有合理语义，应先去重位置或显式物化。
+
+#### 上场前的五问
+
+```text
+1. 我只需要 position -> reference 吗？是：用 nview。
+2. 我正在热点循环里批量创建同形对象吗？是：优先用 view、索引或直接循环。
+3. 我确实需要 key -> value、惰性分流、函数组合或连续段语义吗？是：用 nfunc。
+4. domain、values 和 evaluator 捕获的 owner 会活得足够久且拓扑稳定吗？
+5. 我需要别名还是独立副本？独立副本必须显式 ncollect/ntabulate。
+```
+
+一句话收束：**`nview` 用轻量位置拓扑服务密集计算；`nfunc` 用索引、状态和组合能力
+购买更短、更可靠的高层算法表达。前者通常可以批量造，后者应少量造、命名并复用。**
 
 ---
 
@@ -2533,7 +2630,8 @@ nfor(block, nblocks(cell, width)) {
 }
 ```
 
-这不是复制分块：构造为 `O(1)`，尾块自动缩短。块内操作直接写回 `a`。若只要快照，
+这不是复制分块：`cell` 只在外层建立一次并被所有块复用，`nblocks` 构造为 `O(1)`，
+尾块自动缩短。块内操作直接写回 `a`。不要在块循环里重复建立 `cell`；若只要快照，
 在边界处调用 `ntabulate(block)`。
 
 ### 17.4 用依赖表装配子序列 DP
@@ -2552,6 +2650,10 @@ for (int v = 0; v < n; ++v) {
 `predecessor[v]` 存源函数的枚举位置；若它存的本来是语义状态 key，则应改用
 `nrestrict(state, predecessor[v])`。先分清 position/key，能消掉大量“数值恰好相同”
 掩盖的 WA。
+
+这里每个状态临时建立一次 `O(1)` 的 `ngather`，是用高阶表达购买调试时间；若状态数
+达到百万级、对象要长期保存或基准显示描述符成本进入热点，就改用 `nview`/直接位置循环，
+不要批量保存 `nfunc` 家族对象。
 
 ### 17.5 滑动窗口最小值
 
@@ -2720,8 +2822,10 @@ python3 tools/audit.py
 
 新增离散函数适配器必须明确三件事：输入序列中的整数代表源枚举位置还是语义 key，
 结果是否保留原 key，value 是引用还是值。位置选择基于 `ngather`，语义重定义域基于
-`nrestrict`；不要再创造一个含糊的 `select`。只有真正需要运行时查找/绑定时才落到
-`nmap/npartial`，不要把零分配函数胶水退化成哈希表。
+`nrestrict`；不要再创造一个含糊的 `select`。还必须写清构造、求值和额外状态复杂度：
+需要按 key 查询就建立正确 locator/index，不允许用隐藏线性扫描伪装轻量；只需位置拓扑
+就退回 `nview`，不要在热点路径批量建立或保存高阶函数对象。运行时增删绑定属于
+`nmap/npartial`，不塞进有限 `nfunc` 的职责。
 
 ### 19.4 保护 view 生命周期
 
