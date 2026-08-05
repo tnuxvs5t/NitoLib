@@ -123,7 +123,7 @@ template <class W = int> class ngraph_list {
         add(b, a, weight);
     }
 
-    nspan<const narc<W>> neighbors(int vertex) const {
+    nview<const narc<W>> neighbors(int vertex) const {
         npre(0 <= vertex && vertex < vertices());
         const auto& edges = adjacency_[vertex];
         npre(edges.size() <= size_t(INT_MAX));

@@ -4,7 +4,12 @@ template <class A>
 concept ncan_view_temporary = requires(A&& value) { nall(forward<A>(value)); };
 
 int main() {
-    static_assert(nview_object<nspan<int>>);
+    static_assert(nview_object<decltype(nzip(declval<nvector<int>&>(),
+                                            declval<nvector<int>&>()))>);
+    static_assert(nview_object<decltype(nproduct(declval<nvector<int>&>(),
+                                                declval<nvector<int>&>()))>);
+    static_assert(nview_object<decltype(nwindows(declval<nvector<int>&>(), 2))>);
+    static_assert(nview_object<nview<int>>);
     static_assert(!ncan_view_temporary<nvector<int>>);
 
     nvector<int> a{1, 2, 3}, b{10, 20};

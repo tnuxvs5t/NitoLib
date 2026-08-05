@@ -34,6 +34,14 @@ template <class T> class nmatrix {
     bool empty() const noexcept { return storage_.empty(); }
     T* data() noexcept { return storage_.data(); }
     const T* data() const noexcept { return storage_.data(); }
+    T* row_data(int row) {
+        npre(0 <= row && row < rows_);
+        return columns_ ? storage_.data() + ptrdiff_t(row) * columns_ : storage_.data();
+    }
+    const T* row_data(int row) const {
+        npre(0 <= row && row < rows_);
+        return columns_ ? storage_.data() + ptrdiff_t(row) * columns_ : storage_.data();
+    }
 
     T& operator[](int i) { return storage_[i]; }
     const T& operator[](int i) const { return storage_[i]; }
@@ -46,45 +54,23 @@ template <class T> class nmatrix {
         return storage_[row * columns_ + column];
     }
 
-    nspan<T> row(int index) & {
-        npre(0 <= index && index < rows_);
-        return {columns_ ? storage_.data() + index * columns_ : storage_.data(), columns_};
+    auto view() & { return nview(storage_.data(), rows_, columns_); }
+    auto view() const& { return nview(storage_.data(), rows_, columns_); }
+    auto view() && = delete;
+
+    auto row(int index) & {
+        return nrow(view(), index);
     }
-    nspan<const T> row(int index) const& {
-        npre(0 <= index && index < rows_);
-        return {columns_ ? storage_.data() + index * columns_ : storage_.data(), columns_};
-    }
+    auto row(int index) const& { return nrow(view(), index); }
     auto row(int) && = delete;
 
-    auto column(int index) & {
-        npre(0 <= index && index < columns_);
-        return nview(rows_, [this, index](int row) -> T& { return (*this)(row, index); });
-    }
-    auto column(int index) const& {
-        npre(0 <= index && index < columns_);
-        return nview(rows_, [this, index](int row) -> const T& { return (*this)(row, index); });
-    }
+    auto column(int index) & { return ncolumn(view(), index); }
+    auto column(int index) const& { return ncolumn(view(), index); }
     auto column(int) && = delete;
 
     // offset > 0 selects a diagonal above the main one; offset < 0 selects one below it.
-    auto diagonal(int offset = 0) & {
-        npre(-1LL * rows_ <= offset && offset <= columns_);
-        int first_row = int(max(0LL, -1LL * offset)), first_column = max(0, offset);
-        int count = min(rows_ - first_row, columns_ - first_column);
-        npre(count >= 0);
-        return nview(count, [this, first_row, first_column](int i) -> T& {
-            return (*this)(first_row + i, first_column + i);
-        });
-    }
-    auto diagonal(int offset = 0) const& {
-        npre(-1LL * rows_ <= offset && offset <= columns_);
-        int first_row = int(max(0LL, -1LL * offset)), first_column = max(0, offset);
-        int count = min(rows_ - first_row, columns_ - first_column);
-        npre(count >= 0);
-        return nview(count, [this, first_row, first_column](int i) -> const T& {
-            return (*this)(first_row + i, first_column + i);
-        });
-    }
+    auto diagonal(int offset = 0) & { return ndiagonal(view(), offset); }
+    auto diagonal(int offset = 0) const& { return ndiagonal(view(), offset); }
     auto diagonal(int = 0) && = delete;
 
     friend bool operator==(const nmatrix&, const nmatrix&) = default;

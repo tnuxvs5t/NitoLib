@@ -3,7 +3,7 @@ template <signed_integral T> class nrange_t {
 
   public:
     using value_type = T;
-    using nview_tag = void;
+    using nrange_tag = void;
 
     constexpr nrange_t() = default;
     constexpr nrange_t(T first, T last, T step = 1) : first_(first), last_(last), step_(step) {
@@ -225,7 +225,7 @@ template <class A>
     requires nviewable_indexed<A&&>
 constexpr auto nreverse(A&& a) {
     int size = nlen(a);
-    return nstride(forward<A>(a), size - 1, size, -1);
+    return nstride(forward<A>(a), size - 1, -1, -1);
 }
 
 template <class A, class F>
@@ -238,100 +238,118 @@ constexpr auto nproject(A&& a, F projection) {
     });
 }
 
-template <class L, class R> class nzip_view {
+namespace ni {
+template <class L, class R> class nzip_access {
     L left_;
     R right_;
 
-  public:
-    using nview_tag = void;
+    template <class LH, class RH> static constexpr auto get(LH& left, RH& right, int index) {
+        using left_reference = decltype(left.get()[index]);
+        using right_reference = decltype(right.get()[index]);
+        return pair<left_reference, right_reference>(left.get()[index], right.get()[index]);
+    }
 
-    constexpr nzip_view(L left, R right) : left_(move(left)), right_(move(right)) {}
-    constexpr int len() const { return min(nlen(left_.get()), nlen(right_.get())); }
-    constexpr bool empty() const { return len() == 0; }
-    constexpr auto operator[](int i) const {
-        npre(0 <= i && i < len());
-        using left_reference = decltype(left_.get()[i]);
-        using right_reference = decltype(right_.get()[i]);
-        return pair<left_reference, right_reference>(left_.get()[i], right_.get()[i]);
+  public:
+    constexpr nzip_access(L left, R right) : left_(move(left)), right_(move(right)) {}
+    constexpr auto operator()(int index) { return get(left_, right_, index); }
+    constexpr auto operator()(int index) const
+        requires requires(const L& left, const R& right) {
+            left.get()[0];
+            right.get()[0];
+        }
+    {
+        return get(left_, right_, index);
     }
 };
+
+template <class L, class R> class nproduct_access {
+    L left_;
+    R right_;
+    int right_size_ = 0;
+
+    template <class LH, class RH>
+    static constexpr auto get(LH& left, RH& right, int width, int index) {
+        using left_reference = decltype(left.get()[index / width]);
+        using right_reference = decltype(right.get()[index % width]);
+        return pair<left_reference, right_reference>(left.get()[index / width],
+                                                     right.get()[index % width]);
+    }
+
+  public:
+    constexpr nproduct_access(L left, R right, int right_size)
+        : left_(move(left)), right_(move(right)), right_size_(right_size) {}
+    constexpr auto operator()(int index) { return get(left_, right_, right_size_, index); }
+    constexpr auto operator()(int index) const
+        requires requires(const L& left, const R& right) {
+            left.get()[0];
+            right.get()[0];
+        }
+    {
+        return get(left_, right_, right_size_, index);
+    }
+};
+
+template <class H> class nwindow_access {
+    H owner_;
+    int width_ = 0, step_ = 1;
+
+    template <class Owner> static constexpr auto get(Owner owner, int width, int step, int index) {
+        using access_type = nsub_access<Owner>;
+        return nview(width, access_type(move(owner), index * step));
+    }
+
+  public:
+    constexpr nwindow_access(H owner, int width, int step)
+        : owner_(move(owner)), width_(width), step_(step) {}
+    constexpr auto operator()(int index)
+        requires copy_constructible<H>
+    {
+        return get(owner_, width_, step_, index);
+    }
+    constexpr auto operator()(int index) const
+        requires copy_constructible<H>
+    {
+        return get(owner_, width_, step_, index);
+    }
+};
+
+constexpr int nwindow_count(int length, int width, int step) {
+    npre(width >= 0 && step > 0);
+    if (width > length)
+        return 0;
+    long long result = 1LL + (length - width) / step;
+    npre(result <= INT_MAX);
+    return int(result);
+}
+} // namespace ni
 
 template <class A, class B>
     requires nviewable_indexed<A&&> && nviewable_indexed<B&&>
 constexpr auto nzip(A&& left, B&& right) {
     auto left_holder = ni::nhold_indexed(forward<A>(left));
     auto right_holder = ni::nhold_indexed(forward<B>(right));
-    return nzip_view<decltype(left_holder), decltype(right_holder)>(move(left_holder), move(right_holder));
+    int size = min(nlen(left_holder.get()), nlen(right_holder.get()));
+    using access_type = ni::nzip_access<decltype(left_holder), decltype(right_holder)>;
+    return nview(size, access_type(move(left_holder), move(right_holder)));
 }
-
-template <class L, class R> class nproduct_view {
-    L left_;
-    R right_;
-    int left_size_, right_size_;
-
-  public:
-    using nview_tag = void;
-
-    constexpr nproduct_view(L left, R right)
-        : left_(move(left)), right_(move(right)), left_size_(nlen(left_.get())),
-          right_size_(nlen(right_.get())) {
-        npre(left_size_ == 0 || right_size_ <= INT_MAX / left_size_);
-    }
-    constexpr int len() const { return left_size_ * right_size_; }
-    constexpr bool empty() const { return len() == 0; }
-    constexpr auto operator[](int i) const {
-        npre(0 <= i && i < len());
-        int width = right_size_;
-        using left_reference = decltype(left_.get()[i / width]);
-        using right_reference = decltype(right_.get()[i % width]);
-        return pair<left_reference, right_reference>(left_.get()[i / width], right_.get()[i % width]);
-    }
-};
 
 template <class A, class B>
     requires nviewable_indexed<A&&> && nviewable_indexed<B&&>
 constexpr auto nproduct(A&& left, B&& right) {
     auto left_holder = ni::nhold_indexed(forward<A>(left));
     auto right_holder = ni::nhold_indexed(forward<B>(right));
-    return nproduct_view<decltype(left_holder), decltype(right_holder)>(move(left_holder), move(right_holder));
+    int left_size = nlen(left_holder.get()), right_size = nlen(right_holder.get());
+    npre(left_size == 0 || right_size <= INT_MAX / left_size);
+    using access_type = ni::nproduct_access<decltype(left_holder), decltype(right_holder)>;
+    return nview(left_size * right_size,
+                 access_type(move(left_holder), move(right_holder), right_size));
 }
-
-template <class H> class nwindow_view {
-    H owner_;
-    int width_, step_, size_;
-
-    static constexpr int count(const H& owner, int width, int step) {
-        npre(width >= 0 && step > 0);
-        int length = nlen(owner.get());
-        if (width > length)
-            return 0;
-        long long result = 1LL + (length - width) / step;
-        npre(result <= INT_MAX);
-        return int(result);
-    }
-
-  public:
-    using nview_tag = void;
-
-    constexpr nwindow_view(H owner, int width, int step)
-        : owner_(move(owner)), width_(width), step_(step), size_(count(owner_, width, step)) {}
-    constexpr int len() const { return size_; }
-    constexpr bool empty() const { return size_ == 0; }
-    constexpr auto operator[](int i) const
-        requires copy_constructible<H>
-    {
-        npre(0 <= i && i < size_);
-        int first = i * step_;
-        H owner = owner_;
-        return nview(width_, [owner = move(owner), first](int offset) -> decltype(auto) {
-            return owner.get()[first + offset];
-        });
-    }
-};
 
 template <class A>
     requires nviewable_indexed<A&&>
 constexpr auto nwindows(A&& owner, int width, int step = 1) {
     auto holder = ni::nhold_indexed(forward<A>(owner));
-    return nwindow_view<decltype(holder)>(move(holder), width, step);
+    int size = ni::nwindow_count(nlen(holder.get()), width, step);
+    using access_type = ni::nwindow_access<decltype(holder)>;
+    return nview(size, access_type(move(holder), width, step));
 }

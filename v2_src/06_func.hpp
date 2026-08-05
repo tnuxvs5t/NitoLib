@@ -46,7 +46,7 @@ template <class H, class F> class ndiscrete_function {
     [[no_unique_address]] F evaluate_;
 
   public:
-    using nview_tag = void;
+    using nrange_tag = void;
     using nfunction_tag = void;
 
     constexpr ndiscrete_function(H domain, F evaluate)
@@ -115,39 +115,21 @@ constexpr auto nfunc(D&& domain, F evaluate) {
     return ndiscrete_function<decltype(holder), F>(move(holder), move(evaluate));
 }
 
-template <class H> class nfunction_keys_view {
+namespace ni {
+template <class H> class nfunction_key_access {
     H function_;
 
   public:
-    using nview_tag = void;
-
-    constexpr explicit nfunction_keys_view(H function) : function_(move(function)) {}
-    constexpr int len() const { return nlen(function_.get()); }
-    constexpr bool empty() const { return len() == 0; }
-    constexpr decltype(auto) operator[](int index) {
-        npre(0 <= index && index < len());
-        return function_.get().key(index);
-    }
-    constexpr decltype(auto) operator[](int index) const {
-        npre(0 <= index && index < len());
+    constexpr explicit nfunction_key_access(H function) : function_(move(function)) {}
+    constexpr decltype(auto) operator()(int index) { return function_.get().key(index); }
+    constexpr decltype(auto) operator()(int index) const
+        requires requires(const H& function) { function.get().key(0); }
+    {
         return function_.get().key(index);
     }
 };
 
-template <class G>
-    requires ndiscrete<remove_reference_t<G>>
-constexpr auto nkeys(G&& function) {
-    auto holder = ni::nhold_object(forward<G>(function));
-    return nfunction_keys_view<decltype(holder)>(move(holder));
-}
-
-template <class G>
-    requires ndiscrete<remove_reference_t<G>> && nviewable_indexed<G&&>
-constexpr auto nvalues(G&& function) {
-    return nall(forward<G>(function));
-}
-
-template <class H> class nfunction_entries_view {
+template <class H> class nfunction_entry_access {
     H function_;
 
     template <class G> static constexpr auto entry(G& function, int index) {
@@ -157,26 +139,41 @@ template <class H> class nfunction_entries_view {
     }
 
   public:
-    using nview_tag = void;
-
-    constexpr explicit nfunction_entries_view(H function) : function_(move(function)) {}
-    constexpr int len() const { return nlen(function_.get()); }
-    constexpr bool empty() const { return len() == 0; }
-    constexpr auto operator[](int index) {
-        npre(0 <= index && index < len());
-        return entry(function_.get(), index);
-    }
-    constexpr auto operator[](int index) const {
-        npre(0 <= index && index < len());
+    constexpr explicit nfunction_entry_access(H function) : function_(move(function)) {}
+    constexpr auto operator()(int index) { return entry(function_.get(), index); }
+    constexpr auto operator()(int index) const
+        requires requires(const H& function) {
+            function.get().key(0);
+            function.get()[0];
+        }
+    {
         return entry(function_.get(), index);
     }
 };
+} // namespace ni
+
+template <class G>
+    requires ndiscrete<remove_reference_t<G>>
+constexpr auto nkeys(G&& function) {
+    auto holder = ni::nhold_object(forward<G>(function));
+    int size = nlen(holder.get());
+    using access_type = ni::nfunction_key_access<decltype(holder)>;
+    return nview(size, access_type(move(holder)));
+}
+
+template <class G>
+    requires ndiscrete<remove_reference_t<G>> && nviewable_indexed<G&&>
+constexpr auto nvalues(G&& function) {
+    return nall(forward<G>(function));
+}
 
 template <class G>
     requires ndiscrete<remove_reference_t<G>>
 constexpr auto nentries(G&& function) {
     auto holder = ni::nhold_object(forward<G>(function));
-    return nfunction_entries_view<decltype(holder)>(move(holder));
+    int size = nlen(holder.get());
+    using access_type = ni::nfunction_entry_access<decltype(holder)>;
+    return nview(size, access_type(move(holder)));
 }
 
 // Semantic restriction: domain contains arguments, not positions.
@@ -196,7 +193,7 @@ template <class OH, class IH> class ncomposed_function {
     IH inner_;
 
   public:
-    using nview_tag = void;
+    using nrange_tag = void;
     using nfunction_tag = void;
 
     constexpr ncomposed_function(OH outer, IH inner)
@@ -261,7 +258,7 @@ template <class GH, class PH> class ngathered_function {
     }
 
   public:
-    using nview_tag = void;
+    using nrange_tag = void;
     using nfunction_tag = void;
 
     constexpr ngathered_function(GH function, PH positions)
@@ -327,37 +324,32 @@ constexpr auto nblock(G&& function, int block, int width) {
     return nsubfunc(forward<G>(function), first, last);
 }
 
-template <class H> class nfunction_blocks_view {
+namespace ni {
+template <class H> class nfunction_block_access {
     H function_;
     int width_;
 
   public:
-    using nview_tag = void;
-
-    constexpr nfunction_blocks_view(H function, int width)
-        : function_(move(function)), width_(width) {
-        npre(width > 0);
-    }
-    constexpr int len() const {
-        int size = nlen(function_.get());
-        return size / width_ + (size % width_ != 0);
-    }
-    constexpr bool empty() const { return len() == 0; }
-    constexpr auto operator[](int block) & {
-        npre(0 <= block && block < len());
+    constexpr nfunction_block_access(H function, int width)
+        : function_(move(function)), width_(width) {}
+    constexpr auto operator()(int block) {
         return nblock(function_.get(), block, width_);
     }
-    constexpr auto operator[](int block) const& {
-        npre(0 <= block && block < len());
+    constexpr auto operator()(int block) const
+        requires requires(const H& function) { nblock(function.get(), 0, 1); }
+    {
         return nblock(function_.get(), block, width_);
     }
-    auto operator[](int) && = delete;
-    auto operator[](int) const&& = delete;
 };
+} // namespace ni
 
 template <class G>
     requires ndiscrete<remove_reference_t<G>>
 constexpr auto nblocks(G&& function, int width) {
     auto holder = ni::nhold_object(forward<G>(function));
-    return nfunction_blocks_view<decltype(holder)>(move(holder), width);
+    npre(width > 0);
+    int size = nlen(holder.get());
+    int count = size / width + (size % width != 0);
+    using access_type = ni::nfunction_block_access<decltype(holder)>;
+    return nview(count, access_type(move(holder), width));
 }

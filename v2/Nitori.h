@@ -238,6 +238,12 @@ template <class T = void> struct nequal {
     constexpr bool operator()(const auto& a, const auto& b) const { return a == b; }
 };
 
+struct nidentity {
+    template <class T> constexpr T&& operator()(T&& value) const noexcept {
+        return forward<T>(value);
+    }
+};
+
 class nrng {
     uint64_t state_;
 
@@ -524,58 +530,199 @@ constexpr T npow(T base, long long exponent, O operation = {}) {
 }
 
 // ---- 03_ref.hpp ----
-template <class T> class nspan {
+namespace ni {
+template <class T> class ncontiguous_access {
     T* data_ = nullptr;
-    int size_ = 0;
 
   public:
-    using value_type = remove_cv_t<T>;
-    using reference = T&;
-    using nview_tag = void;
-
-    constexpr nspan() = default;
-    constexpr nspan(T* data, int size) : data_(data), size_(size) {
-        npre(size >= 0);
-        npre(size == 0 || data != nullptr);
-    }
-
-    template <size_t N> constexpr nspan(T (&data)[N]) : data_(data), size_(int(N)) {
-        static_assert(N <= size_t(INT_MAX));
-    }
-
-    template <class U>
-        requires is_convertible_v<U (*)[], T (*)[]>
-    constexpr nspan(const nspan<U>& other) : data_(other.data()), size_(other.len()) {}
-
-    constexpr int len() const noexcept { return size_; }
-    constexpr bool empty() const noexcept { return size_ == 0; }
+    constexpr ncontiguous_access() = default;
+    constexpr explicit ncontiguous_access(T* data) : data_(data) {}
+    constexpr T& operator()(int index) const noexcept { return data_[index]; }
     constexpr T* data() const noexcept { return data_; }
-
-    constexpr T& operator[](int i) const {
-        npre(0 <= i && i < size_);
-        return data_[i];
-    }
-    constexpr T* get(int i) const noexcept { return 0 <= i && i < size_ ? data_ + i : nullptr; }
-
-    constexpr nspan sub(int l, int r) const {
-        npre(0 <= l && l <= r && r <= size_);
-        return {l ? data_ + l : data_, r - l};
-    }
-    constexpr nspan sub(int l) const { return sub(l, size_); }
 };
 
-template <class F> class nview {
+constexpr int nview_volume(int rows, int columns) {
+    npre(rows >= 0 && columns >= 0);
+    npre(rows == 0 || columns <= INT_MAX / rows);
+    return rows * columns;
+}
+
+template <class T> class ncontiguous2_access {
+    T* data_ = nullptr;
+    int rows_ = 0, columns_ = 0;
+
+  public:
+    constexpr ncontiguous2_access() = default;
+    constexpr ncontiguous2_access(T* data, int rows, int columns)
+        : data_(data), rows_(rows), columns_(columns) {}
+    constexpr T& operator()(int index) const noexcept { return data_[index]; }
+    constexpr T& operator()(int row, int column) const {
+        npre(0 <= row && row < rows_ && 0 <= column && column < columns_);
+        return data_[row * columns_ + column];
+    }
+    constexpr T* data() const noexcept { return data_; }
+    constexpr T* row_data(int row) const {
+        npre(0 <= row && row < rows_);
+        return columns_ ? data_ + ptrdiff_t(row) * columns_ : data_;
+    }
+    constexpr int rows() const noexcept { return rows_; }
+    constexpr int cols() const noexcept { return columns_; }
+};
+
+template <class T> class nstrided2_access {
+    T* data_ = nullptr;
+    int rows_ = 0, columns_ = 0;
+    ptrdiff_t row_stride_ = 0, column_stride_ = 0;
+
+  public:
+    constexpr nstrided2_access() = default;
+    constexpr nstrided2_access(T* data, int rows, int columns,
+                               ptrdiff_t row_stride, ptrdiff_t column_stride)
+        : data_(data), rows_(rows), columns_(columns),
+          row_stride_(row_stride), column_stride_(column_stride) {}
+    constexpr T& operator()(int index) const {
+        return (*this)(index / columns_, index % columns_);
+    }
+    constexpr T& operator()(int row, int column) const {
+        npre(0 <= row && row < rows_ && 0 <= column && column < columns_);
+        return data_[ptrdiff_t(row) * row_stride_ + ptrdiff_t(column) * column_stride_];
+    }
+    constexpr int rows() const noexcept { return rows_; }
+    constexpr int cols() const noexcept { return columns_; }
+};
+
+template <class F> class nindexed2_access {
+    int rows_ = 0, columns_ = 0;
+    [[no_unique_address]] F access_;
+
+  public:
+    constexpr nindexed2_access(int rows, int columns, F access)
+        : rows_(rows), columns_(columns), access_(move(access)) {}
+    constexpr decltype(auto) operator()(int index) {
+        return (*this)(index / columns_, index % columns_);
+    }
+    constexpr decltype(auto) operator()(int index) const
+        requires invocable<const F&, int, int>
+    {
+        return (*this)(index / columns_, index % columns_);
+    }
+    constexpr decltype(auto) operator()(int row, int column) {
+        npre(0 <= row && row < rows_ && 0 <= column && column < columns_);
+        return invoke(access_, row, column);
+    }
+    constexpr decltype(auto) operator()(int row, int column) const
+        requires invocable<const F&, int, int>
+    {
+        npre(0 <= row && row < rows_ && 0 <= column && column < columns_);
+        return invoke(access_, row, column);
+    }
+    constexpr int rows() const noexcept { return rows_; }
+    constexpr int cols() const noexcept { return columns_; }
+};
+} // namespace ni
+
+// One public view family. The model/accessor determines capabilities: the default
+// model is contiguous, while lambda and composed models may expose only indexing.
+// Copying an nview copies the access description and never materializes elements.
+template <class T, class F = ni::ncontiguous_access<T>> class nview {
     int size_ = 0;
     [[no_unique_address]] F access_;
 
   public:
+    using element_type = T;
+    using value_type = remove_cv_t<T>;
+    using reference = invoke_result_t<F&, int>;
     using accessor_type = F;
     using nview_tag = void;
+    using nrange_tag = void;
+
+    constexpr nview()
+        requires default_initializable<F>
+    = default;
+
+    constexpr nview(T* data, int size)
+        requires same_as<F, ni::ncontiguous_access<T>>
+        : size_(size), access_(data) {
+        npre(size >= 0);
+        npre(size == 0 || data != nullptr);
+    }
+
+    constexpr nview(T* data, int rows, int columns)
+        requires same_as<F, ni::ncontiguous2_access<T>>
+        : size_(ni::nview_volume(rows, columns)), access_(data, rows, columns) {
+        npre(size_ == 0 || data != nullptr);
+    }
+
+    constexpr nview(T* data, int rows, int columns,
+                    ptrdiff_t row_stride, ptrdiff_t column_stride)
+        requires same_as<F, ni::nstrided2_access<T>>
+        : size_(ni::nview_volume(rows, columns)),
+          access_(data, rows, columns, row_stride, column_stride) {
+        npre(size_ == 0 || data != nullptr);
+    }
+
+    template <class G>
+    constexpr nview(int rows, int columns, G access)
+        requires same_as<F, ni::nindexed2_access<G>>
+        : size_(ni::nview_volume(rows, columns)),
+          access_(rows, columns, move(access)) {}
+
+    template <size_t N>
+    constexpr nview(T (&data)[N])
+        requires same_as<F, ni::ncontiguous_access<T>>
+        : size_(int(N)), access_(data) {
+        static_assert(N <= size_t(INT_MAX));
+    }
+
+    template <class U>
+        requires same_as<F, ni::ncontiguous_access<T>> &&
+                 is_convertible_v<U (*)[], T (*)[]>
+    constexpr nview(const nview<U>& other) : size_(other.len()), access_(other.data()) {}
 
     constexpr nview(int size, F access) : size_(size), access_(move(access)) { npre(size >= 0); }
 
     constexpr int len() const noexcept { return size_; }
     constexpr bool empty() const noexcept { return size_ == 0; }
+
+    constexpr int rows() const
+        requires requires(const F& access) { { access.rows() } -> same_as<int>; }
+    {
+        return access_.rows();
+    }
+    constexpr int cols() const
+        requires requires(const F& access) { { access.cols() } -> same_as<int>; }
+    {
+        return access_.cols();
+    }
+    constexpr int dim(int axis, int fallback = npos) const
+        requires requires(const F& access) {
+            { access.rows() } -> same_as<int>;
+            { access.cols() } -> same_as<int>;
+        }
+    {
+        return axis == 0 ? access_.rows() : axis == 1 ? access_.cols() : fallback;
+    }
+
+    constexpr decltype(auto) data()
+        requires requires(F& access) { access.data(); }
+    {
+        return access_.data();
+    }
+    constexpr decltype(auto) data() const
+        requires requires(const F& access) { access.data(); }
+    {
+        return access_.data();
+    }
+    constexpr decltype(auto) row_data(int row)
+        requires requires(F& access) { access.row_data(row); }
+    {
+        return access_.row_data(row);
+    }
+    constexpr decltype(auto) row_data(int row) const
+        requires requires(const F& access) { access.row_data(row); }
+    {
+        return access_.row_data(row);
+    }
 
     constexpr decltype(auto) operator[](int i) {
         npre(0 <= i && i < size_);
@@ -587,9 +734,43 @@ template <class F> class nview {
         npre(0 <= i && i < size_);
         return invoke(access_, i);
     }
+
+    template <integral... I>
+        requires(sizeof...(I) > 1 && invocable<F&, I...>)
+    constexpr decltype(auto) operator()(I... coordinate) {
+        return invoke(access_, coordinate...);
+    }
+    template <integral... I>
+        requires(sizeof...(I) > 1 && invocable<const F&, I...>)
+    constexpr decltype(auto) operator()(I... coordinate) const {
+        return invoke(access_, coordinate...);
+    }
+
+    constexpr auto get(int i)
+        requires is_lvalue_reference_v<decltype((*this)[0])>
+    {
+        using pointer = add_pointer_t<remove_reference_t<decltype((*this)[0])>>;
+        return 0 <= i && i < size_ ? addressof((*this)[i]) : pointer{};
+    }
+    constexpr auto get(int i) const
+        requires requires(const nview& self) { self[0]; } &&
+                 is_lvalue_reference_v<decltype(declval<const nview&>()[0])>
+    {
+        using pointer = add_pointer_t<remove_reference_t<decltype(declval<const nview&>()[0])>>;
+        return 0 <= i && i < size_ ? addressof((*this)[i]) : pointer{};
+    }
 };
 
-template <class F> nview(int, F) -> nview<F>;
+template <class T> nview(T*, int) -> nview<T>;
+template <class T, size_t N> nview(T (&)[N]) -> nview<T>;
+template <class T> nview(T*, int, int) -> nview<T, ni::ncontiguous2_access<T>>;
+template <class T>
+nview(T*, int, int, ptrdiff_t, ptrdiff_t) -> nview<T, ni::nstrided2_access<T>>;
+template <class F>
+nview(int, int, F)
+    -> nview<remove_reference_t<invoke_result_t<F&, int, int>>, ni::nindexed2_access<F>>;
+template <class F>
+nview(int, F) -> nview<remove_reference_t<invoke_result_t<F&, int>>, F>;
 
 template <class A>
 concept nindexed = requires(A& a, const A& ca, int i) {
@@ -624,21 +805,25 @@ template <class A>
 concept nview_object = requires { typename remove_cvref_t<A>::nview_tag; };
 
 template <class A>
+concept nrange_object = requires { typename remove_cvref_t<A>::nrange_tag; };
+
+template <class A>
 concept nviewable_indexed = nindexed<remove_reference_t<A>> &&
-                            (is_lvalue_reference_v<A> || nview_object<remove_cvref_t<A>>) &&
-                            (!nview_object<remove_cvref_t<A>> ||
+                            (is_lvalue_reference_v<A> || nrange_object<remove_cvref_t<A>>) &&
+                            (!nrange_object<remove_cvref_t<A>> ||
                              constructible_from<remove_cvref_t<A>, A>);
 
 namespace ni {
 template <class A> class nindexed_holder {
     using value_type = remove_cvref_t<A>;
-    static constexpr bool stores_view = nview_object<value_type>;
+    static constexpr bool stores_value =
+        nview_object<value_type> || !is_lvalue_reference_v<A>;
     using pointer_type = remove_reference_t<A>*;
-    using storage_type = conditional_t<stores_view, value_type, pointer_type>;
+    using storage_type = conditional_t<stores_value, value_type, pointer_type>;
     storage_type storage_;
 
     static constexpr storage_type make(A&& value) {
-        if constexpr (stores_view)
+        if constexpr (stores_value)
             return forward<A>(value);
         else
             return addressof(value);
@@ -646,17 +831,18 @@ template <class A> class nindexed_holder {
 
   public:
     constexpr explicit nindexed_holder(A&& value) : storage_(make(forward<A>(value))) {
-        static_assert(stores_view || is_lvalue_reference_v<A>);
+        static_assert(stores_value || is_lvalue_reference_v<A>);
+        static_assert(is_lvalue_reference_v<A> || nrange_object<value_type>);
     }
 
     constexpr decltype(auto) get() {
-        if constexpr (stores_view)
+        if constexpr (stores_value)
             return (storage_);
         else
             return (*storage_);
     }
     constexpr decltype(auto) get() const {
-        if constexpr (stores_view)
+        if constexpr (stores_value)
             return as_const(storage_);
         else
             return (*storage_);
@@ -668,6 +854,106 @@ template <class A>
 constexpr auto nhold_indexed(A&& value) {
     return nindexed_holder<A&&>(forward<A>(value));
 }
+
+template <class H> class nsub_access {
+    H owner_;
+    int offset_ = 0;
+
+  public:
+    constexpr nsub_access(H owner, int offset) : owner_(move(owner)), offset_(offset) {}
+
+    constexpr decltype(auto) operator()(int index) { return owner_.get()[offset_ + index]; }
+    constexpr decltype(auto) operator()(int index) const
+        requires requires(const H& owner) { owner.get()[0]; }
+    {
+        return owner_.get()[offset_ + index];
+    }
+
+    constexpr decltype(auto) data()
+        requires requires(H& owner) { owner.get().data(); }
+    {
+        auto pointer = owner_.get().data();
+        return offset_ ? pointer + offset_ : pointer;
+    }
+    constexpr decltype(auto) data() const
+        requires requires(const H& owner) { owner.get().data(); }
+    {
+        auto pointer = owner_.get().data();
+        return offset_ ? pointer + offset_ : pointer;
+    }
+};
+
+template <class H> class nstride_access {
+    H owner_;
+    int first_ = 0, step_ = 1;
+
+  public:
+    constexpr nstride_access(H owner, int first, int step)
+        : owner_(move(owner)), first_(first), step_(step) {}
+
+    constexpr decltype(auto) operator()(int index) {
+        return owner_.get()[int(first_ + 1LL * index * step_)];
+    }
+    constexpr decltype(auto) operator()(int index) const
+        requires requires(const H& owner) { owner.get()[0]; }
+    {
+        return owner_.get()[int(first_ + 1LL * index * step_)];
+    }
+};
+
+template <class H, bool Row> class naxis2_access {
+    H owner_;
+    int fixed_ = 0;
+
+  public:
+    constexpr naxis2_access(H owner, int fixed) : owner_(move(owner)), fixed_(fixed) {}
+
+    constexpr decltype(auto) operator()(int index) {
+        if constexpr (Row)
+            return owner_.get()(fixed_, index);
+        else
+            return owner_.get()(index, fixed_);
+    }
+    constexpr decltype(auto) operator()(int index) const
+        requires requires(const H& owner) { owner.get()(0, 0); }
+    {
+        if constexpr (Row)
+            return owner_.get()(fixed_, index);
+        else
+            return owner_.get()(index, fixed_);
+    }
+    constexpr decltype(auto) data()
+        requires Row && requires(H& owner) {
+            owner.get().row_data(0);
+        }
+    {
+        return owner_.get().row_data(fixed_);
+    }
+    constexpr decltype(auto) data() const
+        requires Row && requires(const H& owner) {
+            owner.get().row_data(0);
+        }
+    {
+        return owner_.get().row_data(fixed_);
+    }
+};
+
+template <class H> class ndiagonal2_access {
+    H owner_;
+    int first_row_ = 0, first_column_ = 0;
+
+  public:
+    constexpr ndiagonal2_access(H owner, int first_row, int first_column)
+        : owner_(move(owner)), first_row_(first_row), first_column_(first_column) {}
+    constexpr decltype(auto) operator()(int index) {
+        return owner_.get()(first_row_ + index, first_column_ + index);
+    }
+    constexpr decltype(auto) operator()(int index) const
+        requires requires(const H& owner) { owner.get()(0, 0); }
+    {
+        return owner_.get()(first_row_ + index, first_column_ + index);
+    }
+};
 } // namespace ni
 
 template <class A>
@@ -678,8 +964,8 @@ constexpr auto nall(A&& a) {
     } else {
         auto owner = ni::nhold_indexed(forward<A>(a));
         int size = nlen(owner.get());
-        return nview(size,
-                     [owner = move(owner)](int i) -> decltype(auto) { return owner.get()[i]; });
+        using access_type = ni::nsub_access<decltype(owner)>;
+        return nview(size, access_type(move(owner), 0));
     }
 }
 
@@ -688,23 +974,78 @@ template <class A>
 constexpr auto nsub(A&& a, int l, int r) {
     auto owner = ni::nhold_indexed(forward<A>(a));
     npre(0 <= l && l <= r && r <= nlen(owner.get()));
-    return nview(r - l,
-                 [owner = move(owner), l](int i) -> decltype(auto) { return owner.get()[l + i]; });
+    using access_type = ni::nsub_access<decltype(owner)>;
+    return nview(r - l, access_type(move(owner), l));
 }
 
 template <class A>
     requires nviewable_indexed<A&&>
-constexpr auto nstride(A&& a, int first, int count, int step) {
+constexpr auto nstride(A&& a, int first, int last, int step) {
     auto owner = ni::nhold_indexed(forward<A>(a));
-    npre(count >= 0);
-    if (count) {
-        long long last = first + 1LL * (count - 1) * step;
-        npre(0 <= first && first < nlen(owner.get()));
-        npre(0 <= last && last < nlen(owner.get()));
+    int size = nlen(owner.get());
+    npre(step != 0);
+
+    long long distance = 0, stride = step;
+    if (step > 0) {
+        npre(0 <= first && first <= last && last <= size);
+        distance = 1LL * last - first;
+    } else {
+        if (first == last)
+            npre(-1 <= first && first <= size);
+        else
+            npre(-1 <= last && last < first && first < size);
+        distance = 1LL * first - last;
+        stride = -stride;
     }
-    return nview(count, [owner = move(owner), first, step](int i) -> decltype(auto) {
-        return owner.get()[int(first + 1LL * i * step)];
-    });
+    long long count = distance / stride + (distance % stride != 0);
+    npre(count <= INT_MAX);
+    using access_type = ni::nstride_access<decltype(owner)>;
+    return nview(int(count), access_type(move(owner), first, step));
+}
+
+template <class A>
+    requires nviewable_indexed<A&&> && requires(remove_reference_t<A>& matrix) {
+        { matrix.rows() } -> same_as<int>;
+        { matrix.cols() } -> same_as<int>;
+        matrix(0, 0);
+    }
+constexpr auto nrow(A&& matrix, int row) {
+    auto owner = ni::nhold_indexed(forward<A>(matrix));
+    npre(0 <= row && row < owner.get().rows());
+    int size = owner.get().cols();
+    using access_type = ni::naxis2_access<decltype(owner), true>;
+    return nview(size, access_type(move(owner), row));
+}
+
+template <class A>
+    requires nviewable_indexed<A&&> && requires(remove_reference_t<A>& matrix) {
+        { matrix.rows() } -> same_as<int>;
+        { matrix.cols() } -> same_as<int>;
+        matrix(0, 0);
+    }
+constexpr auto ncolumn(A&& matrix, int column) {
+    auto owner = ni::nhold_indexed(forward<A>(matrix));
+    npre(0 <= column && column < owner.get().cols());
+    int size = owner.get().rows();
+    using access_type = ni::naxis2_access<decltype(owner), false>;
+    return nview(size, access_type(move(owner), column));
+}
+
+template <class A>
+    requires nviewable_indexed<A&&> && requires(remove_reference_t<A>& matrix) {
+        { matrix.rows() } -> same_as<int>;
+        { matrix.cols() } -> same_as<int>;
+        matrix(0, 0);
+    }
+constexpr auto ndiagonal(A&& matrix, int offset = 0) {
+    auto owner = ni::nhold_indexed(forward<A>(matrix));
+    int rows = owner.get().rows(), columns = owner.get().cols();
+    npre(-1LL * rows <= offset && offset <= columns);
+    int first_row = int(max(0LL, -1LL * offset)), first_column = max(0, offset);
+    int size = min(rows - first_row, columns - first_column);
+    npre(size >= 0);
+    using access_type = ni::ndiagonal2_access<decltype(owner)>;
+    return nview(size, access_type(move(owner), first_row, first_column));
 }
 
 // ---- 04_enum.hpp ----
@@ -713,7 +1054,7 @@ template <signed_integral T> class nrange_t {
 
   public:
     using value_type = T;
-    using nview_tag = void;
+    using nrange_tag = void;
 
     constexpr nrange_t() = default;
     constexpr nrange_t(T first, T last, T step = 1) : first_(first), last_(last), step_(step) {
@@ -935,7 +1276,7 @@ template <class A>
     requires nviewable_indexed<A&&>
 constexpr auto nreverse(A&& a) {
     int size = nlen(a);
-    return nstride(forward<A>(a), size - 1, size, -1);
+    return nstride(forward<A>(a), size - 1, -1, -1);
 }
 
 template <class A, class F>
@@ -948,102 +1289,120 @@ constexpr auto nproject(A&& a, F projection) {
     });
 }
 
-template <class L, class R> class nzip_view {
+namespace ni {
+template <class L, class R> class nzip_access {
     L left_;
     R right_;
 
-  public:
-    using nview_tag = void;
+    template <class LH, class RH> static constexpr auto get(LH& left, RH& right, int index) {
+        using left_reference = decltype(left.get()[index]);
+        using right_reference = decltype(right.get()[index]);
+        return pair<left_reference, right_reference>(left.get()[index], right.get()[index]);
+    }
 
-    constexpr nzip_view(L left, R right) : left_(move(left)), right_(move(right)) {}
-    constexpr int len() const { return min(nlen(left_.get()), nlen(right_.get())); }
-    constexpr bool empty() const { return len() == 0; }
-    constexpr auto operator[](int i) const {
-        npre(0 <= i && i < len());
-        using left_reference = decltype(left_.get()[i]);
-        using right_reference = decltype(right_.get()[i]);
-        return pair<left_reference, right_reference>(left_.get()[i], right_.get()[i]);
+  public:
+    constexpr nzip_access(L left, R right) : left_(move(left)), right_(move(right)) {}
+    constexpr auto operator()(int index) { return get(left_, right_, index); }
+    constexpr auto operator()(int index) const
+        requires requires(const L& left, const R& right) {
+            left.get()[0];
+            right.get()[0];
+        }
+    {
+        return get(left_, right_, index);
     }
 };
+
+template <class L, class R> class nproduct_access {
+    L left_;
+    R right_;
+    int right_size_ = 0;
+
+    template <class LH, class RH>
+    static constexpr auto get(LH& left, RH& right, int width, int index) {
+        using left_reference = decltype(left.get()[index / width]);
+        using right_reference = decltype(right.get()[index % width]);
+        return pair<left_reference, right_reference>(left.get()[index / width],
+                                                     right.get()[index % width]);
+    }
+
+  public:
+    constexpr nproduct_access(L left, R right, int right_size)
+        : left_(move(left)), right_(move(right)), right_size_(right_size) {}
+    constexpr auto operator()(int index) { return get(left_, right_, right_size_, index); }
+    constexpr auto operator()(int index) const
+        requires requires(const L& left, const R& right) {
+            left.get()[0];
+            right.get()[0];
+        }
+    {
+        return get(left_, right_, right_size_, index);
+    }
+};
+
+template <class H> class nwindow_access {
+    H owner_;
+    int width_ = 0, step_ = 1;
+
+    template <class Owner> static constexpr auto get(Owner owner, int width, int step, int index) {
+        using access_type = nsub_access<Owner>;
+        return nview(width, access_type(move(owner), index * step));
+    }
+
+  public:
+    constexpr nwindow_access(H owner, int width, int step)
+        : owner_(move(owner)), width_(width), step_(step) {}
+    constexpr auto operator()(int index)
+        requires copy_constructible<H>
+    {
+        return get(owner_, width_, step_, index);
+    }
+    constexpr auto operator()(int index) const
+        requires copy_constructible<H>
+    {
+        return get(owner_, width_, step_, index);
+    }
+};
+
+constexpr int nwindow_count(int length, int width, int step) {
+    npre(width >= 0 && step > 0);
+    if (width > length)
+        return 0;
+    long long result = 1LL + (length - width) / step;
+    npre(result <= INT_MAX);
+    return int(result);
+}
+} // namespace ni
 
 template <class A, class B>
     requires nviewable_indexed<A&&> && nviewable_indexed<B&&>
 constexpr auto nzip(A&& left, B&& right) {
     auto left_holder = ni::nhold_indexed(forward<A>(left));
     auto right_holder = ni::nhold_indexed(forward<B>(right));
-    return nzip_view<decltype(left_holder), decltype(right_holder)>(move(left_holder), move(right_holder));
+    int size = min(nlen(left_holder.get()), nlen(right_holder.get()));
+    using access_type = ni::nzip_access<decltype(left_holder), decltype(right_holder)>;
+    return nview(size, access_type(move(left_holder), move(right_holder)));
 }
-
-template <class L, class R> class nproduct_view {
-    L left_;
-    R right_;
-    int left_size_, right_size_;
-
-  public:
-    using nview_tag = void;
-
-    constexpr nproduct_view(L left, R right)
-        : left_(move(left)), right_(move(right)), left_size_(nlen(left_.get())),
-          right_size_(nlen(right_.get())) {
-        npre(left_size_ == 0 || right_size_ <= INT_MAX / left_size_);
-    }
-    constexpr int len() const { return left_size_ * right_size_; }
-    constexpr bool empty() const { return len() == 0; }
-    constexpr auto operator[](int i) const {
-        npre(0 <= i && i < len());
-        int width = right_size_;
-        using left_reference = decltype(left_.get()[i / width]);
-        using right_reference = decltype(right_.get()[i % width]);
-        return pair<left_reference, right_reference>(left_.get()[i / width], right_.get()[i % width]);
-    }
-};
 
 template <class A, class B>
     requires nviewable_indexed<A&&> && nviewable_indexed<B&&>
 constexpr auto nproduct(A&& left, B&& right) {
     auto left_holder = ni::nhold_indexed(forward<A>(left));
     auto right_holder = ni::nhold_indexed(forward<B>(right));
-    return nproduct_view<decltype(left_holder), decltype(right_holder)>(move(left_holder), move(right_holder));
+    int left_size = nlen(left_holder.get()), right_size = nlen(right_holder.get());
+    npre(left_size == 0 || right_size <= INT_MAX / left_size);
+    using access_type = ni::nproduct_access<decltype(left_holder), decltype(right_holder)>;
+    return nview(left_size * right_size,
+                 access_type(move(left_holder), move(right_holder), right_size));
 }
-
-template <class H> class nwindow_view {
-    H owner_;
-    int width_, step_, size_;
-
-    static constexpr int count(const H& owner, int width, int step) {
-        npre(width >= 0 && step > 0);
-        int length = nlen(owner.get());
-        if (width > length)
-            return 0;
-        long long result = 1LL + (length - width) / step;
-        npre(result <= INT_MAX);
-        return int(result);
-    }
-
-  public:
-    using nview_tag = void;
-
-    constexpr nwindow_view(H owner, int width, int step)
-        : owner_(move(owner)), width_(width), step_(step), size_(count(owner_, width, step)) {}
-    constexpr int len() const { return size_; }
-    constexpr bool empty() const { return size_ == 0; }
-    constexpr auto operator[](int i) const
-        requires copy_constructible<H>
-    {
-        npre(0 <= i && i < size_);
-        int first = i * step_;
-        H owner = owner_;
-        return nview(width_, [owner = move(owner), first](int offset) -> decltype(auto) {
-            return owner.get()[first + offset];
-        });
-    }
-};
 
 template <class A>
     requires nviewable_indexed<A&&>
 constexpr auto nwindows(A&& owner, int width, int step = 1) {
     auto holder = ni::nhold_indexed(forward<A>(owner));
-    return nwindow_view<decltype(holder)>(move(holder), width, step);
+    int size = ni::nwindow_count(nlen(holder.get()), width, step);
+    using access_type = ni::nwindow_access<decltype(holder)>;
+    return nview(size, access_type(move(holder), width, step));
 }
 
 // ---- 05_ast.hpp ----
@@ -1227,7 +1586,7 @@ template <class H, class F> class ndiscrete_function {
     [[no_unique_address]] F evaluate_;
 
   public:
-    using nview_tag = void;
+    using nrange_tag = void;
     using nfunction_tag = void;
 
     constexpr ndiscrete_function(H domain, F evaluate)
@@ -1296,39 +1655,21 @@ constexpr auto nfunc(D&& domain, F evaluate) {
     return ndiscrete_function<decltype(holder), F>(move(holder), move(evaluate));
 }
 
-template <class H> class nfunction_keys_view {
+namespace ni {
+template <class H> class nfunction_key_access {
     H function_;
 
   public:
-    using nview_tag = void;
-
-    constexpr explicit nfunction_keys_view(H function) : function_(move(function)) {}
-    constexpr int len() const { return nlen(function_.get()); }
-    constexpr bool empty() const { return len() == 0; }
-    constexpr decltype(auto) operator[](int index) {
-        npre(0 <= index && index < len());
-        return function_.get().key(index);
-    }
-    constexpr decltype(auto) operator[](int index) const {
-        npre(0 <= index && index < len());
+    constexpr explicit nfunction_key_access(H function) : function_(move(function)) {}
+    constexpr decltype(auto) operator()(int index) { return function_.get().key(index); }
+    constexpr decltype(auto) operator()(int index) const
+        requires requires(const H& function) { function.get().key(0); }
+    {
         return function_.get().key(index);
     }
 };
 
-template <class G>
-    requires ndiscrete<remove_reference_t<G>>
-constexpr auto nkeys(G&& function) {
-    auto holder = ni::nhold_object(forward<G>(function));
-    return nfunction_keys_view<decltype(holder)>(move(holder));
-}
-
-template <class G>
-    requires ndiscrete<remove_reference_t<G>> && nviewable_indexed<G&&>
-constexpr auto nvalues(G&& function) {
-    return nall(forward<G>(function));
-}
-
-template <class H> class nfunction_entries_view {
+template <class H> class nfunction_entry_access {
     H function_;
 
     template <class G> static constexpr auto entry(G& function, int index) {
@@ -1338,26 +1679,41 @@ template <class H> class nfunction_entries_view {
     }
 
   public:
-    using nview_tag = void;
-
-    constexpr explicit nfunction_entries_view(H function) : function_(move(function)) {}
-    constexpr int len() const { return nlen(function_.get()); }
-    constexpr bool empty() const { return len() == 0; }
-    constexpr auto operator[](int index) {
-        npre(0 <= index && index < len());
-        return entry(function_.get(), index);
-    }
-    constexpr auto operator[](int index) const {
-        npre(0 <= index && index < len());
+    constexpr explicit nfunction_entry_access(H function) : function_(move(function)) {}
+    constexpr auto operator()(int index) { return entry(function_.get(), index); }
+    constexpr auto operator()(int index) const
+        requires requires(const H& function) {
+            function.get().key(0);
+            function.get()[0];
+        }
+    {
         return entry(function_.get(), index);
     }
 };
+} // namespace ni
+
+template <class G>
+    requires ndiscrete<remove_reference_t<G>>
+constexpr auto nkeys(G&& function) {
+    auto holder = ni::nhold_object(forward<G>(function));
+    int size = nlen(holder.get());
+    using access_type = ni::nfunction_key_access<decltype(holder)>;
+    return nview(size, access_type(move(holder)));
+}
+
+template <class G>
+    requires ndiscrete<remove_reference_t<G>> && nviewable_indexed<G&&>
+constexpr auto nvalues(G&& function) {
+    return nall(forward<G>(function));
+}
 
 template <class G>
     requires ndiscrete<remove_reference_t<G>>
 constexpr auto nentries(G&& function) {
     auto holder = ni::nhold_object(forward<G>(function));
-    return nfunction_entries_view<decltype(holder)>(move(holder));
+    int size = nlen(holder.get());
+    using access_type = ni::nfunction_entry_access<decltype(holder)>;
+    return nview(size, access_type(move(holder)));
 }
 
 // Semantic restriction: domain contains arguments, not positions.
@@ -1377,7 +1733,7 @@ template <class OH, class IH> class ncomposed_function {
     IH inner_;
 
   public:
-    using nview_tag = void;
+    using nrange_tag = void;
     using nfunction_tag = void;
 
     constexpr ncomposed_function(OH outer, IH inner)
@@ -1442,7 +1798,7 @@ template <class GH, class PH> class ngathered_function {
     }
 
   public:
-    using nview_tag = void;
+    using nrange_tag = void;
     using nfunction_tag = void;
 
     constexpr ngathered_function(GH function, PH positions)
@@ -1508,39 +1864,34 @@ constexpr auto nblock(G&& function, int block, int width) {
     return nsubfunc(forward<G>(function), first, last);
 }
 
-template <class H> class nfunction_blocks_view {
+namespace ni {
+template <class H> class nfunction_block_access {
     H function_;
     int width_;
 
   public:
-    using nview_tag = void;
-
-    constexpr nfunction_blocks_view(H function, int width)
-        : function_(move(function)), width_(width) {
-        npre(width > 0);
-    }
-    constexpr int len() const {
-        int size = nlen(function_.get());
-        return size / width_ + (size % width_ != 0);
-    }
-    constexpr bool empty() const { return len() == 0; }
-    constexpr auto operator[](int block) & {
-        npre(0 <= block && block < len());
+    constexpr nfunction_block_access(H function, int width)
+        : function_(move(function)), width_(width) {}
+    constexpr auto operator()(int block) {
         return nblock(function_.get(), block, width_);
     }
-    constexpr auto operator[](int block) const& {
-        npre(0 <= block && block < len());
+    constexpr auto operator()(int block) const
+        requires requires(const H& function) { nblock(function.get(), 0, 1); }
+    {
         return nblock(function_.get(), block, width_);
     }
-    auto operator[](int) && = delete;
-    auto operator[](int) const&& = delete;
 };
+} // namespace ni
 
 template <class G>
     requires ndiscrete<remove_reference_t<G>>
 constexpr auto nblocks(G&& function, int width) {
     auto holder = ni::nhold_object(forward<G>(function));
-    return nfunction_blocks_view<decltype(holder)>(move(holder), width);
+    npre(width > 0);
+    int size = nlen(holder.get());
+    int count = size / width + (size % width != 0);
+    using access_type = ni::nfunction_block_access<decltype(holder)>;
+    return nview(count, access_type(move(holder), width));
 }
 
 // ---- 10_seq.hpp ----
@@ -2058,7 +2409,7 @@ class narray {
     int dim(int axis, int fallback = npos) const noexcept {
         return 0 <= axis && axis < Rank ? shape_[axis] : fallback;
     }
-    nspan<const int> shape() const noexcept { return {shape_.data(), Rank}; }
+    nview<const int> shape() const noexcept { return {shape_.data(), Rank}; }
     T* data() noexcept { return storage_.data(); }
     const T* data() const noexcept { return storage_.data(); }
 
@@ -2104,6 +2455,24 @@ class narray {
 };
 
 namespace ni {
+template <class C, class P> class nprojected_compare {
+    [[no_unique_address]] C compare_;
+    [[no_unique_address]] P projection_;
+
+  public:
+    constexpr nprojected_compare(C compare, P projection)
+        : compare_(move(compare)), projection_(move(projection)) {}
+
+    template <class L, class R> constexpr bool operator()(L&& left, R&& right) {
+        return invoke(compare_, invoke(projection_, forward<L>(left)),
+                      invoke(projection_, forward<R>(right)));
+    }
+};
+
+template <class A, class P>
+using nprojected_value_t =
+    remove_cvref_t<invoke_result_t<P&, nindex_reference_t<A>>>;
+
 template <class A, class C> void nheap_sift(A& a, int root, int count, C& compare) {
     for (;;) {
         long long first_child = 2LL * root + 1;
@@ -2130,16 +2499,17 @@ template <class A, class C> void nheap_sort(A& a, C& compare) {
 }
 } // namespace ni
 
-template <class A, class C = nless<>>
+template <class A, class C = nless<>, class P = nidentity>
     requires nviewable_indexed<A&&> && nswappable_indexed<remove_reference_t<A>>
-void nsort(A&& a, C compare = {}) {
+void nsort(A&& a, C compare = {}, P projection = {}) {
     int n = nlen(a);
     if (n < 2)
         return;
+    ni::nprojected_compare projected(move(compare), move(projection));
     if constexpr (ncontiguous_indexed<remove_reference_t<A>>)
-        sort(a.data(), a.data() + n, move(compare));
+        sort(a.data(), a.data() + n, move(projected));
     else
-        ni::nheap_sort(a, compare);
+        ni::nheap_sort(a, projected);
 }
 
 template <class A>
@@ -2152,65 +2522,92 @@ void nreverse_inplace(A&& a, int l = 0, int r = npos) {
         ranges::swap(a[l++], a[r]);
 }
 
-template <class A, class X> int nfind(const A& a, const X& value, int fallback = npos) {
+template <class A, class X, class P>
+    requires nindexed<A> && invocable<P&, nindex_reference_t<const A>>
+int nfind(const A& a, const X& value, P projection, int fallback = npos) {
     for (int i = 0; i < nlen(a); ++i)
-        if (a[i] == value)
+        if (invoke(projection, a[i]) == value)
             return i;
     return fallback;
 }
 
-template <class A, class X, class C = nless<>> int nlower(const A& a, const X& value, C compare = {}) {
+template <class A, class X>
+    requires nindexed<A>
+int nfind(const A& a, const X& value, int fallback = npos) {
+    return nfind(a, value, nidentity{}, fallback);
+}
+
+template <class A, class X, class C = nless<>, class P = nidentity>
+    requires nindexed<A> && invocable<P&, nindex_reference_t<const A>>
+int nlower(const A& a, const X& value, C compare = {}, P projection = {}) {
     int l = 0, r = nlen(a);
     while (l < r) {
         int m = l + (r - l) / 2;
-        compare(a[m], value) ? l = m + 1 : r = m;
+        invoke(compare, invoke(projection, a[m]), value) ? l = m + 1 : r = m;
     }
     return l;
 }
 
-template <class A, class X, class C = nless<>> int nupper(const A& a, const X& value, C compare = {}) {
+template <class A, class X, class C = nless<>, class P = nidentity>
+    requires nindexed<A> && invocable<P&, nindex_reference_t<const A>>
+int nupper(const A& a, const X& value, C compare = {}, P projection = {}) {
     int l = 0, r = nlen(a);
     while (l < r) {
         int m = l + (r - l) / 2;
-        compare(value, a[m]) ? r = m : l = m + 1;
+        invoke(compare, value, invoke(projection, a[m])) ? r = m : l = m + 1;
     }
     return l;
 }
 
-template <class A, class X, class C = nless<>>
-int nfind_sorted(const A& a, const X& value, C compare = {}, int fallback = npos) {
-    int index = nlower(a, value, compare);
-    return index < nlen(a) && !compare(value, a[index]) && !compare(a[index], value)
+template <class A, class X, class C = nless<>, class P = nidentity>
+    requires nindexed<A> && invocable<P&, nindex_reference_t<const A>>
+int nfind_sorted(const A& a, const X& value, C compare = {}, P projection = {},
+                 int fallback = npos) {
+    int index = nlower(a, value, compare, projection);
+    if (index == nlen(a))
+        return fallback;
+    decltype(auto) projected = invoke(projection, a[index]);
+    return !invoke(compare, value, projected) && !invoke(compare, projected, value)
                ? index
                : fallback;
 }
 
-template <class A, class O = nadd<nindex_value_t<const A>>>
-    requires nmonoid<O, nindex_value_t<const A>>
-auto nfold(const A& a, int l, int r, O op = {}) {
-    using T = nindex_value_t<const A>;
+template <class A, class X, class C>
+    requires nindexed<A>
+int nfind_sorted(const A& a, const X& value, C compare, int fallback) {
+    return nfind_sorted(a, value, move(compare), nidentity{}, fallback);
+}
+
+template <class A, class P = nidentity,
+          class O = nadd<ni::nprojected_value_t<const A, P>>>
+    requires nindexed<A> &&
+             nmonoid<O, ni::nprojected_value_t<const A, P>>
+auto nfold(const A& a, int l, int r, O op = {}, P projection = {}) {
+    using T = ni::nprojected_value_t<const A, P>;
     npre(0 <= l && l <= r && r <= nlen(a));
     T result = op.id();
     for (int i = l; i < r; ++i)
-        result = op(move(result), a[i]);
+        result = op(move(result), invoke(projection, a[i]));
     return result;
 }
 
-template <class A, class O = nadd<nindex_value_t<const A>>>
-    requires nmonoid<O, nindex_value_t<const A>>
-auto nfold(const A& a, O op = {}) {
-    return nfold(a, 0, nlen(a), move(op));
+template <class A, class P = nidentity,
+          class O = nadd<ni::nprojected_value_t<const A, P>>>
+    requires nindexed<A> &&
+             nmonoid<O, ni::nprojected_value_t<const A, P>>
+auto nfold(const A& a, O op = {}, P projection = {}) {
+    return nfold(a, 0, nlen(a), move(op), move(projection));
 }
 
-template <class A, class E = nequal<>>
+template <class A, class E = nequal<>, class P = nidentity>
     requires nviewable_indexed<A&&> && nreference_indexed<remove_reference_t<A>> &&
              (!is_const_v<remove_reference_t<nindex_reference_t<remove_reference_t<A>>>>)
-int nunique_compact(A&& a, E equal = {}) {
+int nunique_compact(A&& a, E equal = {}, P projection = {}) {
     if (nlen(a) == 0)
         return 0;
     int kept = 1;
     for (int i = 1; i < nlen(a); ++i)
-        if (!equal(a[kept - 1], a[i])) {
+        if (!invoke(equal, invoke(projection, a[kept - 1]), invoke(projection, a[i]))) {
             if (kept != i)
                 a[kept] = move(a[i]);
             ++kept;
@@ -2218,22 +2615,22 @@ int nunique_compact(A&& a, E equal = {}) {
     return kept;
 }
 
-template <class A, class E = nequal<>>
+template <class A, class E = nequal<>, class P = nidentity>
     requires nviewable_indexed<A&&> && nresizable<remove_reference_t<A>> &&
              nreference_indexed<remove_reference_t<A>> &&
              (!is_const_v<remove_reference_t<nindex_reference_t<remove_reference_t<A>>>>)
-int nunique(A&& a, E equal = {}) {
-    int kept = nunique_compact(a, move(equal));
+int nunique(A&& a, E equal = {}, P projection = {}) {
+    int kept = nunique_compact(a, move(equal), move(projection));
     a.resize(kept);
     return kept;
 }
 
-template <class A, class C = nless<>, class E = nequal<>>
+template <class A, class C = nless<>, class E = nequal<>, class P = nidentity>
     requires nviewable_indexed<A&&> && nresizable<remove_reference_t<A>> &&
              nswappable_indexed<remove_reference_t<A>>
-int nsort_unique(A&& a, C compare = {}, E equal = {}) {
-    nsort(a, move(compare));
-    return nunique(a, move(equal));
+int nsort_unique(A&& a, C compare = {}, E equal = {}, P projection = {}) {
+    nsort(a, compare, projection);
+    return nunique(a, move(equal), move(projection));
 }
 
 // ---- 20_mechanism.hpp ----
@@ -2337,12 +2734,12 @@ template <class T> class nscratch {
     int cap() const noexcept { return storage_.cap(); }
     void reserve(int n) { storage_.reserve(n); }
 
-    // Any span returned by a previous call may be invalidated by the next resize.
-    nspan<T> space(int n) {
+    // Any view returned by a previous call may be invalidated by the next resize.
+    nview<T> space(int n) {
         storage_.resize(n);
         return {storage_.data(), n};
     }
-    nspan<T> filled(int n, const T& value = T{}) {
+    nview<T> filled(int n, const T& value = T{}) {
         auto result = space(n);
         for (int i = 0; i < n; ++i)
             result[i] = value;
@@ -5366,7 +5763,7 @@ template <class W = int> class ngraph_list {
         add(b, a, weight);
     }
 
-    nspan<const narc<W>> neighbors(int vertex) const {
+    nview<const narc<W>> neighbors(int vertex) const {
         npre(0 <= vertex && vertex < vertices());
         const auto& edges = adjacency_[vertex];
         npre(edges.size() <= size_t(INT_MAX));
@@ -8118,6 +8515,14 @@ template <class T> class nmatrix {
     bool empty() const noexcept { return storage_.empty(); }
     T* data() noexcept { return storage_.data(); }
     const T* data() const noexcept { return storage_.data(); }
+    T* row_data(int row) {
+        npre(0 <= row && row < rows_);
+        return columns_ ? storage_.data() + ptrdiff_t(row) * columns_ : storage_.data();
+    }
+    const T* row_data(int row) const {
+        npre(0 <= row && row < rows_);
+        return columns_ ? storage_.data() + ptrdiff_t(row) * columns_ : storage_.data();
+    }
 
     T& operator[](int i) { return storage_[i]; }
     const T& operator[](int i) const { return storage_[i]; }
@@ -8130,45 +8535,23 @@ template <class T> class nmatrix {
         return storage_[row * columns_ + column];
     }
 
-    nspan<T> row(int index) & {
-        npre(0 <= index && index < rows_);
-        return {columns_ ? storage_.data() + index * columns_ : storage_.data(), columns_};
+    auto view() & { return nview(storage_.data(), rows_, columns_); }
+    auto view() const& { return nview(storage_.data(), rows_, columns_); }
+    auto view() && = delete;
+
+    auto row(int index) & {
+        return nrow(view(), index);
     }
-    nspan<const T> row(int index) const& {
-        npre(0 <= index && index < rows_);
-        return {columns_ ? storage_.data() + index * columns_ : storage_.data(), columns_};
-    }
+    auto row(int index) const& { return nrow(view(), index); }
     auto row(int) && = delete;
 
-    auto column(int index) & {
-        npre(0 <= index && index < columns_);
-        return nview(rows_, [this, index](int row) -> T& { return (*this)(row, index); });
-    }
-    auto column(int index) const& {
-        npre(0 <= index && index < columns_);
-        return nview(rows_, [this, index](int row) -> const T& { return (*this)(row, index); });
-    }
+    auto column(int index) & { return ncolumn(view(), index); }
+    auto column(int index) const& { return ncolumn(view(), index); }
     auto column(int) && = delete;
 
     // offset > 0 selects a diagonal above the main one; offset < 0 selects one below it.
-    auto diagonal(int offset = 0) & {
-        npre(-1LL * rows_ <= offset && offset <= columns_);
-        int first_row = int(max(0LL, -1LL * offset)), first_column = max(0, offset);
-        int count = min(rows_ - first_row, columns_ - first_column);
-        npre(count >= 0);
-        return nview(count, [this, first_row, first_column](int i) -> T& {
-            return (*this)(first_row + i, first_column + i);
-        });
-    }
-    auto diagonal(int offset = 0) const& {
-        npre(-1LL * rows_ <= offset && offset <= columns_);
-        int first_row = int(max(0LL, -1LL * offset)), first_column = max(0, offset);
-        int count = min(rows_ - first_row, columns_ - first_column);
-        npre(count >= 0);
-        return nview(count, [this, first_row, first_column](int i) -> const T& {
-            return (*this)(first_row + i, first_column + i);
-        });
-    }
+    auto diagonal(int offset = 0) & { return ndiagonal(view(), offset); }
+    auto diagonal(int offset = 0) const& { return ndiagonal(view(), offset); }
     auto diagonal(int = 0) && = delete;
 
     friend bool operator==(const nmatrix&, const nmatrix&) = default;

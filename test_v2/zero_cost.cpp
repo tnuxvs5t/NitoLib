@@ -17,9 +17,9 @@ int main() {
     int* pointer = raw;
     size_t before = allocations;
 
-    nspan<int> contiguous(raw);
+    nview<int> contiguous(raw);
     auto indirect = nview(4, [pointer](int i) -> int& { return pointer[2 * i]; });
-    auto strided = nstride(contiguous, 1, 4, 2);
+    auto strided = nstride(contiguous, 1, contiguous.len(), 2);
     auto borrowed = nall(contiguous);
 
     static_assert(sizeof(contiguous) <= 2 * sizeof(void*));

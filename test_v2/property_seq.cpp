@@ -23,7 +23,7 @@ int main() {
         vector<int> expected(n);
         for (int i = 0; i < n; ++i)
             storage[2 * i] = expected[i] = int(rng());
-        auto even = nstride(storage, 0, n, 2);
+        auto even = nstride(storage, 0, 2 * n, 2);
         nsort(even, ngreater<>{});
         sort(expected.begin(), expected.end(), greater<>{});
         for (int i = 0; i < n; ++i) {

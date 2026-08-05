@@ -5,12 +5,12 @@ template <class T> class nscratch {
     int cap() const noexcept { return storage_.cap(); }
     void reserve(int n) { storage_.reserve(n); }
 
-    // Any span returned by a previous call may be invalidated by the next resize.
-    nspan<T> space(int n) {
+    // Any view returned by a previous call may be invalidated by the next resize.
+    nview<T> space(int n) {
         storage_.resize(n);
         return {storage_.data(), n};
     }
-    nspan<T> filled(int n, const T& value = T{}) {
+    nview<T> filled(int n, const T& value = T{}) {
         auto result = space(n);
         for (int i = 0; i < n; ++i)
             result[i] = value;

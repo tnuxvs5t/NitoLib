@@ -18,6 +18,25 @@ int main() {
     ntest(nsort_unique(repeated) == 4 && repeated == nvector<int>({1, 2, 3, 4}));
     ntest(nfind_sorted(repeated, 3) == 2 && nfind_sorted(repeated, 8, nless<>{}, 77) == 77);
 
+    struct record {
+        int key, payload;
+    };
+    auto key = [](const record& value) { return value.key; };
+    nvector<record> records{{3, 30}, {1, 10}, {2, 20}, {2, 21}};
+    nsort(records, nless<>{}, key);
+    ntest(records[0].key == 1 && records[0].payload == 10);
+    ntest(records[1].key == 2 && records[2].key == 2 && records[3].payload == 30);
+    ntest(nlower(records, 2, nless<>{}, key) == 1);
+    ntest(nupper(records, 2, nless<>{}, key) == 3);
+    ntest(nfind(records, 3, key) == 3);
+    ntest(nfind_sorted(records, 2, nless<>{}, key) == 1);
+    ntest(nfind_sorted(records, 7, nless<>{}, key, 99) == 99);
+    ntest(nfold(records, nadd<int>{}, key) == 8);
+
+    nvector<record> duplicate_records{{2, 20}, {1, 10}, {2, 21}, {1, 11}};
+    ntest(nsort_unique(duplicate_records, nless<>{}, nequal<>{}, key) == 2);
+    ntest(duplicate_records[0].key == 1 && duplicate_records[1].key == 2);
+
     nvector<string> distinct{"a", "b", "c"};
     ntest(nunique(distinct) == 3 && distinct[0] == "a" && distinct[1] == "b" && distinct[2] == "c");
 

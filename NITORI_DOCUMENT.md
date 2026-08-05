@@ -23,7 +23,7 @@ Nitori v2 是面向算法竞赛的 GNU C++20 单头文件系统。它不是 STL 
 3. [checked 与 unsafe](#3-checked-与-unsafe)
 4. [基础值、哨兵和可选结果](#4-基础值哨兵和可选结果)
 5. [代数操作包与定律](#5-代数操作包与定律)
-6. [引用拓扑与离散函数：nspan、nview、nfunc](#6-引用拓扑与离散函数nspannviewnfunc)
+6. [统一 Range/View/Projection 与离散函数](#6-统一-rangeviewprojection-与离散函数)
 7. [枚举协议与组合视图](#7-枚举协议与组合视图)
 8. [拥有型序列与通用算法](#8-拥有型序列与通用算法)
 9. [机制、内存、关联对象与 AST](#9-机制内存关联对象与-ast)
@@ -100,12 +100,13 @@ Nitori 公共 API 不提供 iterator。遍历使用 `nfor`/`nfori` 或显式游�
 ### 2.2 所有权
 
 - `nvector`、`ndeque`、`narray`、`nmatrix`、`nmap`、`nset` 等拥有存储。
-- `nspan`、`nview`、`nall`、`nsub`、`nstride`、`nproject`、`nzip`、
-  `nproduct`、`nwindows` 和 `ngraph_view` 借用 owner。
+- `nview` 是唯一公共引用视图类型；`nall`、`nsub`、`nstride`、`nproject`、`nzip`、
+  `nproduct`、`nwindows`、`nrow`、`ncolumn`、`ndiagonal` 都返回某个 `nview` 实例。
 - `nfunc(domain,evaluate)`、`nrestrict`、`ngather`、`ncompose` 等离散函数适配器
   对左值参数借用、对右值参数接管所有权；但 evaluator 自己捕获的引用仍由用户负责。
-- 组合器对左值 owner 只保存引用；对 `nspan/nview/组合 view` 则复制或移动 view 包装，
-  让中间 view 可以安全嵌套，但仍不延长最底层 owner 的生命周期。
+- 组合器对普通左值 owner 保存引用；`nview` 描述符按值复制，对其他左值 range 描述符
+  借用，对安全的右值 range 描述符接管所有权。中间 view 因此可以嵌套，但它仍不延长
+  最底层借用 owner 的生命周期。
 - owner 发生扩容、销毁或破坏索引拓扑的修改后，旧 view 可能失效。
 - 会立即悬垂的临时 owning container 被 concept 拒绝，例如 `nall(nvector<int>{...})`；
   临时 view 则可以安全进入下一层组合器。
@@ -313,37 +314,59 @@ tree 最常见的隐蔽 WA。`naction_laws` 声明 tag 单位、compose 结合�
 
 ---
 
-## 6. 引用拓扑与离散函数：nspan、nview、nfunc
+## 6. 统一 Range/View/Projection 与离散函数
 
-### 6.1 `nspan<T>`：连续借用
+### 6.1 三层协议，不建立 iterator/trait 森林
+
+```text
+Range       = 算法能枚举或按位置读取的对象
+nview       = 可复制的零拥有访问描述符，是唯一公共引用视图类型
+Projection  = 算法临时把元素映射为 key 的可调用对象
+nfunc       = nview 上层的有限离散函数，把 position、semantic key、value 接起来
+```
+
+Range 不是具体类。最小随机访问协议只有 `nlen(a)` 与 `a[i]`；最小枚举协议只有
+`nenumerate(a)` 产生的 `ok/val/idx/next` 游标。算法按能力约束，不要求用户伪造 STL
+iterator，也不通过一串 `iterator_traits/range_traits/proxy_traits` 推断语义。
+
+`nrange_tag` 只表示一个对象可安全按值进入下一层组合器；`nview_tag` 只由真正的
+`nview` 携带。两者是生命周期标记，不是按容器种类分派算法的 trait 表。
+
+### 6.2 唯一 `nview<T,Accessor>`
+
+连续、lambda、切片、步长、zip、窗口与二维布局都属于同一模板家族。差异只存在于
+编译期 `Accessor`，没有虚函数、堆分配或运行时 type erasure。
 
 ```cpp
 int raw[] = {3, 1, 2};
-nspan<int> s(raw);         // 数组构造
-nspan<int> t(raw, 3);      // 指针 + 长度
+nview<int> a(raw);             // 连续数组
+auto b = nview(raw, 3);        // CTAD：指针 + 长度
+nview<const int> read_only(a); // 兼容的只读连续 view
 
-s.len(); s.empty(); s.data();
-s[i];
-s.get(i);                 // 越界返回 nullptr
-s.sub(l, r);              // [l,r)
-s.sub(l);                 // [l,len)
+a.len(); a.empty(); a.data();
+a[i];
+a.get(i);                      // 越界返回 nullptr
+
+nvector<int> owner{5, 4, 3, 2, 1};
+auto odd = nview(3, [&](int i) -> int& { return owner[2 * i]; });
+nsort(odd);                    // 直接改写 owner 的 0/2/4 位置
 ```
 
-构造要求长度非负，非空时指针非空。`nspan<T>` 可转换为兼容的 `nspan<const T>`。
+连续 accessor 暴露 `data()`；一般 lambda/stride accessor 不伪造连续性。于是同一个
+`nsort` 对连续 view 使用 `std::sort`，对可交换的非连续 view 使用原地 heapsort。
 
-### 6.2 `nview<F>`：访问器借用
-
-`nview` 保存长度和访问器 `F`。访问器被调用为 `access(i)`，普通可写 view 应返回
-真实 `T&`，而不是代理值。
+复制 `nview` 只复制访问描述，不复制元素：
 
 ```cpp
-nvector<int> a{5, 4, 3, 2, 1};
-auto odd_positions = nview(3, [&](int i) -> int& { return a[2 * i]; });
-nsort(odd_positions);
-// a == {1,4,3,2,5}
+auto alias = odd;
+alias[0] = 9;                  // 写回同一 owner
+auto copy = ncollect(odd);     // nvector<int>，独立物化
 ```
 
-### 6.3 能力概念
+`ncollect<T>(range)` 可显式指定目标值类型；对 `pair/tuple` 递归去掉引用。物化是显式
+边界，库不会因为复制一个 view 而暗中做 `O(n)` 工作。
+
+### 6.3 最小能力概念
 
 | Concept/trait | 含义 |
 |---|---|
@@ -354,18 +377,20 @@ nsort(odd_positions);
 | `nswappable_indexed<A>` | 元素是可写且可交换的 lvalue |
 | `ncontiguous_indexed<A>` | 另外提供 contiguous `data()` |
 | `nresizable<A>` | 提供 `resize(int)` |
-| `nview_object<A>` | 类型显式携带安全可传递的 view 包装 |
-| `nviewable_indexed<A>` | indexed 左值 owner，或可复制/移动进组合器的 view |
+| `nrange_object<A>` | 可安全按值接管的 range 描述符 |
+| `nview_object<A>` | 真正的 `nview<T,Accessor>` 描述符 |
+| `nviewable_indexed<A>` | indexed 左值 owner，或可复制/移动进组合器的 range 描述符 |
 
 算法只要求实际需要的能力。例如 `nfind` 只需要索引读取，`nsort` 需要可交换引用，
 `nunique` 还需要 resize。
 
-### 6.4 标准 view 组合器
+### 6.4 半开切片与组合器
 
 ```cpp
 auto all = nall(a);                    // 全序列引用
 auto middle = nsub(a, 2, 7);           // [2,7)
-auto every_second = nstride(a, 0, 5, 2);
+auto every_second = nstride(a, 0, a.len(), 2);       // 0,2,4,... < len
+auto by_stride = nstride(a, a.len() - 1, -1, -1);   // len-1,...,0
 auto backwards = nreverse(a);
 auto keys = nproject(items, [](item& x) -> int& { return x.key; });
 
@@ -374,7 +399,11 @@ auto paired = nzip(nsub(a, 0, 3), nreverse(nsub(b, 1, 4)));
 auto window = nwindows(nsub(a, 1, 8), 3)[1];
 ```
 
-`nstride(a, first, count, step)` 的 `count` 是元素数，不是终点；`step` 可为负。
+`nsub(a,first,last)` 与 `nstride(a,first,last,step)` 都使用终点排除语义。正步长要求
+`0 <= first <= last <= len`；负步长沿下降方向在到达 `last` 前停止，并允许 `last == -1`
+表示包含索引 `0`；空负步长区间另允许 `first == last` 位于 `[-1,len]`。`step == 0`
+非法。这个协议与 `nrange(first,last,step)` 一致，不再有
+“有时第三参数是 count、有时是 end”的双重心智模型。
 组合结果按值携带中间 view，因此上例不会借用已经销毁的包装对象；它们仍借用 `a/b`
 本体，所以 owner 必须继续存活且索引拓扑稳定。
 
@@ -388,7 +417,49 @@ nzeta_subset(nsub(table, offset, offset + (1 << bits)));
 
 同样的调用若把临时 owning container 放在最底层会在编译期拒绝。
 
-### 6.5 矩阵列和对角线就是普通 view
+### 6.5 View projection 与 algorithm projection 必须分开
+
+```cpp
+struct item { int key, payload; };
+nvector<item> a{{3,30}, {1,10}, {2,20}};
+
+auto key_fields = nproject(a, [](item& x) -> int& { return x.key; });
+nsort(key_fields); // 只重排 key 字段；payload 留在原位置
+
+nsort(a, nless<>{}, [](const item& x) { return x.key; });
+// 按 key 比较，但交换完整 item；key/payload 关系保持
+```
+
+`nproject(range,p)` 改变引用拓扑，结果是新的 `nview`；算法的 projection 只改变观察
+方式，不改变被交换/移动的元素。`nsort/nfind/nlower/nupper/nfind_sorted/nfold/`
+`nunique_compact/nunique/nsort_unique` 都接受 projection；比较器仍只负责 key 之间的
+比较。成员指针也可作为 projection。
+
+### 6.6 二维仍是同一个 `nview`
+
+```cpp
+int raw[12];
+auto grid = nview(raw, 3, 4); // row-major；len()==12
+grid.rows(); grid.cols(); grid.dim(0); grid(2, 3);
+
+auto indirect_grid = nview(3, 4, [&](int row, int column) -> int& {
+    return storage[index(row, column)];
+}); // 二维 lambda 布局，不伪造连续性
+
+auto row = nrow(grid, 1);       // 连续 nview，保留 data()
+auto col = ncolumn(grid, 2);    // 非连续 nview
+auto dia = ndiagonal(grid);     // 主对角线
+nsort(dia);
+
+// 显式二维 stride：base, rows, cols, row_stride, column_stride
+auto transposed = nview(raw, 4, 3, ptrdiff_t{1}, ptrdiff_t{4});
+```
+
+二维 accessor 同时实现 flat `operator[](i)` 与 `operator()(row,column)`。`nrow/`
+`ncolumn/ndiagonal` 把二维布局降为普通一维 view，因此所有序列算法直接复用；没有
+`sort_diagonal` 特例。显式 stride 的地址合法性由调用者保证，view 不拥有底层存储。
+
+`nmatrix<T>::view()` 返回这种二维 nview；其成员 `row/column/diagonal` 只是同名桥梁：
 
 ```cpp
 nmatrix<int> m{{9,2,7}, {6,8,3}, {1,0,5}};
@@ -401,16 +472,14 @@ nsort(diagonal);
 auto upper = m.diagonal(1);   // offset > 0：主对角线上方
 ```
 
-这里没有 `sort_diagonal` 特例。`nsort` 只看到可交换索引引用。
-
-### 6.6 从 view 实例化独立 owner：`ncollect`
+### 6.7 从 view 实例化独立 owner：`ncollect`
 
 复制 view 对象只复制“如何访问”的描述符，仍然别名同一个底层 owner：
 
 ```cpp
 auto alias = view;             // alias[i] 与 view[i] 指向同一元素
 auto copy = ncollect(view);    // nvector<T>，逐元素独立复制
-auto wide = ncollect<long long>(span); // 显式指定目标值类型
+auto wide = ncollect<long long>(view); // 显式指定目标值类型
 ```
 
 `ncollect` 接受任意 `nenumerable`，按枚举顺序建立 `nvector`；若源提供 `nlen`，会先
@@ -433,7 +502,7 @@ auto blocks = ncollect(nproject(nwindows(a, width), [](auto window) {
 })); // nvector<nvector<T>>
 ```
 
-### 6.7 离散函数：`nview` 的上层胶水
+### 6.8 离散函数：`nview` 的上层胶水
 
 `nview` 回答“第 `i` 个位置引用谁”；离散函数再增加一层语义，回答“第 `i` 个位置
 代表哪个离散自变量，以及函数在该自变量上的值是什么”。给定有限域
@@ -688,17 +757,18 @@ cube.shape();
 
 | API | 前提 | 复杂度 |
 |---|---|---|
-| `nsort(a,cmp)` | viewable + `nswappable_indexed`，cmp 为严格弱序 | `O(n log n)`；连续走 `std::sort`，否则 heapsort |
+| `nsort(a,cmp,proj)` | viewable + `nswappable_indexed`，cmp 在投影 key 上为严格弱序 | `O(n log n)`；连续走 `std::sort`，否则 heapsort |
 | `nreverse_inplace(a,l,r)` | 可交换；默认全区间 | `O(r-l)` |
-| `nfind(a,x,fallback)` | 可读 indexed | `O(n)` |
-| `nlower/nupper(a,x,cmp)` | 已按 cmp 排序 | `O(log n)` |
-| `nfind_sorted(a,x,cmp,fallback)` | 已排序；按 cmp 等价查找 | `O(log n)` |
-| `nfold(a,l,r,op)` | op 为幺半群 | `O(r-l)`，保持顺序 |
-| `nunique_compact(a,equal)` | 相邻等价元素压缩 | `O(n)`，返回保留长度但不 resize |
-| `nunique(a,equal)` | 另需 `resize` | `O(n)`，并缩短容器 |
-| `nsort_unique(a,cmp,equal)` | 可排序且可 resize | `O(n log n)`，排序后去重 |
+| `nfind(a,x,proj,fallback)` | 可读 indexed；比较 `proj(a[i]) == x` | `O(n)` |
+| `nlower/nupper(a,x,cmp,proj)` | 已按同一 cmp/proj 排序 | `O(log n)` |
+| `nfind_sorted(a,x,cmp,proj,fallback)` | 已排序；按投影 key 的 cmp 等价查找 | `O(log n)` |
+| `nfold(a,l,r,op,proj)` | 投影值类型上的 op 为幺半群 | `O(r-l)`，保持顺序 |
+| `nunique_compact(a,equal,proj)` | 相邻投影 key 等价元素压缩 | `O(n)`，返回保留长度但不 resize |
+| `nunique(a,equal,proj)` | 另需 `resize` | `O(n)`，并缩短容器 |
+| `nsort_unique(a,cmp,equal,proj)` | 可排序且可 resize | `O(n log n)`，排序后去重 |
 
-`nunique` 只压缩相邻等价项；通常先 `nsort(a)`。
+projection 的默认值是 `nidentity{}`，所以旧的值序列调用不增加语法或运行时成本。
+`nunique` 只压缩相邻等价项；通常先用相同 projection 执行 `nsort`。
 
 ---
 
@@ -873,7 +943,7 @@ auto inverse = ~bij;
 auto composition = outer * inner;
 ```
 
-`nfunc_hash` 是“键可能尚未绑定”的关联对象，与 6.7 的 `nfunc(domain,evaluator)` 有意
+`nfunc_hash` 是“键可能尚未绑定”的关联对象，与 6.8 的 `nfunc(domain,evaluator)` 有意
 分名；后者是无需存表的有限 keyed view。
 
 坐标压缩建立值到 `[0,k)` rank 的双射：
@@ -1512,12 +1582,15 @@ nmatrix<int> c{{1,2}, {3,4}};
 
 a.rows(); a.cols(); a.len(); a.empty(); a.data();
 a(r,c); a[flat_index];
-a.row(r);          // nspan
-a.column(c);       // nview
-a.diagonal(offset);// nview，正数向上，负数向下
+a.view();          // 二维 nview
+a.row(r);          // 连续一维 nview
+a.column(c);       // 非连续一维 nview
+a.diagonal(offset);// 一维 nview，正数向上，负数向下
 ```
 
-row/column/diagonal 只允许从左值矩阵借用。
+`view/row/column/diagonal` 只允许从左值矩阵借用。它们与自由函数
+`nrow/ncolumn/ndiagonal` 使用同一实现，因此 lambda 布局、显式 stride 布局和矩阵 owner
+不会分裂成三套算法接口。
 
 ### 13.2 矩阵运算
 
@@ -2140,16 +2213,18 @@ v2 不再以“删掉旧能力换一个小而美的壳”为目标。它复用 v
 | 字符串短名 | `nprefix/nzfunc/nkmp` | 严格核心名仍保留 |
 | 几何短名 | `nonseg/nline2/nline_intersect` | epsilon 与精确入口并存 |
 
-### 20.2 五个有意的语义拆分
+### 20.2 六个有意的语义拆分
 
-1. **`nfunc`**：v2 的 `nfunc(domain,evaluator)` 是 `nview` 上层有限 keyed view；v1
+1. **`nspan` / `nview`**：v2 只保留 `nview<T,Accessor>`。连续性由 accessor 是否暴露
+   `data()` 静态决定；`nview<T>` 就是原连续借用的零开销入口，不再维护两套切片体系。
+2. **`nfunc`**：v2 的 `nfunc(domain,evaluator)` 是 `nview` 上层有限 keyed view；v1
    关联式部分函数迁到 `nfunc_hash/npartial`。一个负责零分配组合，一个负责运行时绑定。
-2. **`nmod`**：`nmod<M>` 恢复为模整数类型；标量数学余数必须写 `nmodulo(x,m)`。
-3. **`nmatrix` / `nmat`**：前者负责存储、行列/对角 view 和显式 semiring 算法；后者
+3. **`nmod`**：`nmod<M>` 恢复为模整数类型；标量数学余数必须写 `nmodulo(x,m)`。
+4. **`nmatrix` / `nmat`**：前者负责存储、行列/对角 view 和显式 semiring 算法；后者
    绑定 `Add/Mul`，提供 `+/*/pow/trans/eye` 的竞赛短桥。
-4. **`narena` / `npool`**：前者 0-based 连续 bump + rollback，后者 1-based 独立删除和
+5. **`narena` / `npool`**：前者 0-based 连续 bump + rollback，后者 1-based 独立删除和
    槽位复用。不能再用同一名字掩盖两种互斥生命周期。
-5. **`nlichao` / `nlichao_static`**：前者在线整数域动态开点，后者预知坐标、排序去重并
+6. **`nlichao` / `nlichao_static`**：前者在线整数域动态开点，后者预知坐标、排序去重并
    只允许查询离散点。
 
 ### 20.3 循环宏迁移
@@ -2204,7 +2279,7 @@ tests 承担。
 npre nassert nversion nunsafe
 npos nwide_t ninf nninf nmaybe
 nchmin nchmax nlen nbitceil
-nless ngreater nequal
+nless ngreater nequal nidentity
 nrng nseed_value nrng_global nhash_seed nseed nhash
 ```
 
@@ -2220,12 +2295,13 @@ nadd nmul nxor nmin nmax naddsum_action npow
 ### 引用、枚举与组合 view
 
 ```text
-nspan nview nindexed nindex_reference_t nindex_value_t
-nreference_indexed nswappable_indexed ncontiguous_indexed nresizable nview_object nviewable_indexed
-nall nsub nstride
+nview nindexed nindex_reference_t nindex_value_t
+nreference_indexed nswappable_indexed ncontiguous_indexed nresizable
+nrange_object nview_object nviewable_indexed
+nall nsub nstride nrow ncolumn ndiagonal
 nrange_t nrange nenumerator_t nenumerable nenumerate
 nkeyvalue_enumerable nfor nfori nforkv nrep nrrep
-nreverse nproject nzip_view nzip nproduct_view nproduct nwindow_view nwindows
+nreverse nproject nzip nproduct nwindows
 ncollect ntabulate
 ```
 
@@ -2233,9 +2309,9 @@ ncollect ntabulate
 
 ```text
 ndiscrete_function ndiscrete nfunction_key_reference_t nfunction_key_t nfunc
-nfunction_keys_view nkeys nvalues nfunction_entries_view nentries nrestrict
+nkeys nvalues nentries nrestrict
 ncomposed_function ncompose nmap_values ngathered_function ngather
-nsubfunc nblock nfunction_blocks_view nblocks
+nsubfunc nblock nblocks
 ```
 
 ### 拥有型序列与算法

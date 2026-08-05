@@ -191,6 +191,12 @@ template <class T = void> struct nequal {
     constexpr bool operator()(const auto& a, const auto& b) const { return a == b; }
 };
 
+struct nidentity {
+    template <class T> constexpr T&& operator()(T&& value) const noexcept {
+        return forward<T>(value);
+    }
+};
+
 class nrng {
     uint64_t state_;
 

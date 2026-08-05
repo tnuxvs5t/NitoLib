@@ -3,6 +3,10 @@
 int main() {
     auto squares = nfunc(nrange(6), [](int value) { return value * value; });
     static_assert(ndiscrete<decltype(squares)>);
+    static_assert(!nview_object<decltype(squares)>);
+    static_assert(nview_object<decltype(nkeys(squares))>);
+    static_assert(nview_object<decltype(nvalues(squares))>);
+    static_assert(nview_object<decltype(nentries(squares))>);
     ntest(squares.len() == 6 && squares.key(4) == 4 && squares(4) == 16 && squares[5] == 25);
     ntest(ncollect(squares) == nvector<int>({0, 1, 4, 9, 16, 25}));
     ntest(ntabulate(squares) == nvector<int>({0, 1, 4, 9, 16, 25}));
@@ -59,6 +63,7 @@ int main() {
     nvector<int> tiles{9, 1, 8, 2, 7, 3, 6, 4};
     auto cell = nfunc(nrange(tiles.len()), [&](int index) -> int& { return tiles[index]; });
     auto blocks = nblocks(cell, 3);
+    static_assert(nview_object<decltype(blocks)>);
     ntest(blocks.len() == 3);
     nfor(block, blocks)
         nsort(block);

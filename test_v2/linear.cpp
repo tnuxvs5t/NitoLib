@@ -26,6 +26,11 @@ int main() {
     nsort(matrix.row(0));
     ntest((matrix.row(0)[0] == 2 && matrix.row(0)[3] == 10));
 
+    nmatrix<int> empty_columns(3, 0);
+    auto empty_row = empty_columns.row(2);
+    static_assert(ncontiguous_indexed<decltype(empty_row)>);
+    ntest(empty_row.empty() && empty_row.data() == empty_columns.data());
+
     using mint = nmodint<1000000007>;
     nmatrix<mint> fibonacci{{1, 1}, {1, 0}};
     auto power = nmatpow(fibonacci, 50);

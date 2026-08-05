@@ -512,7 +512,7 @@ class narray {
     int dim(int axis, int fallback = npos) const noexcept {
         return 0 <= axis && axis < Rank ? shape_[axis] : fallback;
     }
-    nspan<const int> shape() const noexcept { return {shape_.data(), Rank}; }
+    nview<const int> shape() const noexcept { return {shape_.data(), Rank}; }
     T* data() noexcept { return storage_.data(); }
     const T* data() const noexcept { return storage_.data(); }
 
@@ -558,6 +558,24 @@ class narray {
 };
 
 namespace ni {
+template <class C, class P> class nprojected_compare {
+    [[no_unique_address]] C compare_;
+    [[no_unique_address]] P projection_;
+
+  public:
+    constexpr nprojected_compare(C compare, P projection)
+        : compare_(move(compare)), projection_(move(projection)) {}
+
+    template <class L, class R> constexpr bool operator()(L&& left, R&& right) {
+        return invoke(compare_, invoke(projection_, forward<L>(left)),
+                      invoke(projection_, forward<R>(right)));
+    }
+};
+
+template <class A, class P>
+using nprojected_value_t =
+    remove_cvref_t<invoke_result_t<P&, nindex_reference_t<A>>>;
+
 template <class A, class C> void nheap_sift(A& a, int root, int count, C& compare) {
     for (;;) {
         long long first_child = 2LL * root + 1;
@@ -584,16 +602,17 @@ template <class A, class C> void nheap_sort(A& a, C& compare) {
 }
 } // namespace ni
 
-template <class A, class C = nless<>>
+template <class A, class C = nless<>, class P = nidentity>
     requires nviewable_indexed<A&&> && nswappable_indexed<remove_reference_t<A>>
-void nsort(A&& a, C compare = {}) {
+void nsort(A&& a, C compare = {}, P projection = {}) {
     int n = nlen(a);
     if (n < 2)
         return;
+    ni::nprojected_compare projected(move(compare), move(projection));
     if constexpr (ncontiguous_indexed<remove_reference_t<A>>)
-        sort(a.data(), a.data() + n, move(compare));
+        sort(a.data(), a.data() + n, move(projected));
     else
-        ni::nheap_sort(a, compare);
+        ni::nheap_sort(a, projected);
 }
 
 template <class A>
@@ -606,65 +625,92 @@ void nreverse_inplace(A&& a, int l = 0, int r = npos) {
         ranges::swap(a[l++], a[r]);
 }
 
-template <class A, class X> int nfind(const A& a, const X& value, int fallback = npos) {
+template <class A, class X, class P>
+    requires nindexed<A> && invocable<P&, nindex_reference_t<const A>>
+int nfind(const A& a, const X& value, P projection, int fallback = npos) {
     for (int i = 0; i < nlen(a); ++i)
-        if (a[i] == value)
+        if (invoke(projection, a[i]) == value)
             return i;
     return fallback;
 }
 
-template <class A, class X, class C = nless<>> int nlower(const A& a, const X& value, C compare = {}) {
+template <class A, class X>
+    requires nindexed<A>
+int nfind(const A& a, const X& value, int fallback = npos) {
+    return nfind(a, value, nidentity{}, fallback);
+}
+
+template <class A, class X, class C = nless<>, class P = nidentity>
+    requires nindexed<A> && invocable<P&, nindex_reference_t<const A>>
+int nlower(const A& a, const X& value, C compare = {}, P projection = {}) {
     int l = 0, r = nlen(a);
     while (l < r) {
         int m = l + (r - l) / 2;
-        compare(a[m], value) ? l = m + 1 : r = m;
+        invoke(compare, invoke(projection, a[m]), value) ? l = m + 1 : r = m;
     }
     return l;
 }
 
-template <class A, class X, class C = nless<>> int nupper(const A& a, const X& value, C compare = {}) {
+template <class A, class X, class C = nless<>, class P = nidentity>
+    requires nindexed<A> && invocable<P&, nindex_reference_t<const A>>
+int nupper(const A& a, const X& value, C compare = {}, P projection = {}) {
     int l = 0, r = nlen(a);
     while (l < r) {
         int m = l + (r - l) / 2;
-        compare(value, a[m]) ? r = m : l = m + 1;
+        invoke(compare, value, invoke(projection, a[m])) ? r = m : l = m + 1;
     }
     return l;
 }
 
-template <class A, class X, class C = nless<>>
-int nfind_sorted(const A& a, const X& value, C compare = {}, int fallback = npos) {
-    int index = nlower(a, value, compare);
-    return index < nlen(a) && !compare(value, a[index]) && !compare(a[index], value)
+template <class A, class X, class C = nless<>, class P = nidentity>
+    requires nindexed<A> && invocable<P&, nindex_reference_t<const A>>
+int nfind_sorted(const A& a, const X& value, C compare = {}, P projection = {},
+                 int fallback = npos) {
+    int index = nlower(a, value, compare, projection);
+    if (index == nlen(a))
+        return fallback;
+    decltype(auto) projected = invoke(projection, a[index]);
+    return !invoke(compare, value, projected) && !invoke(compare, projected, value)
                ? index
                : fallback;
 }
 
-template <class A, class O = nadd<nindex_value_t<const A>>>
-    requires nmonoid<O, nindex_value_t<const A>>
-auto nfold(const A& a, int l, int r, O op = {}) {
-    using T = nindex_value_t<const A>;
+template <class A, class X, class C>
+    requires nindexed<A>
+int nfind_sorted(const A& a, const X& value, C compare, int fallback) {
+    return nfind_sorted(a, value, move(compare), nidentity{}, fallback);
+}
+
+template <class A, class P = nidentity,
+          class O = nadd<ni::nprojected_value_t<const A, P>>>
+    requires nindexed<A> &&
+             nmonoid<O, ni::nprojected_value_t<const A, P>>
+auto nfold(const A& a, int l, int r, O op = {}, P projection = {}) {
+    using T = ni::nprojected_value_t<const A, P>;
     npre(0 <= l && l <= r && r <= nlen(a));
     T result = op.id();
     for (int i = l; i < r; ++i)
-        result = op(move(result), a[i]);
+        result = op(move(result), invoke(projection, a[i]));
     return result;
 }
 
-template <class A, class O = nadd<nindex_value_t<const A>>>
-    requires nmonoid<O, nindex_value_t<const A>>
-auto nfold(const A& a, O op = {}) {
-    return nfold(a, 0, nlen(a), move(op));
+template <class A, class P = nidentity,
+          class O = nadd<ni::nprojected_value_t<const A, P>>>
+    requires nindexed<A> &&
+             nmonoid<O, ni::nprojected_value_t<const A, P>>
+auto nfold(const A& a, O op = {}, P projection = {}) {
+    return nfold(a, 0, nlen(a), move(op), move(projection));
 }
 
-template <class A, class E = nequal<>>
+template <class A, class E = nequal<>, class P = nidentity>
     requires nviewable_indexed<A&&> && nreference_indexed<remove_reference_t<A>> &&
              (!is_const_v<remove_reference_t<nindex_reference_t<remove_reference_t<A>>>>)
-int nunique_compact(A&& a, E equal = {}) {
+int nunique_compact(A&& a, E equal = {}, P projection = {}) {
     if (nlen(a) == 0)
         return 0;
     int kept = 1;
     for (int i = 1; i < nlen(a); ++i)
-        if (!equal(a[kept - 1], a[i])) {
+        if (!invoke(equal, invoke(projection, a[kept - 1]), invoke(projection, a[i]))) {
             if (kept != i)
                 a[kept] = move(a[i]);
             ++kept;
@@ -672,20 +718,20 @@ int nunique_compact(A&& a, E equal = {}) {
     return kept;
 }
 
-template <class A, class E = nequal<>>
+template <class A, class E = nequal<>, class P = nidentity>
     requires nviewable_indexed<A&&> && nresizable<remove_reference_t<A>> &&
              nreference_indexed<remove_reference_t<A>> &&
              (!is_const_v<remove_reference_t<nindex_reference_t<remove_reference_t<A>>>>)
-int nunique(A&& a, E equal = {}) {
-    int kept = nunique_compact(a, move(equal));
+int nunique(A&& a, E equal = {}, P projection = {}) {
+    int kept = nunique_compact(a, move(equal), move(projection));
     a.resize(kept);
     return kept;
 }
 
-template <class A, class C = nless<>, class E = nequal<>>
+template <class A, class C = nless<>, class E = nequal<>, class P = nidentity>
     requires nviewable_indexed<A&&> && nresizable<remove_reference_t<A>> &&
              nswappable_indexed<remove_reference_t<A>>
-int nsort_unique(A&& a, C compare = {}, E equal = {}) {
-    nsort(a, move(compare));
-    return nunique(a, move(equal));
+int nsort_unique(A&& a, C compare = {}, E equal = {}, P projection = {}) {
+    nsort(a, compare, projection);
+    return nunique(a, move(equal), move(projection));
 }
