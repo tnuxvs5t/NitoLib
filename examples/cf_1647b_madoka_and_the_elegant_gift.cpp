@@ -10,7 +10,7 @@ int main() {
         nrep(row, n)
             nin >> grid[row];
 
-        auto squares = nfunc(
+        auto squares = nfunc_value(
             nproduct(nrange(n - 1), nrange(m - 1)),
             [&](auto cell) {
                 auto [row, column] = cell;

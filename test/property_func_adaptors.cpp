@@ -28,7 +28,7 @@ int main() {
             values[i] = int(rng());
         }
 
-        auto function = nfunc(keys, values);
+        auto function = nfunc_bind(keys, values);
         for (int i = 0; i < n; ++i) {
             ntest(function.key(i) == keys[i] && function[i] == values[i]);
             ntest(function(keys[i]) == values[i]);
@@ -53,12 +53,12 @@ int main() {
     }
 
     int forbidden_calls = 0;
-    auto base = nfunc(nrange(8), [&](int index) {
+    auto base = nfunc_value(nrange(8), [&](int index) {
         ++forbidden_calls;
         npre(index >= 0);
         return index * index;
     });
-    auto safe = nbranch(base, [](int index) { return index < 0; }, -1);
+    auto safe = nbranch_value(base, [](int index) { return index < 0; }, -1);
     for (int index = -20; index < 0; ++index)
         ntest(safe(index) == -1);
     ntest(forbidden_calls == 0);

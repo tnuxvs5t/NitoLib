@@ -1549,9 +1549,13 @@ template <naugmented_tree S, class P> nnode<S> nlast_suffix(const S& tree, P&& p
 }
 
 // ---- 06_func.hpp ----
+template <class R>
+concept nstable_function_result = !is_rvalue_reference_v<R>;
+
 namespace ni {
 // A zero-allocation lifetime bridge used by discrete-function adaptors:
-// lvalues are borrowed, rvalues are owned.
+// lvalues are borrowed, rvalues are owned. Const always propagates through the
+// bridge; shallow const must be represented by a different, explicit type.
 template <class A> class nobject_holder {
     using value_type = remove_cvref_t<A>;
     static constexpr bool owns = !is_lvalue_reference_v<A>;
@@ -1568,17 +1572,17 @@ template <class A> class nobject_holder {
   public:
     constexpr explicit nobject_holder(A&& value) : storage_(make(forward<A>(value))) {}
 
-    constexpr decltype(auto) get() {
+    constexpr decltype(auto) get() & {
         if constexpr (owns)
             return (storage_);
         else
             return (*storage_);
     }
-    constexpr decltype(auto) get() const {
+    constexpr decltype(auto) get() const& {
         if constexpr (owns)
             return as_const(storage_);
         else
-            return (*storage_);
+            return as_const(*storage_);
     }
 };
 
@@ -1587,20 +1591,152 @@ template <class A> constexpr auto nhold_object(A&& value) {
 }
 
 template <class A> using ndomain_holder = nobject_holder<A>;
+
+template <class R>
+using npublic_result_t = conditional_t<is_rvalue_reference_v<R>, remove_cvref_t<R>, R>;
+
+// Public adaptor calls never expose T&&. It is materialized while T/T&/const T&
+// keep their natural result category.
+template <class F, class... X>
+    requires invocable<F&&, X&&...>
+constexpr decltype(auto) ninvoke_public(F&& function, X&&... argument) {
+    using result_type = invoke_result_t<F&&, X&&...>;
+    if constexpr (is_void_v<result_type>) {
+        invoke(forward<F>(function), forward<X>(argument)...);
+    } else if constexpr (is_rvalue_reference_v<result_type>) {
+        return remove_cvref_t<result_type>(
+            invoke(forward<F>(function), forward<X>(argument)...));
+    } else {
+        return invoke(forward<F>(function), forward<X>(argument)...);
+    }
+}
+
+// Composition has a stronger boundary: when the middle object is ephemeral,
+// no reference produced from it may escape the full expression.
+template <class F, class M>
+    requires invocable<F&&, M&&>
+constexpr decltype(auto) ninvoke_stable(F&& function, M&& middle) {
+    using result_type = invoke_result_t<F&&, M&&>;
+    if constexpr (is_void_v<result_type>) {
+        invoke(forward<F>(function), forward<M>(middle));
+    } else if constexpr (!is_lvalue_reference_v<M&&> && is_reference_v<result_type>) {
+        return remove_cvref_t<result_type>(
+            invoke(forward<F>(function), forward<M>(middle)));
+    } else {
+        return ninvoke_public(forward<F>(function), forward<M>(middle));
+    }
+}
+
+struct nauto_function_result {};
+struct nvalue_function_result {};
+struct nreference_function_result {};
+
+template <class Policy, class F, class... X>
+concept nfunction_policy_invocable =
+    invocable<F, X...> &&
+    (same_as<Policy, nauto_function_result> ||
+     (same_as<Policy, nvalue_function_result> &&
+      (!is_void_v<invoke_result_t<F, X...>>) &&
+      constructible_from<remove_cvref_t<invoke_result_t<F, X...>>,
+                         invoke_result_t<F, X...>>) ||
+     (same_as<Policy, nreference_function_result> &&
+      is_lvalue_reference_v<invoke_result_t<F, X...>>));
+
+template <class Policy, class F, class... X>
+    requires nfunction_policy_invocable<Policy, F&&, X&&...>
+constexpr decltype(auto) ninvoke_function(F&& function, X&&... argument) {
+    using result_type = invoke_result_t<F&&, X&&...>;
+    if constexpr (same_as<Policy, nvalue_function_result>) {
+        return remove_cvref_t<result_type>(
+            invoke(forward<F>(function), forward<X>(argument)...));
+    } else if constexpr (same_as<Policy, nreference_function_result>) {
+        return invoke(forward<F>(function), forward<X>(argument)...);
+    } else {
+        return ninvoke_public(forward<F>(function), forward<X>(argument)...);
+    }
+}
+
+template <class Policy, class F, class M>
+    requires nfunction_policy_invocable<Policy, F&&, M&&>
+constexpr decltype(auto) ninvoke_evaluator(F&& function, M&& argument) {
+    if constexpr (same_as<Policy, nauto_function_result>)
+        return ninvoke_stable(forward<F>(function), forward<M>(argument));
+    else
+        return ninvoke_function<Policy>(forward<F>(function),
+                                        forward<M>(argument));
+}
+
+template <class H> class nfunction_key_access {
+    H function_;
+
+  public:
+    constexpr explicit nfunction_key_access(H function) : function_(move(function)) {}
+    constexpr decltype(auto) operator()(int index) {
+        return ninvoke_public([&]() -> decltype(auto) {
+            return function_.get().key(index);
+        });
+    }
+    constexpr decltype(auto) operator()(int index) const
+        requires requires(const H& function) { function.get().key(0); }
+    {
+        return ninvoke_public([&]() -> decltype(auto) {
+            return function_.get().key(index);
+        });
+    }
+};
+
+template <class H> class nfunction_value_access {
+    H function_;
+
+  public:
+    constexpr explicit nfunction_value_access(H function) : function_(move(function)) {}
+    constexpr decltype(auto) operator()(int index) {
+        return ninvoke_public([&]() -> decltype(auto) {
+            return function_.get()[index];
+        });
+    }
+    constexpr decltype(auto) operator()(int index) const
+        requires requires(const H& function) { function.get()[0]; }
+    {
+        return ninvoke_public([&]() -> decltype(auto) {
+            return function_.get()[index];
+        });
+    }
+};
 } // namespace ni
 
 // A finite discrete function is a keyed view, not an associative container.
 // key(i) moves from enumeration position to semantic argument; operator[](i)
 // evaluates at that position; operator()(x) evaluates an arbitrary argument.
-template <class H, class F> class ndiscrete_function {
-    H domain_;
-    [[no_unique_address]] F evaluate_;
+template <class DH, class FH, class Policy = ni::nauto_function_result>
+class nevaluated_function {
+    DH domain_;
+    [[no_unique_address]] FH evaluate_;
+
+    constexpr auto key_access() & {
+        auto holder = ni::nhold_object(*this);
+        using access_type = ni::nfunction_key_access<decltype(holder)>;
+        return nview(len(), access_type(move(holder)));
+    }
+    constexpr auto key_access() const& {
+        auto holder = ni::nhold_object(*this);
+        using access_type = ni::nfunction_key_access<decltype(holder)>;
+        return nview(len(), access_type(move(holder)));
+    }
+    constexpr auto key_access() && {
+        auto holder = ni::nhold_object(move(*this));
+        int size = nlen(holder.get());
+        using access_type = ni::nfunction_key_access<decltype(holder)>;
+        return nview(size, access_type(move(holder)));
+    }
 
   public:
     using nrange_tag = void;
     using nfunction_tag = void;
+    static constexpr bool nstable_borrow_result =
+        same_as<Policy, ni::nreference_function_result>;
 
-    constexpr ndiscrete_function(H domain, F evaluate)
+    constexpr nevaluated_function(DH domain, FH evaluate)
         : domain_(move(domain)), evaluate_(move(evaluate)) {}
 
     constexpr int len() const { return nlen(domain_.get()); }
@@ -1608,86 +1744,171 @@ template <class H, class F> class ndiscrete_function {
 
     constexpr decltype(auto) key(int index) {
         npre(0 <= index && index < len());
-        return domain_.get()[index];
+        return ni::ninvoke_public([&]() -> decltype(auto) {
+            return domain_.get()[index];
+        });
     }
     constexpr decltype(auto) key(int index) const {
         npre(0 <= index && index < len());
-        return domain_.get()[index];
+        return ni::ninvoke_public([&]() -> decltype(auto) {
+            return domain_.get()[index];
+        });
     }
 
-    constexpr decltype(auto) operator[](int index) {
-        return invoke(evaluate_, key(index));
-    }
-    constexpr decltype(auto) operator[](int index) const
-        requires requires(const F& evaluate, const H& domain) {
-            invoke(evaluate, domain.get()[0]);
+    constexpr decltype(auto) operator[](int index)
+        requires requires(FH& evaluate, DH& domain) {
+            ni::ninvoke_evaluator<Policy>(evaluate.get(), domain.get()[0]);
         }
     {
-        return invoke(evaluate_, key(index));
+        npre(0 <= index && index < len());
+        return ni::ninvoke_evaluator<Policy>(evaluate_.get(), domain_.get()[index]);
+    }
+    constexpr decltype(auto) operator[](int index) const
+        requires requires(const FH& evaluate, const DH& domain) {
+            ni::ninvoke_evaluator<Policy>(evaluate.get(), domain.get()[0]);
+        }
+    {
+        npre(0 <= index && index < len());
+        return ni::ninvoke_evaluator<Policy>(evaluate_.get(), domain_.get()[index]);
     }
 
-    template <class X> constexpr decltype(auto) operator()(X&& argument) {
-        return invoke(evaluate_, forward<X>(argument));
+    template <class X>
+    constexpr decltype(auto) operator()(X&& argument)
+        requires requires(FH& evaluate, X&& value) {
+            ni::ninvoke_evaluator<Policy>(evaluate.get(), forward<X>(value));
+        }
+    {
+        return ni::ninvoke_evaluator<Policy>(evaluate_.get(), forward<X>(argument));
     }
     template <class X>
     constexpr decltype(auto) operator()(X&& argument) const
-        requires invocable<const F&, X&&>
+        requires requires(const FH& evaluate, X&& value) {
+            ni::ninvoke_evaluator<Policy>(evaluate.get(), forward<X>(value));
+        }
     {
-        return invoke(evaluate_, forward<X>(argument));
+        return ni::ninvoke_evaluator<Policy>(evaluate_.get(), forward<X>(argument));
     }
 
-    // Compatibility convenience. nkeys(f) below is the zero-copy generic form;
-    // this member deliberately copies the small domain holder so the returned
-    // view does not point at the ndiscrete_function object itself.
-    constexpr auto keys() const
-        requires copy_constructible<H>
-    {
-        int size = len();
-        return nview(size, [domain = domain_](int index) -> decltype(auto) {
-            return domain.get()[index];
-        });
-    }
+    constexpr auto keys() & { return key_access(); }
+    constexpr auto keys() const& { return key_access(); }
+    constexpr auto keys() && { return move(*this).key_access(); }
 };
 
 template <class A>
-concept ndiscrete = nindexed<A> && requires(A& function, const A& constant, int index) {
-    function.key(index);
-    constant.key(index);
-};
+concept nkeyed_indexed = nindexed<A> &&
+                         requires(A& function, const A& constant, int index) {
+                             function.key(index);
+                             constant.key(index);
+                         };
 
 template <class A> using nfunction_key_reference_t = decltype(declval<A&>().key(0));
 template <class A> using nfunction_key_t = remove_cvref_t<nfunction_key_reference_t<A>>;
 
+template <class A>
+concept ndiscrete_function =
+    nkeyed_indexed<A> && requires(A& function, nfunction_key_t<A> key) {
+        function(key);
+    };
+
+namespace ni {
+// Adaptors also accept mutable-only callables. The public nkeyed_indexed and
+// ndiscrete_function concepts remain the stronger regular (const-readable)
+// capabilities inherited from nindexed.
+template <class A>
+concept nmutable_keyed_indexed = requires(A& function, const A& constant,
+                                          int index) {
+    { nlen(constant) } -> same_as<int>;
+    function[index];
+    function.key(index);
+    constant.key(index);
+};
+
+template <class A>
+concept nmutable_discrete_function =
+    nmutable_keyed_indexed<A> &&
+    requires(A& function, nfunction_key_t<A> key) { function(key); };
+} // namespace ni
+
+// Compatibility concept. New generic code should name the exact capability.
+template <class A>
+concept ndiscrete = nkeyed_indexed<A>;
+
 template <class D, class F>
     requires nindexed<remove_reference_t<D>> &&
-             (is_lvalue_reference_v<D&&> || constructible_from<remove_cvref_t<D>, D&&>) &&
+             (is_lvalue_reference_v<D&&> ||
+              constructible_from<remove_cvref_t<D>, D&&>) &&
+             (is_lvalue_reference_v<F&&> ||
+              constructible_from<remove_cvref_t<F>, F&&>) &&
+             ni::nfunction_policy_invocable<
+                 ni::nauto_function_result, F&,
+                 nindex_reference_t<remove_reference_t<D>>>
+constexpr auto nfunc_eval(D&& domain, F&& evaluate) {
+    auto domain_holder = ni::nhold_object(forward<D>(domain));
+    auto evaluate_holder = ni::nhold_object(forward<F>(evaluate));
+    return nevaluated_function<decltype(domain_holder), decltype(evaluate_holder)>(
+        move(domain_holder), move(evaluate_holder));
+}
+
+template <class D, class F>
+    requires nindexed<remove_reference_t<D>> &&
+             (is_lvalue_reference_v<D&&> ||
+              constructible_from<remove_cvref_t<D>, D&&>) &&
+             (is_lvalue_reference_v<F&&> ||
+              constructible_from<remove_cvref_t<F>, F&&>) &&
+             ni::nfunction_policy_invocable<
+                 ni::nvalue_function_result, F&,
+                 nindex_reference_t<remove_reference_t<D>>>
+constexpr auto nfunc_value(D&& domain, F&& evaluate) {
+    auto domain_holder = ni::nhold_object(forward<D>(domain));
+    auto evaluate_holder = ni::nhold_object(forward<F>(evaluate));
+    return nevaluated_function<decltype(domain_holder), decltype(evaluate_holder),
+                               ni::nvalue_function_result>(
+        move(domain_holder), move(evaluate_holder));
+}
+
+template <class D, class F>
+    requires nindexed<remove_reference_t<D>> &&
+             (is_lvalue_reference_v<D&&> ||
+              constructible_from<remove_cvref_t<D>, D&&>) &&
+             (is_lvalue_reference_v<F&&> ||
+              constructible_from<remove_cvref_t<F>, F&&>) &&
+             ni::nfunction_policy_invocable<
+                 ni::nreference_function_result, F&,
+                 nindex_reference_t<remove_reference_t<D>>>
+constexpr auto nfunc_ref(D&& domain, F&& evaluate) {
+    auto domain_holder = ni::nhold_object(forward<D>(domain));
+    auto evaluate_holder = ni::nhold_object(forward<F>(evaluate));
+    return nevaluated_function<decltype(domain_holder), decltype(evaluate_holder),
+                               ni::nreference_function_result>(
+        move(domain_holder), move(evaluate_holder));
+}
+
+// Compatibility evaluator entry. Indexed+invocable arguments are rejected by
+// the diagnostic overload declared after nfunc_bind becomes available.
+template <class D, class F>
+    requires nindexed<remove_reference_t<D>> &&
+             (!nindexed<remove_reference_t<F>>) &&
              invocable<F&, nindex_reference_t<remove_reference_t<D>>>
-constexpr auto nfunc(D&& domain, F evaluate) {
-    auto holder = ni::nhold_object(forward<D>(domain));
-    return ndiscrete_function<decltype(holder), F>(move(holder), move(evaluate));
+[[deprecated("use nfunc_value, nfunc_ref, or nfunc_eval")]]
+constexpr auto nfunc(D&& domain, F&& evaluate) {
+    using result_type =
+        invoke_result_t<F&, nindex_reference_t<remove_reference_t<D>>>;
+    if constexpr (is_lvalue_reference_v<result_type>)
+        return nfunc_ref(forward<D>(domain), forward<F>(evaluate));
+    else
+        return nfunc_eval(forward<D>(domain), forward<F>(evaluate));
 }
 
 namespace ni {
-template <class H> class nfunction_key_access {
-    H function_;
-
-  public:
-    constexpr explicit nfunction_key_access(H function) : function_(move(function)) {}
-    constexpr decltype(auto) operator()(int index) { return function_.get().key(index); }
-    constexpr decltype(auto) operator()(int index) const
-        requires requires(const H& function) { function.get().key(0); }
-    {
-        return function_.get().key(index);
-    }
-};
-
 template <class H> class nfunction_entry_access {
     H function_;
 
     template <class G> static constexpr auto entry(G& function, int index) {
-        using key_reference = decltype(function.key(index));
-        using value_reference = decltype(function[index]);
-        return pair<key_reference, value_reference>(function.key(index), function[index]);
+        using key_result = decltype(function.key(index));
+        using value_result = decltype(function[index]);
+        using key_type = npublic_result_t<key_result>;
+        using value_type = npublic_result_t<value_result>;
+        return pair<key_type, value_type>(function.key(index), function[index]);
     }
 
   public:
@@ -1705,7 +1926,7 @@ template <class H> class nfunction_entry_access {
 } // namespace ni
 
 template <class G>
-    requires ndiscrete<remove_reference_t<G>>
+    requires nkeyed_indexed<remove_reference_t<G>>
 constexpr auto nkeys(G&& function) {
     auto holder = ni::nhold_object(forward<G>(function));
     int size = nlen(holder.get());
@@ -1714,13 +1935,16 @@ constexpr auto nkeys(G&& function) {
 }
 
 template <class G>
-    requires ndiscrete<remove_reference_t<G>> && nviewable_indexed<G&&>
+    requires nkeyed_indexed<remove_reference_t<G>>
 constexpr auto nvalues(G&& function) {
-    return nall(forward<G>(function));
+    auto holder = ni::nhold_object(forward<G>(function));
+    int size = nlen(holder.get());
+    using access_type = ni::nfunction_value_access<decltype(holder)>;
+    return nview(size, access_type(move(holder)));
 }
 
 template <class G>
-    requires ndiscrete<remove_reference_t<G>>
+    requires nkeyed_indexed<remove_reference_t<G>>
 constexpr auto nentries(G&& function) {
     auto holder = ni::nhold_object(forward<G>(function));
     int size = nlen(holder.get());
@@ -1728,16 +1952,119 @@ constexpr auto nentries(G&& function) {
     return nview(size, access_type(move(holder)));
 }
 
-// Semantic restriction: domain contains arguments, not positions.
+namespace ni {
+template <class D, class X>
+concept ndomain_membership_testable =
+    requires(const D& domain, const X& value) {
+        { domain.position(value) } -> convertible_to<int>;
+    } || requires(const D& domain, const X& value) {
+        { domain[0] == value } -> convertible_to<bool>;
+    };
+
+template <class D, class X>
+    requires ndomain_membership_testable<D, X>
+constexpr bool ndomain_contains(const D& domain, const X& value) {
+    if constexpr (requires { domain.position(value); }) {
+        return domain.position(value) != npos;
+    } else {
+        for (int index = 0; index < nlen(domain); ++index)
+            if (domain[index] == value)
+                return true;
+        return false;
+    }
+}
+} // namespace ni
+
+template <class GH, class DH, bool CheckMembership> class nredomain_function {
+    GH function_;
+    DH domain_;
+
+  public:
+    using nrange_tag = void;
+    using nfunction_tag = void;
+
+    constexpr nredomain_function(GH function, DH domain)
+        : function_(move(function)), domain_(move(domain)) {}
+
+    constexpr int len() const { return nlen(domain_.get()); }
+    constexpr bool empty() const { return len() == 0; }
+    constexpr decltype(auto) key(int index) {
+        npre(0 <= index && index < len());
+        return ni::ninvoke_public([&]() -> decltype(auto) {
+            return domain_.get()[index];
+        });
+    }
+    constexpr decltype(auto) key(int index) const {
+        npre(0 <= index && index < len());
+        return ni::ninvoke_public([&]() -> decltype(auto) {
+            return domain_.get()[index];
+        });
+    }
+    constexpr decltype(auto) operator[](int index) {
+        npre(0 <= index && index < len());
+        return ni::ninvoke_public(function_.get(), domain_.get()[index]);
+    }
+    constexpr decltype(auto) operator[](int index) const
+        requires requires(const GH& function, const DH& domain) {
+            ni::ninvoke_public(function.get(), domain.get()[0]);
+        }
+    {
+        npre(0 <= index && index < len());
+        return ni::ninvoke_public(function_.get(), domain_.get()[index]);
+    }
+
+    template <class X>
+    constexpr decltype(auto) operator()(X&& argument)
+        requires(!CheckMembership ||
+                 ni::ndomain_membership_testable<
+                     remove_reference_t<decltype(declval<DH&>().get())>,
+                     remove_reference_t<X>>)
+    {
+        if constexpr (CheckMembership)
+            npre(ni::ndomain_contains(domain_.get(), argument));
+        return ni::ninvoke_public(function_.get(), forward<X>(argument));
+    }
+    template <class X>
+    constexpr decltype(auto) operator()(X&& argument) const
+        requires requires(const GH& function, X&& value) {
+            ni::ninvoke_public(function.get(), forward<X>(value));
+        } &&
+                 (!CheckMembership ||
+                  ni::ndomain_membership_testable<
+                      remove_reference_t<decltype(declval<const DH&>().get())>,
+                      remove_reference_t<X>>)
+    {
+        if constexpr (CheckMembership)
+            npre(ni::ndomain_contains(domain_.get(), argument));
+        return ni::ninvoke_public(function_.get(), forward<X>(argument));
+    }
+};
+
 template <class G, class D>
-    requires nindexed<remove_reference_t<D>> &&
-             (is_lvalue_reference_v<D&&> || constructible_from<remove_cvref_t<D>, D&&>)
+    requires ni::nmutable_discrete_function<remove_reference_t<G>> &&
+             nindexed<remove_reference_t<D>> &&
+             (is_lvalue_reference_v<D&&> ||
+              constructible_from<remove_cvref_t<D>, D&&>)
+constexpr auto nredomain(G&& function, D&& domain) {
+    auto function_holder = ni::nhold_object(forward<G>(function));
+    auto domain_holder = ni::nhold_object(forward<D>(domain));
+    return nredomain_function<decltype(function_holder), decltype(domain_holder), false>(
+        move(function_holder), move(domain_holder));
+}
+
+// True semantic restriction: [] enumerates the supplied domain, and () rejects
+// arguments outside it. Domains with position() check in O(1); generic domains
+// use an explicit O(n) membership scan.
+template <class G, class D>
+    requires ni::nmutable_discrete_function<remove_reference_t<G>> &&
+             nindexed<remove_reference_t<D>> &&
+             (is_lvalue_reference_v<D&&> ||
+              constructible_from<remove_cvref_t<D>, D&&>)
 constexpr auto nrestrict(G&& function, D&& domain) {
-    auto owner = ni::nhold_object(forward<G>(function));
-    return nfunc(forward<D>(domain),
-                 [owner = move(owner)](auto&& argument) -> decltype(auto) {
-                     return invoke(owner.get(), forward<decltype(argument)>(argument));
-                 });
+    auto function_holder = ni::nhold_object(forward<G>(function));
+    auto domain_holder = ni::nhold_object(forward<D>(domain));
+    return nredomain_function<decltype(function_holder), decltype(domain_holder), true>(
+        move(function_holder), move(domain_holder));
 }
 
 template <class OH, class IH> class ncomposed_function {
@@ -1752,39 +2079,50 @@ template <class OH, class IH> class ncomposed_function {
         : outer_(move(outer)), inner_(move(inner)) {}
     constexpr int len() const { return nlen(inner_.get()); }
     constexpr bool empty() const { return len() == 0; }
-    constexpr decltype(auto) key(int index) { return inner_.get().key(index); }
-    constexpr decltype(auto) key(int index) const { return inner_.get().key(index); }
+    constexpr decltype(auto) key(int index) {
+        return ni::ninvoke_public([&]() -> decltype(auto) {
+            return inner_.get().key(index);
+        });
+    }
+    constexpr decltype(auto) key(int index) const {
+        return ni::ninvoke_public([&]() -> decltype(auto) {
+            return inner_.get().key(index);
+        });
+    }
 
     constexpr decltype(auto) operator[](int index) {
-        decltype(auto) middle = inner_.get()[index];
-        return invoke(outer_.get(), forward<decltype(middle)>(middle));
+        npre(0 <= index && index < len());
+        return ni::ninvoke_stable(outer_.get(), inner_.get()[index]);
     }
     constexpr decltype(auto) operator[](int index) const
         requires requires(const OH& outer, const IH& inner) {
-            invoke(outer.get(), inner.get()[0]);
+            ni::ninvoke_stable(outer.get(), inner.get()[0]);
         }
     {
-        decltype(auto) middle = inner_.get()[index];
-        return invoke(outer_.get(), forward<decltype(middle)>(middle));
+        npre(0 <= index && index < len());
+        return ni::ninvoke_stable(outer_.get(), inner_.get()[index]);
     }
 
     template <class X> constexpr decltype(auto) operator()(X&& argument) {
-        decltype(auto) middle = invoke(inner_.get(), forward<X>(argument));
-        return invoke(outer_.get(), forward<decltype(middle)>(middle));
+        return ni::ninvoke_stable(
+            outer_.get(),
+            ni::ninvoke_public(inner_.get(), forward<X>(argument)));
     }
     template <class X>
     constexpr decltype(auto) operator()(X&& argument) const
         requires requires(const OH& outer, const IH& inner, X&& value) {
-            invoke(outer.get(), invoke(inner.get(), forward<X>(value)));
+            ni::ninvoke_stable(
+                outer.get(), ni::ninvoke_public(inner.get(), forward<X>(value)));
         }
     {
-        decltype(auto) middle = invoke(inner_.get(), forward<X>(argument));
-        return invoke(outer_.get(), forward<decltype(middle)>(middle));
+        return ni::ninvoke_stable(
+            outer_.get(),
+            ni::ninvoke_public(inner_.get(), forward<X>(argument)));
     }
 };
 
 template <class Outer, class Inner>
-    requires ndiscrete<remove_reference_t<Inner>>
+    requires ni::nmutable_discrete_function<remove_reference_t<Inner>>
 constexpr auto ncompose(Outer&& outer, Inner&& inner) {
     auto outer_holder = ni::nhold_object(forward<Outer>(outer));
     auto inner_holder = ni::nhold_object(forward<Inner>(inner));
@@ -1793,16 +2131,16 @@ constexpr auto ncompose(Outer&& outer, Inner&& inner) {
 }
 
 template <class G, class F>
-    requires ndiscrete<remove_reference_t<G>>
+    requires ni::nmutable_discrete_function<remove_reference_t<G>>
 constexpr auto nmap_values(G&& function, F&& transform) {
     return ncompose(forward<F>(transform), forward<G>(function));
 }
 
-template <class GH, class PH> class ngathered_function {
+template <class GH, class PH> class nselected_positions_function {
     GH function_;
     PH positions_;
 
-    constexpr int source_position(int index) const {
+    constexpr int checked_source_index(int index) const {
         npre(0 <= index && index < len());
         int position = ni::nchecked_int(positions_.get()[index]);
         npre(0 <= position && position < nlen(function_.get()));
@@ -1813,60 +2151,87 @@ template <class GH, class PH> class ngathered_function {
     using nrange_tag = void;
     using nfunction_tag = void;
 
-    constexpr ngathered_function(GH function, PH positions)
+    constexpr nselected_positions_function(GH function, PH positions)
         : function_(move(function)), positions_(move(positions)) {}
     constexpr int len() const { return nlen(positions_.get()); }
     constexpr bool empty() const { return len() == 0; }
-    constexpr int position(int index) const { return source_position(index); }
+    constexpr int source_index(int index) const { return checked_source_index(index); }
+    [[deprecated("use source_index")]]
+    constexpr int position(int index) const { return source_index(index); }
     constexpr decltype(auto) key(int index) {
-        return function_.get().key(source_position(index));
+        return ni::ninvoke_public([&]() -> decltype(auto) {
+            return function_.get().key(checked_source_index(index));
+        });
     }
     constexpr decltype(auto) key(int index) const {
-        return function_.get().key(source_position(index));
+        return ni::ninvoke_public([&]() -> decltype(auto) {
+            return function_.get().key(checked_source_index(index));
+        });
     }
     constexpr decltype(auto) operator[](int index) {
-        return function_.get()[source_position(index)];
+        return ni::ninvoke_public([&]() -> decltype(auto) {
+            return function_.get()[checked_source_index(index)];
+        });
     }
     constexpr decltype(auto) operator[](int index) const
         requires requires(const GH& function) { function.get()[0]; }
     {
-        return function_.get()[source_position(index)];
+        return ni::ninvoke_public([&]() -> decltype(auto) {
+            return function_.get()[checked_source_index(index)];
+        });
     }
-    template <class X> constexpr decltype(auto) operator()(X&& argument) {
-        return invoke(function_.get(), forward<X>(argument));
+    template <class X>
+    constexpr decltype(auto) operator()(X&& argument)
+        requires requires(GH& function, X&& value) {
+            ni::ninvoke_public(function.get(), forward<X>(value));
+        }
+    {
+        return ni::ninvoke_public(function_.get(), forward<X>(argument));
     }
     template <class X>
     constexpr decltype(auto) operator()(X&& argument) const
         requires requires(const GH& function, X&& value) {
-            invoke(function.get(), forward<X>(value));
+            ni::ninvoke_public(function.get(), forward<X>(value));
         }
     {
-        return invoke(function_.get(), forward<X>(argument));
+        return ni::ninvoke_public(function_.get(), forward<X>(argument));
     }
 };
 
 // Positional selection: positions index the source enumeration, while the result
 // keeps the source semantic keys. Repeated positions deliberately keep aliases.
 template <class G, class P>
-    requires ndiscrete<remove_reference_t<G>> && nindexed<remove_reference_t<P>> &&
+    requires ni::nmutable_keyed_indexed<remove_reference_t<G>> &&
+             nindexed<remove_reference_t<P>> &&
              integral<nindex_value_t<remove_reference_t<P>>> &&
-             (is_lvalue_reference_v<P&&> || constructible_from<remove_cvref_t<P>, P&&>)
-constexpr auto ngather(G&& function, P&& positions) {
+             (is_lvalue_reference_v<P&&> ||
+              constructible_from<remove_cvref_t<P>, P&&>)
+constexpr auto nselect_positions(G&& function, P&& positions) {
     auto function_holder = ni::nhold_object(forward<G>(function));
     auto position_holder = ni::nhold_object(forward<P>(positions));
-    return ngathered_function<decltype(function_holder), decltype(position_holder)>(
+    return nselected_positions_function<decltype(function_holder),
+                                        decltype(position_holder)>(
         move(function_holder), move(position_holder));
 }
 
-template <class G>
-    requires ndiscrete<remove_reference_t<G>>
-constexpr auto nsubfunc(G&& function, int left, int right) {
-    npre(0 <= left && left <= right && right <= nlen(function));
-    return ngather(forward<G>(function), nrange(left, right));
+template <class G, class P>
+    requires ni::nmutable_keyed_indexed<remove_reference_t<G>> &&
+             nindexed<remove_reference_t<P>> &&
+             integral<nindex_value_t<remove_reference_t<P>>>
+[[deprecated("use nselect_positions")]]
+constexpr auto ngather(G&& function, P&& positions) {
+    return nselect_positions(forward<G>(function), forward<P>(positions));
 }
 
 template <class G>
-    requires ndiscrete<remove_reference_t<G>>
+    requires ni::nmutable_keyed_indexed<remove_reference_t<G>>
+constexpr auto nsubfunc(G&& function, int left, int right) {
+    npre(0 <= left && left <= right && right <= nlen(function));
+    return nselect_positions(forward<G>(function), nrange(left, right));
+}
+
+template <class G>
+    requires ni::nmutable_keyed_indexed<remove_reference_t<G>>
 constexpr auto nblock(G&& function, int block, int width) {
     npre(block >= 0 && width > 0);
     long long left = 1LL * block * width;
@@ -1896,7 +2261,7 @@ template <class H> class nfunction_block_access {
 } // namespace ni
 
 template <class G>
-    requires ndiscrete<remove_reference_t<G>>
+    requires ni::nmutable_keyed_indexed<remove_reference_t<G>>
 constexpr auto nblocks(G&& function, int width) {
     auto holder = ni::nhold_object(forward<G>(function));
     npre(width > 0);
@@ -2060,7 +2425,7 @@ auto ncollect(A&& source) {
 }
 
 template <class G>
-    requires ndiscrete<remove_reference_t<G>>
+    requires nkeyed_indexed<remove_reference_t<G>>
 auto ntabulate(G&& function) {
     return ncollect(forward<G>(function));
 }
@@ -4948,6 +5313,7 @@ template <class DH, class VH> class nbound_function {
   public:
     using nrange_tag = void;
     using nfunction_tag = void;
+    static constexpr bool nstable_borrow_result = true;
 
     nbound_function(DH domain, VH values)
         : domain_(move(domain)), values_(move(values)) {
@@ -4964,43 +5330,58 @@ template <class DH, class VH> class nbound_function {
 
     decltype(auto) key(int index) {
         npre(0 <= index && index < len());
-        return as_const(domain_.get())[index];
+        return ninvoke_public([&]() -> decltype(auto) {
+            return as_const(domain_.get())[index];
+        });
     }
     decltype(auto) key(int index) const {
         npre(0 <= index && index < len());
-        return domain_.get()[index];
+        return ninvoke_public([&]() -> decltype(auto) {
+            return domain_.get()[index];
+        });
     }
     decltype(auto) operator[](int index) {
         npre(0 <= index && index < len());
         npre(nlen(values_.get()) == len());
-        return values_.get()[index];
+        return ninvoke_public([&]() -> decltype(auto) {
+            return values_.get()[index];
+        });
     }
     decltype(auto) operator[](int index) const {
         npre(0 <= index && index < len());
         npre(nlen(values_.get()) == len());
-        return values_.get()[index];
+        return ninvoke_public([&]() -> decltype(auto) {
+            return values_.get()[index];
+        });
     }
     decltype(auto) operator()(const key_type& argument) {
-        return values_.get()[locate(argument)];
+        return ninvoke_public([&]() -> decltype(auto) {
+            return values_.get()[locate(argument)];
+        });
     }
     decltype(auto) operator()(const key_type& argument) const {
-        return values_.get()[locate(argument)];
+        return ninvoke_public([&]() -> decltype(auto) {
+            return values_.get()[locate(argument)];
+        });
     }
 };
 } // namespace ni
 
 // Strict ordinal binding. Unlike nzip, a finite function never truncates a side:
-// the domain and value enumeration must have exactly the same length.
+// the domain and value enumeration must have exactly the same length. The domain
+// is snapshotted so its key locator cannot be invalidated externally.
 template <class D, class V>
     requires nindexed<remove_reference_t<D>> && nindexed<remove_reference_t<V>> &&
-             (is_lvalue_reference_v<V&&> || constructible_from<remove_cvref_t<V>, V&&>)
-auto nfunc(D&& domain, V&& values) {
+             (is_lvalue_reference_v<V&&> ||
+              constructible_from<remove_cvref_t<V>, V&&>)
+auto nfunc_bind(D&& domain, V&& values) {
     auto value_holder = ni::nhold_object(forward<V>(values));
     using domain_type = remove_reference_t<D>;
     using key_type = nindex_value_t<domain_type>;
     if constexpr (ni::ndirect_domain_locator<domain_type, key_type> &&
                   constructible_from<remove_cvref_t<D>, D&&>) {
-        auto domain_holder = ni::nhold_object(remove_cvref_t<D>(forward<D>(domain)));
+        auto domain_holder =
+            ni::nhold_object(remove_cvref_t<D>(forward<D>(domain)));
         return ni::nbound_function<decltype(domain_holder), decltype(value_holder)>(
             move(domain_holder), move(value_holder));
     } else {
@@ -5011,11 +5392,28 @@ auto nfunc(D&& domain, V&& values) {
     }
 }
 
+template <class D, class V>
+    requires nindexed<remove_reference_t<D>> && nindexed<remove_reference_t<V>> &&
+             (!invocable<V&, nindex_reference_t<remove_reference_t<D>>>)
+[[deprecated("use nfunc_bind")]]
+auto nfunc(D&& domain, V&& values) {
+    return nfunc_bind(forward<D>(domain), forward<V>(values));
+}
+
+template <class D, class X>
+    requires nindexed<remove_reference_t<D>> && nindexed<remove_reference_t<X>> &&
+             invocable<X&, nindex_reference_t<remove_reference_t<D>>>
+auto nfunc(D&&, X&&) {
+    static_assert(!same_as<X, X>,
+                  "ambiguous nfunc: use nfunc_eval/nfunc_value/nfunc_ref or "
+                  "nfunc_bind");
+}
+
 // Re-anchor a positional enumeration without semantically evaluating the source.
 template <class S, class A>
     requires nindexed<remove_reference_t<S>> && nindexed<remove_reference_t<A>>
 auto nanchors(S&& source, A&& anchors) {
-    return nfunc(forward<A>(anchors), forward<S>(source));
+    return nfunc_bind(forward<A>(anchors), forward<S>(source));
 }
 
 namespace ni {
@@ -5024,110 +5422,363 @@ template <class T> class nconstant_branch {
 
   public:
     explicit nconstant_branch(T value) : value_(move(value)) {}
-    template <class X> T operator()(X&&) const { return value_; }
+    template <class X> const T& operator()(X&&) const { return value_; }
+    template <class X> T& operator()(X&&) { return value_; }
 };
 
-template <class GH, class P, class A> class nbranch_function {
+template <class R>
+using nnamed_key_reference_t = add_lvalue_reference_t<remove_reference_t<R>>;
+
+template <class G>
+using nbranch_key_reference_t =
+    nnamed_key_reference_t<nfunction_key_reference_t<G>>;
+
+template <class G, class A>
+concept nbranch_ref_compatible =
+    nmutable_discrete_function<G> &&
+    invocable<A&, nbranch_key_reference_t<G>> &&
+    is_lvalue_reference_v<decltype(declval<G&>()[0])> &&
+    same_as<decltype(declval<G&>()[0]),
+            invoke_result_t<A&, nbranch_key_reference_t<G>>> &&
+    same_as<decltype(declval<G&>()[0]),
+            invoke_result_t<G&, nbranch_key_reference_t<G>>>;
+
+template <class GH, class PH, class AH> class nbranch_value_function {
     GH base_;
-    [[no_unique_address]] P predicate_;
-    [[no_unique_address]] A alternative_;
+    [[no_unique_address]] PH predicate_;
+    [[no_unique_address]] AH alternative_;
+
+    using key_reference = nnamed_key_reference_t<
+        decltype(declval<GH&>().get().key(0))>;
+    using const_key_reference = nnamed_key_reference_t<
+        decltype(declval<const GH&>().get().key(0))>;
+    using base_result = decltype(declval<GH&>().get()[0]);
+    using alternative_result =
+        invoke_result_t<decltype(declval<AH&>().get()), key_reference>;
 
   public:
     using nrange_tag = void;
     using nfunction_tag = void;
+    using result_type = common_type_t<remove_cvref_t<base_result>,
+                                      remove_cvref_t<alternative_result>>;
+    static constexpr bool nstable_borrow_result = false;
 
-    nbranch_function(GH base, P predicate, A alternative)
-        : base_(move(base)), predicate_(move(predicate)), alternative_(move(alternative)) {}
+    nbranch_value_function(GH base, PH predicate, AH alternative)
+        : base_(move(base)), predicate_(move(predicate)),
+          alternative_(move(alternative)) {}
 
     int len() const { return nlen(base_.get()); }
     bool empty() const { return len() == 0; }
-    decltype(auto) key(int index) { return base_.get().key(index); }
-    decltype(auto) key(int index) const { return base_.get().key(index); }
-
-    decltype(auto) operator[](int index) {
-        decltype(auto) argument = base_.get().key(index);
-        return invoke(predicate_, argument) ? invoke(alternative_, argument)
-                                            : base_.get()[index];
+    decltype(auto) key(int index) {
+        return ninvoke_public([&]() -> decltype(auto) {
+            return base_.get().key(index);
+        });
     }
-    decltype(auto) operator[](int index) const
-        requires requires(const GH& base, const P& predicate, const A& alternative) {
-            invoke(predicate, base.get().key(0));
-            invoke(alternative, base.get().key(0));
-            base.get()[0];
+    decltype(auto) key(int index) const {
+        return ninvoke_public([&]() -> decltype(auto) {
+            return base_.get().key(index);
+        });
+    }
+
+    result_type operator[](int index) {
+        decltype(auto) argument = base_.get().key(index);
+        if (invoke(predicate_.get(), argument))
+            return result_type(invoke(alternative_.get(), argument));
+        return result_type(base_.get()[index]);
+    }
+    result_type operator[](int index) const
+        requires requires(const GH& base, const PH& predicate,
+                          const AH& alternative,
+                          const_key_reference argument) {
+            invoke(predicate.get(), argument);
+            result_type(invoke(alternative.get(), argument));
+            result_type(base.get()[0]);
         }
     {
         decltype(auto) argument = base_.get().key(index);
-        return invoke(predicate_, argument) ? invoke(alternative_, argument)
-                                            : base_.get()[index];
+        if (invoke(predicate_.get(), argument))
+            return result_type(invoke(alternative_.get(), argument));
+        return result_type(base_.get()[index]);
     }
 
-    template <class X> decltype(auto) operator()(X&& argument) {
-        return invoke(predicate_, argument)
-                   ? invoke(alternative_, forward<X>(argument))
-                   : invoke(base_.get(), forward<X>(argument));
+    template <class X>
+    result_type operator()(X&& argument)
+        requires requires(GH& base, PH& predicate, AH& alternative,
+                          nnamed_key_reference_t<X&&> value) {
+            invoke(predicate.get(), value);
+            result_type(invoke(alternative.get(), value));
+            result_type(invoke(base.get(), value));
+        }
+    {
+        if (invoke(predicate_.get(), argument))
+            return result_type(invoke(alternative_.get(), argument));
+        return result_type(invoke(base_.get(), argument));
     }
     template <class X>
-    decltype(auto) operator()(X&& argument) const
-        requires requires(const GH& base, const P& predicate, const A& alternative, X&& value) {
-            invoke(predicate, value);
-            invoke(alternative, forward<X>(value));
-            invoke(base.get(), forward<X>(value));
+    result_type operator()(X&& argument) const
+        requires requires(const GH& base, const PH& predicate,
+                          const AH& alternative,
+                          nnamed_key_reference_t<X&&> value) {
+            invoke(predicate.get(), value);
+            result_type(invoke(alternative.get(), value));
+            result_type(invoke(base.get(), value));
         }
     {
-        return invoke(predicate_, argument)
-                   ? invoke(alternative_, forward<X>(argument))
-                   : invoke(base_.get(), forward<X>(argument));
+        if (invoke(predicate_.get(), argument))
+            return result_type(invoke(alternative_.get(), argument));
+        return result_type(invoke(base_.get(), argument));
     }
 };
 
-template <class H> class nshared_function {
-    shared_ptr<H> owner_;
+template <class GH, class PH, class AH> class nbranch_ref_function {
+    GH base_;
+    [[no_unique_address]] PH predicate_;
+    [[no_unique_address]] AH alternative_;
+
+  public:
+    using nrange_tag = void;
+    using nfunction_tag = void;
+    using result_type = decltype(declval<GH&>().get()[0]);
+    static constexpr bool nstable_borrow_result = true;
+
+    static_assert(is_lvalue_reference_v<result_type>);
+    static_assert(same_as<
+                  result_type,
+                  invoke_result_t<decltype(declval<AH&>().get()),
+                                  nnamed_key_reference_t<decltype(
+                                      declval<GH&>().get().key(0))>>>);
+
+    nbranch_ref_function(GH base, PH predicate, AH alternative)
+        : base_(move(base)), predicate_(move(predicate)),
+          alternative_(move(alternative)) {}
+
+    int len() const { return nlen(base_.get()); }
+    bool empty() const { return len() == 0; }
+    decltype(auto) key(int index) {
+        return ninvoke_public([&]() -> decltype(auto) {
+            return base_.get().key(index);
+        });
+    }
+    decltype(auto) key(int index) const {
+        return ninvoke_public([&]() -> decltype(auto) {
+            return base_.get().key(index);
+        });
+    }
+
+    result_type operator[](int index) {
+        decltype(auto) argument = base_.get().key(index);
+        if (invoke(predicate_.get(), argument))
+            return invoke(alternative_.get(), argument);
+        return base_.get()[index];
+    }
+    decltype(auto) operator[](int index) const
+        requires requires(const GH& base, const PH& predicate,
+                          const AH& alternative,
+                          nnamed_key_reference_t<decltype(
+                              declval<const GH&>().get().key(0))> argument) {
+            invoke(predicate.get(), argument);
+            invoke(alternative.get(), argument);
+            base.get()[0];
+        } && same_as<decltype(declval<const GH&>().get()[0]),
+                     invoke_result_t<decltype(declval<const AH&>().get()),
+                                     nnamed_key_reference_t<decltype(
+                                         declval<const GH&>().get().key(0))>>> &&
+                 is_lvalue_reference_v<decltype(declval<const GH&>().get()[0])>
+    {
+        decltype(auto) argument = base_.get().key(index);
+        if (invoke(predicate_.get(), argument))
+            return invoke(alternative_.get(), argument);
+        return base_.get()[index];
+    }
+
+    template <class X>
+    result_type operator()(X&& argument)
+        requires requires(GH& base, PH& predicate, AH& alternative,
+                          nnamed_key_reference_t<X&&> value) {
+            invoke(predicate.get(), value);
+            { invoke(base.get(), value) } -> same_as<result_type>;
+            { invoke(alternative.get(), value) } -> same_as<result_type>;
+        }
+    {
+        if (invoke(predicate_.get(), argument))
+            return invoke(alternative_.get(), argument);
+        return invoke(base_.get(), argument);
+    }
+    template <class X>
+    decltype(auto) operator()(X&& argument) const
+        requires requires(const GH& base, const PH& predicate,
+                          const AH& alternative,
+                          nnamed_key_reference_t<X&&> value) {
+            invoke(predicate.get(), value);
+            invoke(base.get(), value);
+            invoke(alternative.get(), value);
+        } && same_as<invoke_result_t<decltype(declval<const GH&>().get()),
+                                      nnamed_key_reference_t<X&&>>,
+                     invoke_result_t<decltype(declval<const AH&>().get()),
+                                      nnamed_key_reference_t<X&&>>> &&
+                 is_lvalue_reference_v<invoke_result_t<
+                     decltype(declval<const GH&>().get()),
+                     nnamed_key_reference_t<X&&>>>
+    {
+        if (invoke(predicate_.get(), argument))
+            return invoke(alternative_.get(), argument);
+        return invoke(base_.get(), argument);
+    }
+};
+
+template <class A, class Key> auto nbranch_alternative_holder(A&& alternative) {
+    if constexpr (invocable<A&, Key>) {
+        return nhold_object(forward<A>(alternative));
+    } else {
+        using constant_type = remove_cvref_t<A>;
+        return nhold_object(
+            nconstant_branch<constant_type>(forward<A>(alternative)));
+    }
+}
+} // namespace ni
+
+template <class G, class P, class A>
+    requires ni::nmutable_discrete_function<remove_reference_t<G>>
+auto nbranch_value(G&& function, P&& predicate, A&& alternative) {
+    auto base_holder = ni::nhold_object(forward<G>(function));
+    auto predicate_holder = ni::nhold_object(forward<P>(predicate));
+    using key_reference = ni::nnamed_key_reference_t<
+        decltype(base_holder.get().key(0))>;
+    auto alternative_holder =
+        ni::nbranch_alternative_holder<A, key_reference>(forward<A>(alternative));
+    return ni::nbranch_value_function<decltype(base_holder),
+                                      decltype(predicate_holder),
+                                      decltype(alternative_holder)>(
+        move(base_holder), move(predicate_holder), move(alternative_holder));
+}
+
+template <class G, class P, class A>
+    requires ni::nbranch_ref_compatible<remove_reference_t<G>,
+                                        remove_reference_t<A>>
+auto nbranch_ref(G&& function, P&& predicate, A&& alternative) {
+    auto base_holder = ni::nhold_object(forward<G>(function));
+    auto predicate_holder = ni::nhold_object(forward<P>(predicate));
+    auto alternative_holder = ni::nhold_object(forward<A>(alternative));
+    return ni::nbranch_ref_function<decltype(base_holder),
+                                    decltype(predicate_holder),
+                                    decltype(alternative_holder)>(
+        move(base_holder), move(predicate_holder), move(alternative_holder));
+}
+
+template <class G, class P, class A>
+    requires ni::nmutable_discrete_function<remove_reference_t<G>>
+[[deprecated("use nbranch_value or nbranch_ref")]]
+auto nbranch(G&& function, P&& predicate, A&& alternative) {
+    if constexpr (ni::nbranch_ref_compatible<remove_reference_t<G>,
+                                               remove_reference_t<A>>)
+        return nbranch_ref(forward<G>(function), forward<P>(predicate),
+                           forward<A>(alternative));
+    else
+        return nbranch_value(forward<G>(function), forward<P>(predicate),
+                             forward<A>(alternative));
+}
+
+namespace ni {
+template <class H> struct nrun_state {
+    H source;
+    nvector<int> starts;
+};
+
+template <class State> class nrun_segment {
+    shared_ptr<State> state_;
+    int left_;
+    int right_;
 
   public:
     using nrange_tag = void;
     using nfunction_tag = void;
 
-    explicit nshared_function(shared_ptr<H> owner) : owner_(move(owner)) {}
-    int len() const { return nlen(owner_->get()); }
+    nrun_segment(shared_ptr<State> state, int left, int right)
+        : state_(move(state)), left_(left), right_(right) {}
+
+    int len() const { return right_ - left_; }
     bool empty() const { return len() == 0; }
-    decltype(auto) key(int index) { return owner_->get().key(index); }
-    decltype(auto) key(int index) const { return owner_->get().key(index); }
-    decltype(auto) operator[](int index) { return owner_->get()[index]; }
-    decltype(auto) operator[](int index) const { return owner_->get()[index]; }
-    template <class X> decltype(auto) operator()(X&& argument) {
-        return invoke(owner_->get(), forward<X>(argument));
+    decltype(auto) key(int index) {
+        npre(0 <= index && index < len());
+        return ninvoke_public([&]() -> decltype(auto) {
+            return state_->source.get().key(left_ + index);
+        });
+    }
+    decltype(auto) key(int index) const {
+        npre(0 <= index && index < len());
+        return ninvoke_public([&]() -> decltype(auto) {
+            return as_const(*state_).source.get().key(left_ + index);
+        });
+    }
+    decltype(auto) operator[](int index) {
+        npre(0 <= index && index < len());
+        return ninvoke_public([&]() -> decltype(auto) {
+            return state_->source.get()[left_ + index];
+        });
+    }
+    decltype(auto) operator[](int index) const {
+        npre(0 <= index && index < len());
+        return ninvoke_public([&]() -> decltype(auto) {
+            return as_const(*state_).source.get()[left_ + index];
+        });
+    }
+    template <class X>
+    decltype(auto) operator()(X&& argument)
+        requires requires(State& state, X&& value) {
+            ninvoke_public(state.source.get(), forward<X>(value));
+        }
+    {
+        return ninvoke_public(state_->source.get(),
+                              forward<X>(argument));
     }
     template <class X>
     decltype(auto) operator()(X&& argument) const
-        requires requires(const H& owner, X&& value) {
-            invoke(owner.get(), forward<X>(value));
+        requires requires(const State& state, X&& value) {
+            ninvoke_public(state.source.get(), forward<X>(value));
         }
     {
-        return invoke(owner_->get(), forward<X>(argument));
+        return ninvoke_public(as_const(*state_).source.get(),
+                              forward<X>(argument));
     }
 };
 
-template <class S> struct nrun_state {
-    S source;
-    nvector<int> starts;
-    nmap<int, int> position;
-};
+template <class H> class nrun_function {
+    using state_type = nrun_state<H>;
+    shared_ptr<state_type> state_;
 
-template <class S> class nrun_function {
-    shared_ptr<nrun_state<S>> state_;
-
+    int locate(int start) const {
+        int left = 0, right = len();
+        while (left < right) {
+            int middle = left + (right - left) / 2;
+            if (state_->starts[middle] < start)
+                left = middle + 1;
+            else
+                right = middle;
+        }
+        npre(left < len() && state_->starts[left] == start);
+        return left;
+    }
+    auto segment(int index) {
+        npre(0 <= index && index < len());
+        int left = state_->starts[index];
+        int right = index + 1 < len() ? state_->starts[index + 1]
+                                      : nlen(state_->source.get());
+        return nrun_segment<state_type>(state_, left, right);
+    }
     auto segment(int index) const {
         npre(0 <= index && index < len());
         int left = state_->starts[index];
-        int right = index + 1 < len() ? state_->starts[index + 1] : state_->source.len();
-        return nsubfunc(S(state_->source), left, right);
+        int right = index + 1 < len() ? state_->starts[index + 1]
+                                      : nlen(state_->source.get());
+        shared_ptr<const state_type> constant_state = state_;
+        return nrun_segment<const state_type>(move(constant_state), left, right);
     }
 
   public:
     using nrange_tag = void;
     using nfunction_tag = void;
 
-    explicit nrun_function(shared_ptr<nrun_state<S>> state) : state_(move(state)) {}
+    explicit nrun_function(shared_ptr<state_type> state) : state_(move(state)) {}
     int len() const { return state_->starts.len(); }
     bool empty() const { return len() == 0; }
     int key(int index) const {
@@ -5137,67 +5788,37 @@ template <class S> class nrun_function {
     int key(int index) { return as_const(*this).key(index); }
     auto operator[](int index) { return segment(index); }
     auto operator[](int index) const { return segment(index); }
-    auto operator()(int start) {
-        const int* index = state_->position.get(start);
-        npre(index != nullptr);
-        return segment(*index);
-    }
-    auto operator()(int start) const {
-        const int* index = state_->position.get(start);
-        npre(index != nullptr);
-        return segment(*index);
-    }
+    auto operator()(int start) { return segment(locate(start)); }
+    auto operator()(int start) const { return segment(locate(start)); }
 };
 } // namespace ni
 
-template <class G, class P>
-    requires ndiscrete<remove_reference_t<G>>
-auto nbranch(G&& function, P predicate, auto&& alternative) {
-    auto holder = ni::nhold_object(forward<G>(function));
-    using key_reference = decltype(holder.get().key(0));
-    if constexpr (invocable<remove_reference_t<decltype(alternative)>&, key_reference>) {
-        using alternative_type = remove_cvref_t<decltype(alternative)>;
-        return ni::nbranch_function<decltype(holder), P, alternative_type>(
-            move(holder), move(predicate), forward<decltype(alternative)>(alternative));
-    } else {
-        using constant_type = remove_cvref_t<decltype(alternative)>;
-        using alternative_type = ni::nconstant_branch<constant_type>;
-        return ni::nbranch_function<decltype(holder), P, alternative_type>(
-            move(holder), move(predicate),
-            alternative_type(forward<decltype(alternative)>(alternative)));
-    }
-}
-
 template <class G, class P = nequal<>>
-    requires ndiscrete<remove_reference_t<G>>
+    requires ni::nmutable_keyed_indexed<remove_reference_t<G>>
 auto nruns(G&& function, P together = {}) {
     auto holder = ni::nhold_object(forward<G>(function));
-    using holder_type = decltype(holder);
-    using source_type = ni::nshared_function<holder_type>;
-    source_type source(make_shared<holder_type>(move(holder)));
 
     nvector<int> starts;
-    if (!source.empty()) {
+    if (nlen(holder.get()) != 0) {
         starts.push(0);
-        for (int index = 1; index < source.len(); ++index)
-            if (!invoke(together, source[index - 1], source[index]))
+        for (int index = 1; index < nlen(holder.get()); ++index)
+            if (!invoke(together, holder.get()[index - 1], holder.get()[index]))
                 starts.push(index);
     }
-    nmap<int, int> position(starts.len());
-    for (int index = 0; index < starts.len(); ++index)
-        npre(position.ins(starts[index], index));
 
-    using state_type = ni::nrun_state<source_type>;
+    using holder_type = decltype(holder);
+    using state_type = ni::nrun_state<holder_type>;
     auto state = make_shared<state_type>(
-        state_type{move(source), move(starts), move(position)});
-    return ni::nrun_function<source_type>(move(state));
+        state_type{move(holder), move(starts)});
+    return ni::nrun_function<holder_type>(move(state));
 }
 
 template <class A, class P = nequal<>>
-    requires nindexed<remove_reference_t<A>> && (!ndiscrete<remove_reference_t<A>>)
+    requires nindexed<remove_reference_t<A>> &&
+             (!ni::nmutable_keyed_indexed<remove_reference_t<A>>)
 auto nruns(A&& source, P together = {}) {
     int size = nlen(source);
-    return nruns(nfunc(nrange(size), forward<A>(source)), move(together));
+    return nruns(nfunc_bind(nrange(size), forward<A>(source)), move(together));
 }
 
 // ---- 30_ds.hpp ----

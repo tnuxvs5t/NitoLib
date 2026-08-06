@@ -1,6 +1,12 @@
 #pragma once
 
+#ifdef NITORI_NANO_TEST
 #ifdef NITORI_X_TEST_UNSAFE
+#include "../v2-nano/Nitori_unsafe.h"
+#else
+#include "../v2-nano/Nitori.h"
+#endif
+#elif defined(NITORI_X_TEST_UNSAFE)
 #include "../Nitori_unsafe.h"
 #else
 #include "../Nitori.h"

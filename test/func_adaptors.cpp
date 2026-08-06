@@ -11,13 +11,13 @@ int main() {
     ntest(descending.position(99) == npos && descending.position(90) == npos &&
           descending.position(102) == npos);
 
-    auto aligned = nfunc(nrange(0, 5), nrange(100, 90, -2));
+    auto aligned = nfunc_bind(nrange(0, 5), nrange(100, 90, -2));
     ntest(aligned.len() == 5 && aligned.key(3) == 3 && aligned[3] == 94);
     ntest(aligned(0) == 100 && aligned(4) == 92);
 
     nvector<int> anchors{40, 10, 30};
     nvector<string> labels{"forty", "ten", "thirty"};
-    auto table = nfunc(anchors, labels);
+    auto table = nfunc_bind(anchors, labels);
     ntest(table(10) == "ten" && table(30) == "thirty");
     anchors[1] = 99;
     ntest(table.key(1) == 10 && table(10) == "ten");
@@ -29,17 +29,17 @@ int main() {
     ntest(reanchored.key(1) == 10 && reanchored[1] == "ten" &&
           reanchored(30) == "thirty");
 
-    auto schedule = nfunc(nrange(3, -1, -1), nrange(10, 18, 2));
+    auto schedule = nfunc_bind(nrange(3, -1, -1), nrange(10, 18, 2));
     ntest(schedule(3) == 10 && schedule(2) == 12 && schedule(0) == 16);
 
     nvector<long long> dp{5, 8, 13};
     int base_calls = 0, alternative_calls = 0;
-    auto state = nfunc(nrange(dp.len()), [&](int index) -> long long& {
+    auto state = nfunc_ref(nrange(dp.len()), [&](int index) -> long long& {
         ++base_calls;
         npre(0 <= index && index < dp.len());
         return dp[index];
     });
-    auto safe = nbranch(
+    auto safe = nbranch_value(
         state,
         [](int index) { return index == -1; },
         [&](int) {
@@ -50,7 +50,7 @@ int main() {
     ntest(safe(2) == 13 && base_calls == 1 && alternative_calls == 1);
 
     long long sentinel = -7;
-    auto writable = nbranch(
+    auto writable = nbranch_ref(
         state,
         [](int index) { return index == -1; },
         [&](int) -> long long& { return sentinel; });

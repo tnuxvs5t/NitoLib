@@ -16,11 +16,11 @@ ROOT = Path(__file__).resolve().parents[1]
 TEST_ROOT = ROOT / "test"
 
 
-def compile_to_memfd(source: Path, profile: str, sanitize: bool) -> int:
+def compile_to_memfd(source: Path, profile: str, sanitize: bool, nano: bool) -> int:
     fd = os.memfd_create(f"nitori-x-{source.stem}", 0)
     flags = [
         "g++",
-        "-std=gnu++20",
+        "-std=gnu++23",
         "-Wall",
         "-Wextra",
         "-Werror",
@@ -33,6 +33,8 @@ def compile_to_memfd(source: Path, profile: str, sanitize: bool) -> int:
         flags += ["-O2"]
     if profile == "unsafe":
         flags += ["-DNITORI_X_TEST_UNSAFE=1", "-DNDEBUG"]
+    if nano:
+        flags += ["-DNITORI_NANO_TEST=1"]
     flags += [str(source), "-o", f"/proc/self/fd/{fd}"]
     result = subprocess.run(flags, cwd=ROOT, pass_fds=(fd,))
     if result.returncode:
@@ -61,6 +63,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--profile", choices=["checked", "unsafe", "both"], default="both")
     parser.add_argument("--sanitize", action="store_true")
+    parser.add_argument("--nano", action="store_true", help="test the independent v2-nano headers")
     parser.add_argument("tests", nargs="*", help="optional test stems or filenames")
     args = parser.parse_args()
 
@@ -79,7 +82,7 @@ def main() -> int:
             if death and (profile == "unsafe" or args.sanitize):
                 continue
             print(f"[{profile}{'+san' if args.sanitize else ''}] {source.name}", flush=True)
-            fd = compile_to_memfd(source, profile, args.sanitize)
+            fd = compile_to_memfd(source, profile, args.sanitize, args.nano)
             if fd < 0:
                 return 1
             code = execute(fd, source, quiet=death)

@@ -151,7 +151,7 @@ auto ncollect(A&& source) {
 }
 
 template <class G>
-    requires ndiscrete<remove_reference_t<G>>
+    requires nkeyed_indexed<remove_reference_t<G>>
 auto ntabulate(G&& function) {
     return ncollect(forward<G>(function));
 }

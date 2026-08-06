@@ -510,8 +510,10 @@ condition 当作优化器可以相信的事实；条件为假时行为未定义�
 - `nvector`、`ndeque`、`narray`、`nmatrix`、`nmap`、`nset` 等拥有存储。
 - `nview` 是唯一公共引用视图类型；`nall`、`nsub`、`nstride`、`nproject`、`nzip`、
   `nproduct`、`nwindows`、`nrow`、`ncolumn`、`ndiagonal` 都返回某个 `nview` 实例。
-- `nfunc(domain,evaluate)`、`nrestrict`、`ngather`、`ncompose` 等离散函数适配器
-  对左值参数借用、对右值参数接管所有权；但 evaluator 自己捕获的引用仍由用户负责。
+- `nfunc_value`、`nfunc_ref`、`nfunc_bind`、`nredomain`、`nrestrict`、
+  `nselect_positions`、`ncompose` 等离散函数适配器对左值参数借用、对右值参数接管
+  所有权；holder 的 `const` 会一致传播到被拥有或被借用对象。evaluator 自己捕获的
+  引用仍由用户负责。
 - 组合器对普通左值 owner 保存引用；`nview` 描述符按值复制，对其他左值 range 描述符
   借用，对安全的右值 range 描述符接管所有权。中间 view 因此可以嵌套，但它仍不延长
   最底层借用 owner 的生命周期。
@@ -925,14 +927,15 @@ auto blocks = ncollect(nproject(nwindows(a, width), [](auto window) {
 |---|---|---|
 | 第 `i` 项引用哪个元素；切片、倒序、步长、矩阵行列 | `nview` | 只表达位置拓扑，通常是小描述符 |
 | 热点循环中建立很多同形窗口、块、行 | `nview` / `nsub` / `nstride` | 不为每个对象建立语义索引 |
-| 让枚举位置携带另一套状态 key | `nfunc` / `nanchors` | 明确区分 position 与 key |
-| 按 key 求值、组合离散映射、给 DP 加哨兵状态 | `nfunc` / `ncompose` / `nbranch` | 需要函数语义而不只是引用拓扑 |
+| 让枚举位置携带另一套状态 key | `nfunc_bind` / `nanchors` | 明确区分 position 与 key |
+| 按 key 计算值 | `nfunc_value` / `nfunc_ref` | 由调用者明确选择值或借用结果 |
+| 组合离散映射、给 DP 加哨兵状态 | `ncompose` / `nbranch_value` / `nbranch_ref` | 需要函数语义而不只是引用拓扑 |
 | 把连续段作为可再次组合的离散对象 | `nruns` | 一次扫描建立段边界和起点索引 |
 | 只想得到独立副本 | `ncollect` / `ntabulate` | 物化 owner，不需要函数层 |
 
-#### 三个接口，三种问题
+#### 三个坐标，三种显式构造
 
-`nfunc` 给一个有限枚举加上语义自变量。给定有限 support
+有限函数给一个有限枚举加上语义自变量。给定有限 support
 `D = [d_0,d_1,...,d_{n-1}]` 和 evaluator `phi`：
 
 ```text
@@ -954,10 +957,19 @@ f(x)    semantic key -> value
 
 #### 第一件事：把求值规则挂到有限 support 上
 
-构造和最小例子：
+计算结果不再由重载猜测，必须明确选择返回策略：
+
+| API | 结果契约 |
+|---|---|
+| `nfunc_value(domain,evaluator)` | 每次结果物化成独立值 |
+| `nfunc_ref(domain,evaluator)` | evaluator 必须返回 `T&` 或 `const T&` |
+| `nfunc_eval(domain,evaluator)` | 稳定自动策略：安全时保留 `T&/const T&`，临时参数产生的引用和公共 `T&&` 物化成值 |
+| `nfunc_bind(domain,values)` | 按枚举位置绑定已有 value source，并快照 domain |
+
+最小值函数：
 
 ```cpp
-auto square = nfunc(nrange(6), [](int x) { return x * x; });
+auto square = nfunc_value(nrange(6), [](int x) { return x * x; });
 
 square.len();       // 6
 square.key(4);      // 4
@@ -965,14 +977,19 @@ square[4];          // 16：按枚举位置
 square(4);          // 16：按语义自变量
 ```
 
-`operator()(x)` 不做“x 是否在有限域中”的成员检查；有限域规定枚举边界，evaluator
-规定求值能力。若函数只在列出的 key 上有定义，应由 evaluator 使用 `npre` 或改用
-`npartial` 表达真正的部分函数。
+`nfunc_value/ref/eval` 的 `operator()(x)` 不做“x 是否在有限域中”的成员检查；有限域
+规定枚举边界，evaluator 规定求值能力。需要在另一组 key 上重新枚举而不限制调用时用
+`nredomain`；需要调用时也检查成员关系时用 `nrestrict`。
 
-`ndiscrete<F>` 检查 indexed value 与 `key(i)` 两层接口。evaluator 构造的有限枚举域
-不要求唯一、有序或可哈希，因为同一 key 始终进入同一个 evaluator。它不是 v1 稀疏
-部分函数；需要运行时绑定/解绑键值时使用 `nfunc_hash`/`npartial`，需要普通字典时使用
-`nmap`。
+`nfunc_ref` 是显式借用契约：evaluator 返回的引用必须指向调用结束后仍存活的对象，不能
+只是把临时 key 参数原样返回。不能证明这一点时使用 `nfunc_eval` 或 `nfunc_value`；前者
+会在 key/argument 是临时对象时物化任何引用结果。
+
+`nkeyed_indexed<F>` 检查 indexed value 与 `key(i)` 两层接口；
+`ndiscrete_function<F>` 进一步检查 `f(key)`。因此纯 key/value 枚举可以进入
+`nselect_positions`，却不必伪装成完整 callable。evaluator 构造的有限枚举域不要求
+唯一、有序或可哈希；旧 `ndiscrete` 暂时保留为 `nkeyed_indexed` 的兼容别名，新代码
+必须写出准确能力。需要运行时绑定/解绑键值时使用 `nfunc_hash`/`npartial`。
 
 这一形式通常构造为 `O(1)`，但 evaluator 可以捕获任意状态，库不承诺它必然是
 view 大小、无分配或适合海量复制。若只需 `a[index[i]]` 这样的密集位置访问，仍应写成
@@ -980,10 +997,10 @@ view 大小、无分配或适合海量复制。若只需 `a[index[i]]` 这样的
 
 #### 第二件事：按枚举绑定两套序列
 
-第二个参数也可以是 indexed value source：
+`nfunc_bind` 按位置绑定 indexed value source：
 
 ```cpp
-auto f = nfunc(nrange(0, 5), nrange(100, 90, -2));
+auto f = nfunc_bind(nrange(0, 5), nrange(100, 90, -2));
 // (key,value) = (0,100), (1,98), (2,96), (3,94), (4,92)
 
 f[3]; // 94：按枚举位置
@@ -1000,7 +1017,7 @@ values 左值仍被借用并保持写回。domain 还必须能成为函数索引
   `f(key)` 期望 `O(1)`；
 - 不存在隐藏线性查询退化。无法建立受支持索引的 key 类型应改用 evaluator 构造。
 
-这正是 `nfunc` 与 `nview` 的成本分界：普通可哈希 domain 会在构造期建立索引，以换取
+这正是 `nfunc_bind` 与 `nview` 的成本分界：普通可哈希 domain 会在构造期建立索引，以换取
 之后按 key 的期望 `O(1)` 查询。不要为了少写一个下标，在 `O(n)` 次外层迭代里反复
 构造这个表；把函数提升到循环外复用，或退回位置 view。
 
@@ -1016,8 +1033,8 @@ result[i]     = source[i]
 例如把倒序块号和正向位置按枚举序号绑定：
 
 ```cpp
-auto schedule = nfunc(nrange(blocks - 1, -1, -1),
-                      nrange(0, blocks * width, width));
+auto schedule = nfunc_bind(nrange(blocks - 1, -1, -1),
+                           nrange(0, blocks * width, width));
 
 nforkv(block, begin, schedule) {
     // block 倒序，begin 正序
@@ -1030,8 +1047,8 @@ nforkv(block, begin, schedule) {
 auto schedule = nanchors(positions, nrange(blocks - 1, -1, -1));
 ```
 
-`nanchors` 与 `nrestrict` 完全不同：前者保留第 `i` 个 value、替换它的 key；后者把
-新 domain 中每项当作语义参数，重新调用源函数。
+`nanchors` 与 `nredomain`/`nrestrict` 完全不同：前者保留第 `i` 个 value、替换它的
+key；后两者把新 domain 中每项当作语义参数，重新调用源函数。
 
 #### 看、改、复制：先分清别名和 owner
 
@@ -1045,6 +1062,10 @@ auto same       = ncollect(f);               // 与 ntabulate 等价
 auto table_copy = ncollect(nentries(f));     // 独立 pair 值表
 ```
 
+evaluator 函数还提供引用限定成员 `keys()`：左值函数返回借用 view，右值函数把整个函数
+对象移入 view。它不会再复制 domain holder，因此拥有大型 domain 时也没有隐藏的大复制；
+通用代码仍优先写 `nkeys(f)`。
+
 复制 `f`、`nkeys(f)` 或 `nvalues(f)` 不会自动复制底层 value；绑定构造的 `f` 可能同时
 复制自己拥有的 key 索引，`nruns` 的段状态则共享。只有 `ntabulate`/`ncollect` 才创建
 独立 value owner。`nentries` 的即时元素保留引用类别，便于 `nforkv(key,value,f)` 原地
@@ -1054,46 +1075,72 @@ auto table_copy = ncollect(nentries(f));     // 独立 pair 值表
 悬垂：
 
 ```cpp
-auto f = nfunc(nvector<int>{10, 20, 30}, [](int x) { return x + 1; });
+auto f = nfunc_value(nvector<int>{10, 20, 30}, [](int x) { return x + 1; });
 ```
 
 但 lambda 捕获的 `&storage` 仍只是普通 C++ 引用；`storage` 必须存活，结构修改也不能
 使 evaluator 返回的引用失效。
 
-上面的借用规则描述 evaluator 构造；按枚举绑定为了保护 key 索引会拥有 domain 快照，
+holder 的深 const 契约固定为“非 const holder 得到可用的底层引用，const holder 得到
+const 底层引用”，不因当前是拥有还是借用而改变。上面的借用规则描述 evaluator 构造；
+按枚举绑定为了保护 key 索引会拥有 domain 快照，
 只借用左值 values。values 的元素可原地修改，但其长度和索引拓扑在函数存活期间必须
 稳定；checked 访问会验证长度仍与 domain 一致。
 
-#### 第四件事：用 `nbranch` 惰性扩展求值域
+#### 第四件事：显式选择 branch 的值/引用策略
 
 ```cpp
-auto state = nfunc(nrange(n), [&](int i) -> long long& { return dp[i]; });
-auto safe = nbranch(state, [](int i) { return i == -1; }, 0LL);
+auto state = nfunc_ref(nrange(n), [&](int i) -> long long& { return dp[i]; });
+auto safe = nbranch_value(state, [](int i) { return i == -1; }, 0LL);
 
 safe(-1); // 0；不会调用 state(-1)
 safe(5);  // dp[5]
 ```
 
-`nbranch(base,predicate,alternative)` 保留 base 的有限 support；`operator[]` 与
-`operator()` 都先判断 predicate，并且只执行选中的一个分支。alternative 可为 callable
-或常量。若两个分支都返回兼容引用，结果保留引用；值和引用混合时遵循 C++ 条件表达式
-的公共结果类型。`f[-1]` 仍然非法，因为 `[]` 始终接收枚举位置；扩展的是 `f(-1)` 的
-语义求值。若还要枚举 `-1`，显式使用 `nrestrict(safe,nrange(-1,n))`。
+`nbranch_value` 总是返回两个分支去掉 cv/ref 后的公共值类型；即使 base 返回引用，也不会
+产生可写回接口。`nbranch_ref` 则要求两个分支返回**完全相同的左值引用类型**：
+
+```cpp
+long long sentinel = 0;
+auto writable = nbranch_ref(
+    state,
+    [](int i) { return i == -1; },
+    [&](int) -> long long& { return sentinel; });
+
+writable(-1) = 7; // 写 sentinel
+writable(3) = 9;  // 写 dp[3]
+```
+
+两个操作都保留 base 的有限 support，并且只执行 predicate 选中的一个分支。
+alternative 在 value 版本中可为 callable 或常量，在 ref 版本中必须是返回匹配引用的
+callable。`f[-1]` 仍然非法，因为 `[]` 接收枚举位置；扩展的是 `f(-1)` 的语义求值。
+若还要枚举 `-1`，使用 `nredomain(safe,nrange(-1,n))`；只有希望 `safe(x)` 也拒绝
+域外参数时才用 `nrestrict`。
+
+branch 会把待判定 key 当作具名对象复用：predicate 与选中的分支都以这个具名 key 的
+左值类别调用，即使 key 最初来自纯右值或 `T&&`。这样同一个 key 只求值一次，也不会被
+predicate 先移动后再交给分支；只接受消费性右值参数的 callable 不适合作 branch 的
+key 处理器。
 
 这是 DP 哨兵、边界状态和分段定义最直接的用法。predicate 与两个分支都可以很重，
 但每次求值只执行被选中的分支；不要先算出 alternative 再传入，破坏惰性。
 
-#### 第五件事：选择 key，还是选择 position
+#### 第五件事：区分重定义域、真正限制与位置选择
 
 ```cpp
-auto r = nrestrict(f, domain);     // domain 中每项就是新的语义自变量
-auto g = ngather(f, positions);    // positions 中每项是 f 的枚举位置
+auto r = nredomain(f, domain);             // 只改变枚举 support
+auto q = nrestrict(f, domain);             // support + 调用成员检查
+auto g = nselect_positions(f, positions);  // 选择源枚举位置
 ```
 
-- `nrestrict(f,{x...})` 重新列出函数的语义定义域，并以 `f(x)` 求值。
-- `ngather(f,{i...})` 从原枚举中选第 `i` 项，保留原来的 `f.key(i)` 与 `f[i]`。
-- `ngather` 允许重复位置；若值是引用，重复项有意别名同一对象。
-- `g.position(j)` 返回第 `j` 项来自源函数的哪个位置。
+- `nredomain(f,{x...})` 重新列出语义定义域，并以 `f(x)` 求值；`result(y)` 仍可调用
+  support 外的 `y`。
+- `nrestrict(f,{x...})` 枚举行为相同，但 `result(y)` 会检查 `y` 确实属于新 domain。
+  有 `position(y)` 的 domain 直接定位；其他 domain 显式做 `O(n)` 成员扫描。
+- `nselect_positions(f,{i...})` 从原枚举中选第 `i` 项，保留原 `key/value`；允许重复位置，
+  引用结果会有意别名同一对象。
+- `g.source_index(j)` 返回新枚举第 `j` 项来自哪个源位置；不要把它叫作 key 到 ordinal
+  的逆映射 `position(key)`。
 
 当原域恰好是 `nrange(n)` 时，自变量与位置数值相同，看起来两者等价；换成坐标、状态
 编号或压缩后的 key 就不再等价。不要凭数值巧合混用这两个齿轮。
@@ -1102,8 +1149,9 @@ auto g = ngather(f, positions);    // positions 中每项是 f 的枚举位置
 
 | 适配器 | 输入中的项目表示 | 结果保留什么 |
 |---|---|---|
-| `nrestrict(f,domain)` | 语义 key | 新 support，值为 `f(key)` |
-| `ngather(f,positions)` | 源枚举位置 | 原 key 与原 value 引用 |
+| `nredomain(f,domain)` | 语义 key | 新 support，调用域不受限 |
+| `nrestrict(f,domain)` | 语义 key | 新 support，调用时检查成员关系 |
+| `nselect_positions(f,positions)` | 源枚举位置 | 原 key 与原 value 引用 |
 | `nsubfunc(f,l,r)` | 位置区间 `[l,r)` | 该段原 key/value |
 | `nblock(f,b,w)` | 第 `b` 个位置块 | 尾块自动缩短 |
 | `nblocks(f,w)` | 全部位置块 | 一个轻量 block view |
@@ -1121,12 +1169,17 @@ auto h = ncompose(outer, inner);    // h(x) = outer(inner(x))
 auto y = nmap_values(f, transform); // transform(f(x))，key 不变
 ```
 
+所有公共离散函数结果只允许 `T`、`T&`、`const T&`；底层 callable 返回 `T&&` 时会
+在适配器边界物化为 `T`。组合还有更强的稳定规则：若 inner 产生临时值，则 outer 从该
+临时值产生的任何引用都会在 `ncompose` 返回前物化。因此
+`ncompose(nidentity{}, value_returning_function)` 返回独立值，不会把局部中间对象送出。
+
 `nsubfunc`、`nblock`、`nblocks` 都保留语义 key 和 value 引用，因此每个块仍可直接进入
 通用算法：
 
 ```cpp
 nvector<int> a{9,1,8,2,7,3,6,4};
-auto cell = nfunc(nrange(a.len()), [&](int i) -> int& { return a[i]; });
+auto cell = nfunc_ref(nrange(a.len()), [&](int i) -> int& { return a[i]; });
 
 nfor(block, nblocks(cell, 3))
     nsort(block);
@@ -1137,7 +1190,7 @@ nfor(block, nblocks(cell, 3))
 
 `nruns(source,together)` 扫描相邻 value；`together(previous,current)` 为真时留在同一段，
 否则开始新段。省略 together 时使用 `nequal<>`。结果仍是离散函数：第 `j` 项的 key 是
-该段在 source 中的起始枚举位置，value 是保留 source key 与引用的 `nsubfunc`。
+该段在 source 中的起始枚举位置，value 是保留 source key 与引用的专用 run segment。
 
 ```cpp
 nvector<int> colors{1,1,2,2,5,4,4};
@@ -1156,20 +1209,21 @@ auto answer = ncollect(nmap_values(chains, [](auto chain) {
 })); // nvector<nvector<Item>>
 ```
 
-构造 `nruns` 为 `O(n)` 次 source 访问，并保存 `O(k)` 个边界和起点索引，其中 `k` 为
-段数；按段位置访问为 `O(1)`，按精确段起点查询为期望 `O(1)`。段描述通过共享的函数
-holder 保持临时适配器安全，不复制整个 source。边界是构造时快照：之后修改 source value
-不会自动重新分段，但段内 value 仍保持原引用语义。
+构造 `nruns` 为 `O(n)` 次 source 访问，并保存 `O(k)` 个有序起点，其中 `k` 为段数；
+按段位置访问为 `O(1)`，按精确段起点查询用二分，为 `O(log k)`。实现只有一个
+`shared_ptr<nrun_state>` 分配；segment 直接保存共享 state 与 `[left,right)`，不再叠加
+shared-function/subfunc/gather 适配器。detached segment 仍能延长源状态生命周期。边界是
+构造时快照：之后修改 source value 不会自动重新分段，但段内 value 仍保持原引用语义。
 
-子序列 DP 中，依赖关系本来就是一组离散位置。`ngather` 把“按前驱表取状态”压成一个
+子序列 DP 中，依赖关系本来就是一组离散位置。`nselect_positions` 把“按前驱表取状态”压成一个
 可枚举函数，而不复制 DP：
 
 ```cpp
 nvector<int> dp(n, 1);
-auto state = nfunc(nrange(n), [&](int i) -> int& { return dp[i]; });
+auto state = nfunc_ref(nrange(n), [&](int i) -> int& { return dp[i]; });
 
 for (int v = 0; v < n; ++v) {
-    auto previous = ngather(state, predecessor[v]);
+    auto previous = nselect_positions(state, predecessor[v]);
     nforkv(from, best, previous)
         nchmax(dp[v], best + 1);
 }
@@ -1182,21 +1236,23 @@ for (int v = 0; v < n; ++v) {
 
 | 操作 | 构造 | 单次访问/求值 | 额外状态 |
 |---|---:|---:|---:|
-| `nfunc(domain,evaluator)` | 通常 `O(1)` | evaluator 自身复杂度 | holder + evaluator 捕获 |
-| `nfunc(nrange,values)` | `O(1)` | `O(1)` | domain 与 value holder |
-| `nfunc(generic_hashable_domain,values)` | 期望 `O(n)` | 期望 `O(1)` 按 key 查询 | `O(n)` key 索引 |
+| `nfunc_value/ref/eval(domain,evaluator)` | 通常 `O(1)` | evaluator 自身复杂度 | domain/evaluator holder |
+| `nfunc_bind(nrange,values)` | `O(1)` | `O(1)` | domain 快照与 value holder |
+| `nfunc_bind(generic_hashable_domain,values)` | 期望 `O(n)` | 期望 `O(1)` 按 key 查询 | `O(n)` key 索引 |
 | `nanchors(source,anchors)` | 取决于 anchors locator；通常 `O(1)` 或期望 `O(n)` | 通常或期望 `O(1)` | 与 anchors domain 相同 |
-| `nbranch` | 通常 `O(1)` | predicate + 一个选中分支 | base/predicate/alternative |
-| `nrestrict` / `ngather` / `nsubfunc` | 通常 `O(1)` | 源函数成本 | domain/position holder |
+| `nbranch_value/ref` | 通常 `O(1)` | predicate + 一个选中分支 | base/predicate/alternative |
+| `nredomain` | `O(1)` | 源函数成本 | domain holder |
+| `nrestrict` | `O(1)` | 源函数 + `O(1)` locator 或 `O(n)` 扫描 | domain holder |
+| `nselect_positions` / `nsubfunc` | `O(1)` | 源函数成本 | position holder |
 | `nblocks` | `O(1)` | 生成每个块描述为 `O(1)` | 一个 block view |
-| `nruns` | `O(n)` 扫描 | `O(1)` 按段位置，期望 `O(1)` 按起点 | `O(k)` 边界与索引 |
+| `nruns` | `O(n)` 扫描 | `O(1)` 按段位置，`O(log k)` 按起点 | 一次共享分配 + `O(k)` 起点 |
 | `ncollect` / `ntabulate` | `O(n)` | 物化后 `O(1)` 索引 | `O(n)` 独立 owner |
 
 `nfunc` 家族追求的是**正确的结构复杂度**，不是一律零分配。需要按 key 查询时就建立
 索引，需要连续段时就保存边界；它拒绝用隐藏的 `O(n)` 线性查找假装接口轻巧。代价应
 在粗粒度边界支付一次，然后被算法复用。
 
-若 `ngather` 含重复位置，多个结果会别名同一 value；原地排序等依赖独立交换位置的
+若 `nselect_positions` 含重复位置，多个结果会别名同一 value；原地排序等依赖独立交换位置的
 算法通常没有合理语义，应先去重位置或显式物化。
 
 #### 上场前的五问
@@ -1596,8 +1652,9 @@ auto inverse = ~bij;
 auto composition = outer * inner;
 ```
 
-`nfunc_hash` 是“键可能尚未绑定”的关联对象，与 6.8 的 `nfunc(domain,evaluator)` 有意
-分名；后者是无需存表的有限 keyed view。
+`nfunc_hash` 是“键可能尚未绑定”的关联对象，与 6.8 的
+`nfunc_value/ref/eval(domain,evaluator)` 有意分名；后者是无需存表的有限 keyed
+函数。
 
 坐标压缩建立值到 `[0,k)` rank 的双射：
 
@@ -2622,7 +2679,7 @@ nsort(selected);
 
 ```cpp
 nvector<int> a(n);
-auto cell = nfunc(nrange(n), [&](int i) -> int& { return a[i]; });
+auto cell = nfunc_ref(nrange(n), [&](int i) -> int& { return a[i]; });
 
 nfor(block, nblocks(cell, width)) {
     // block.key(i) 是原数组位置，block[i] 是 a[原位置] 的引用
@@ -2638,20 +2695,21 @@ nfor(block, nblocks(cell, width)) {
 
 ```cpp
 nvector<int> dp(n, 1);
-auto state = nfunc(nrange(n), [&](int i) -> int& { return dp[i]; });
+auto state = nfunc_ref(nrange(n), [&](int i) -> int& { return dp[i]; });
 
 for (int v = 0; v < n; ++v) {
-    auto incoming = ngather(state, predecessor[v]);
+    auto incoming = nselect_positions(state, predecessor[v]);
     nforkv(from, best, incoming)
         nchmax(dp[v], best + transition(from, v));
 }
 ```
 
 `predecessor[v]` 存源函数的枚举位置；若它存的本来是语义状态 key，则应改用
-`nrestrict(state, predecessor[v])`。先分清 position/key，能消掉大量“数值恰好相同”
+`nredomain(state, predecessor[v])`；若还要求任意调用也只能使用这些 key，则用
+`nrestrict`。先分清 position/key，能消掉大量“数值恰好相同”
 掩盖的 WA。
 
-这里每个状态临时建立一次 `O(1)` 的 `ngather`，是用高阶表达购买调试时间；若状态数
+这里每个状态临时建立一次 `O(1)` 的 `nselect_positions`，是用高阶表达购买调试时间；若状态数
 达到百万级、对象要长期保存或基准显示描述符成本进入热点，就改用 `nview`/直接位置循环，
 不要批量保存 `nfunc` 家族对象。
 
@@ -2821,8 +2879,9 @@ python3 tools/audit.py
 ### 19.3 离散函数先写清 position/key/value
 
 新增离散函数适配器必须明确三件事：输入序列中的整数代表源枚举位置还是语义 key，
-结果是否保留原 key，value 是引用还是值。位置选择基于 `ngather`，语义重定义域基于
-`nrestrict`；不要再创造一个含糊的 `select`。还必须写清构造、求值和额外状态复杂度：
+结果是否保留原 key，value 是引用还是值。位置选择使用 `nselect_positions`，只改变
+枚举 support 使用 `nredomain`，调用时也要成员检查才使用 `nrestrict`。还必须写清构造、
+求值和额外状态复杂度：
 需要按 key 查询就建立正确 locator/index，不允许用隐藏线性扫描伪装轻量；只需位置拓扑
 就退回 `nview`，不要在热点路径批量建立或保存高阶函数对象。运行时增删绑定属于
 `nmap/npartial`，不塞进有限 `nfunc` 的职责。
@@ -2831,7 +2890,9 @@ python3 tools/audit.py
 
 - 借用 API 接受左值 owner。
 - 不在 view 中拥有元素副本。
-- accessor 返回真实引用时明确写 `-> T&`/`-> decltype(auto)`。
+- accessor 返回真实引用时明确写 `-> T&`/`-> const T&`；公共适配器不得返回 `T&&`。
+- 中间值为临时时，组合器不得让从它产生的引用逃逸；使用稳定调用边界并保留 sanitizer
+  回归测试。
 - 对临时 owner 的危险入口显式删除。
 - 测试 owner 修改和非连续访问。
 
@@ -2899,9 +2960,12 @@ Nitori X 不以“删掉旧能力换一个小而美的壳”为目标。它复�
 
 1. **`nspan` / `nview`**：Nitori X 只保留 `nview<T,Accessor>`。连续性由 accessor 是否暴露
    `data()` 静态决定；`nview<T>` 就是原连续借用的零开销入口，不再维护两套切片体系。
-2. **`nfunc`**：Nitori X 的 `nfunc` 是 `nview` 上层有限 keyed 高阶抽象；evaluator、
-   按枚举绑定、重新锚定、分流与连续分段都是同一家族的构造方式。绑定和分段可以建立
-   索引或边界来保证后续复杂度。旧版可动态增删绑定的部分函数迁到 `nfunc_hash/npartial`。
+2. **`nfunc`**：Nitori X 的有限函数是 `nview` 上层 keyed 高阶抽象；结果策略拆为
+   `nfunc_value/nfunc_ref/nfunc_eval`，按枚举绑定使用 `nfunc_bind`，分流拆为
+   `nbranch_value/nbranch_ref`。`nredomain`、`nrestrict`、`nselect_positions` 分别表达
+   改 support、成员限制和源位置选择。旧 `nfunc/nbranch/ngather` 只保留 deprecated
+   迁移入口；同时 indexed + invocable 的旧 `nfunc` 参数会直接要求调用者选明契约。
+   可动态增删绑定的部分函数仍使用 `nfunc_hash/npartial`。
 3. **`nmod`**：`nmod<M>` 恢复为模整数类型；标量数学余数必须写 `nmodulo(x,m)`。
 4. **`nmatrix` / `nmat`**：前者负责存储、行列/对角 view 和显式 semiring 算法；后者
    绑定 `Add/Mul`，提供 `+/*/pow/trans/eye` 的竞赛短桥。
@@ -2991,10 +3055,13 @@ ncollect ntabulate
 ### 离散函数
 
 ```text
-ndiscrete_function ndiscrete nfunction_key_reference_t nfunction_key_t nfunc
-nkeys nvalues nentries nrestrict nanchors nbranch nruns
-ncomposed_function ncompose nmap_values ngathered_function ngather
-nsubfunc nblock nblocks
+nkeyed_indexed ndiscrete_function ndiscrete nstable_function_result
+nfunction_key_reference_t nfunction_key_t nevaluated_function
+nfunc_value nfunc_ref nfunc_eval nfunc_bind nfunc
+nkeys nvalues nentries nredomain_function nredomain nrestrict nanchors
+nbranch_value nbranch_ref nbranch nruns
+ncomposed_function ncompose nmap_values nselected_positions_function
+nselect_positions ngather nsubfunc nblock nblocks
 ```
 
 ### 拥有型序列与算法
