@@ -4482,6 +4482,13 @@ O(1)，单点 `find` 和邻接枚举为 O(outdegree)；`arcs()` 的跳过 tombst
 O(public-id 上界)，这是稳定 id 换取的明确成本。该后端是新增能力，不替换
 `ngraph_list`/`ngraph_forward`/`ngraph_csr`，也不改变它们的插入顺序、edge id 或低常数语义。
 
+V3-3 已将 `ngraph_forward<W>` 改为兼容 facade：资源记录和权值存取委托给
+`ngraph_topology<W>`，但 facade 的 `add()` 仍做头插、`arcs()` 仍按“顶点顺序 + 头插邻接
+顺序”枚举，`clear_edges()` 仍重置为从 0 开始的 dense edge id。兼容层只保留一个为旧顺序
+服务的轻量 cursor，不复制第二份 edge/weight 数组；`arcs().len()` 仍是 O(1)，而 `narcs()`
+继续复用公共 flatten projection。`ngraph_list` 仍作为朴素 reference backend，CSR 仍是独立
+紧凑物化层；因此这次替换没有把旧后端的顺序和清空语义偷偷改成 topology 的稳定 id 语义。
+
 #### 19.8.4 树与既有 DS 的接合
 
 `ntree_layout` 不能被删除或偷偷改成另一种字段语义。它继续是从任意 `ngraph_like` 得到
@@ -4520,7 +4527,7 @@ epoch：`same_domain` 仍然必须为真才可转移资源，scope 不能授权�
 | V3-0 | 已完成基线：node domain、FHQ domain、五类 segment merge | 现有全库、audit、两 profile sanitizer |
 | V3-1 | 抽出 `nnode_view`/`nseg_node` 共用的 identity/epoch/generation 检查；评估 scope token，暂不引入未接入 owner 的空壳 | 固定 stale/ABA/move/copy 测试；无公共签名回归 |
 | V3-2 | 资源化 owning graph topology；先做 node identity、邻接链和只读枚举 | `graph_topology` fixed/property/death；list/forward/CSR differential |
-| V3-3 | 让 `ngraph_forward` 以兼容 facade 接入资源层；锁定 edge id、顺序、权值修改语义 | 旧 graph/compat 全测；随机 add/weight/reverse/narcs 对拍；ASan/UBSan |
+| V3-3 | 让 `ngraph_forward` 以兼容 facade 接入资源层；锁定 edge id、顺序、权值修改语义 | 旧 graph/compat 全测；`graph_forward_facade` 随机 add/weight/reverse/narcs 对拍；ASan/UBSan |
 | V3-4 | 把 `ntree_layout` 变成兼容投影并增加 rooted tree/forest owner | 连通/无环/对称/root/order death；LCA/HLD/reroot differential |
 | V3-5 | 组件拆并与动态森林底座：FHQ Euler 序列 + 既有 segment family；先实现可验证 link/cut 子集 | vector oracle、字符串非交换聚合、跨组件 merge/split、stale view death |
 | V3-6 | 算法层适配：遍历/最短路/topo/SCC/MST、LCA/HLD/reroot、flow/matching 的资源入口 | 各后端结果等价；流/匹配独立 oracle；递归深度与容量边界测试 |

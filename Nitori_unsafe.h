@@ -9181,16 +9181,52 @@ template <class W = int, class V = monostate> class ngraph_topology {
         arc.next = arc.prev = 0;
     }
 
-    int add0(int from, int to, W weight) {
+    void link_arc_front(int handle) {
+        value_type& arc = pool_[handle];
+        npre(arc.kind == ngraph_node_kind::arc);
+        value_type& vertex = pool_[vertex_handles_[arc.from]];
+        arc.prev = 0;
+        arc.next = vertex.head;
+        if (vertex.head)
+            pool_[vertex.head].prev = handle;
+        else
+            vertex.tail = handle;
+        vertex.head = handle;
+        npre(vertex.degree < INT_MAX);
+        ++vertex.degree;
+    }
+
+    int add0(int from, int to, W weight, bool append = true) {
         npre(0 <= from && from < len() && 0 <= to && to < len());
         npre(arc_handles_.len() < INT_MAX && arc_count_ < INT_MAX);
         int id = arc_handles_.len();
         int handle = pool_.make(
             ngraph_node_record<W, V>(ngraph_node_kind::arc, id, from, to, move(weight)));
         arc_handles_.push(handle);
-        link_arc(handle);
+        if (append)
+            link_arc(handle);
+        else
+            link_arc_front(handle);
         ++arc_count_;
         return id;
+    }
+
+    bool release_edges(bool reset_ids) {
+        bool changed = arc_count_ || (reset_ids && !arc_handles_.empty());
+        if (!changed)
+            return false;
+        for (int id = 0; id < arc_handles_.len(); ++id) {
+            int handle = arc_handles_[id];
+            if (!handle)
+                continue;
+            unlink_arc(handle);
+            pool_.erase(handle);
+            arc_handles_[id] = 0;
+        }
+        arc_count_ = 0;
+        if (reset_ids)
+            arc_handles_.clear();
+        return true;
     }
 
     friend class nnode_view<ngraph_topology>;
@@ -9332,6 +9368,11 @@ template <class W = int, class V = monostate> class ngraph_topology {
     bool same_domain(const ngraph_topology& other) const noexcept {
         return pool_.same_domain(other.pool_);
     }
+    void reserve(int expected_edges) {
+        expected_edges = checked_vertices(expected_edges);
+        arc_handles_.reserve(expected_edges);
+        pool_.reserve(checked_capacity(len(), expected_edges));
+    }
 
     int add_vertex(V payload = V{}) {
         npre(vertex_handles_.len() < INT_MAX);
@@ -9356,6 +9397,14 @@ template <class W = int, class V = monostate> class ngraph_topology {
 
     int add(int from, int to, W weight = W{1}) {
         int id = add0(from, to, move(weight));
+        touch();
+        return id;
+    }
+    // Compatibility backends may require head insertion.  Public graph algorithms should
+    // use add(), whose order is append order; this hook preserves an older owner's exact
+    // adjacency order without duplicating the resource record or inventing a graph view.
+    int add_front(int from, int to, W weight = W{1}) {
+        int id = add0(from, to, move(weight), false);
         touch();
         return id;
     }
@@ -9393,29 +9442,18 @@ template <class W = int, class V = monostate> class ngraph_topology {
         return true;
     }
     void clear_edges() {
-        if (!arc_count_)
-            return;
-        for (int id = 0; id < arc_handles_.len(); ++id) {
-            int handle = arc_handles_[id];
-            if (!handle)
-                continue;
-            unlink_arc(handle);
-            pool_.erase(handle);
-            arc_handles_[id] = 0;
-        }
-        arc_count_ = 0;
-        touch();
+        if (release_edges(false))
+            touch();
+    }
+    void reset_edges() {
+        if (release_edges(true))
+            touch();
     }
     void clear() {
-        if (!len() && !arc_count_ && arc_handles_.empty())
+        bool changed = len() || arc_count_ || !arc_handles_.empty();
+        if (!changed)
             return;
-        for (int id = 0; id < arc_handles_.len(); ++id) {
-            int handle = arc_handles_[id];
-            if (!handle)
-                continue;
-            unlink_arc(handle);
-            pool_.erase(handle);
-        }
+        release_edges(true);
         for (int index = 0; index < vertex_handles_.len(); ++index)
             pool_.erase(vertex_handles_[index]);
         vertex_handles_.clear();
@@ -9486,76 +9524,48 @@ template <class W = int, class V = monostate> class ngraph_topology {
     auto arcs() const&& = delete;
 };
 
-// Owning forward-star graph.  Edge handles are representation details and may change
-// on rebuild; neighbor iteration is directed and permits parallel arcs.
+// Compatibility forward-star facade over the resource-backed topology.  The old backend
+// prepended each new arc to its source list; add_front() keeps that observable order while
+// the node records, weights and adjacency links now come from the shared resource layer.
+// `clear_edges()` deliberately resets the old dense edge-id namespace, unlike topology's
+// stable-id `clear_edges()`; this is the historical ngraph_forward contract.
 template <class W = int> class ngraph_forward {
-    int vertices_ = 0;
-    vector<int> head_, to_, next_;
-    vector<W> weight_;
-
-    static size_t checked_vertices(int vertices) {
-        npre(vertices >= 0);
-        return size_t(vertices);
-    }
-
-    template <bool Constant> struct adjacency_cursor {
-        using graph_type = conditional_t<Constant, const ngraph_forward, ngraph_forward>;
-        using weight_reference = conditional_t<Constant, const W&, W&>;
-        graph_type* graph;
-        int from, edge, index = 0;
-
-        bool ok() const { return edge != npos; }
-        nedge<weight_reference> val() const {
-            return {from, graph->to_[edge], edge, graph->weight_[edge]};
-        }
-        int idx() const { return index; }
-        void next() {
-            edge = graph->next_[edge];
-            ++index;
-        }
-    };
-
-    template <bool Constant> class adjacency_view {
-        using graph_type = conditional_t<Constant, const ngraph_forward, ngraph_forward>;
-        graph_type* graph_;
-        int vertex_;
-
-      public:
-        adjacency_view(graph_type* graph, int vertex) : graph_(graph), vertex_(vertex) {}
-        int len() const {
-            int result = 0;
-            for (int edge = graph_->head_[vertex_]; edge != npos; edge = graph_->next_[edge])
-                ++result;
-            return result;
-        }
-        bool empty() const { return graph_->head_[vertex_] == npos; }
-        auto enumerate() const {
-            return adjacency_cursor<Constant>{graph_, vertex_, graph_->head_[vertex_]};
-        }
-    };
+    using topology_type = ngraph_topology<W>;
+    topology_type topology_;
 
     template <bool Constant> struct arcs_cursor {
         using graph_type = conditional_t<Constant, const ngraph_forward, ngraph_forward>;
-        using weight_reference = conditional_t<Constant, const W&, W&>;
+        using adjacency_type = conditional_t<Constant, typename topology_type::const_view,
+                                             typename topology_type::view>;
+        using inner_cursor = nenumerator_t<adjacency_type>;
+
         graph_type* graph;
-        int from = 0, edge = npos, index = 0;
+        int vertex = 0, index = 0;
+        optional<inner_cursor> inner;
 
         explicit arcs_cursor(graph_type* graph) : graph(graph) { seek(); }
         void seek() {
-            while (from < graph->vertices_ && graph->head_[from] == npos)
-                ++from;
-            edge = from < graph->vertices_ ? graph->head_[from] : npos;
+            while (vertex < graph->len()) {
+                inner.emplace(nenumerate(graph->topology_.neighbors(vertex)));
+                if (inner->ok())
+                    return;
+                ++vertex;
+            }
+            inner.reset();
         }
-        bool ok() const { return edge != npos; }
-        nedge<weight_reference> val() const {
-            return {from, graph->to_[edge], edge, graph->weight_[edge]};
+        bool ok() const noexcept { return inner.has_value(); }
+        auto val() {
+            decltype(auto) raw = inner->val();
+            using weight_reference = decltype(nedge_weight(raw));
+            return nedge<weight_reference>{vertex, nedge_to(raw), raw.id, nedge_weight(raw)};
         }
-        int idx() const { return index; }
+        int idx() const noexcept { return index; }
         void next() {
-            edge = graph->next_[edge];
+            npre(ok());
+            inner->next();
             ++index;
-            if (edge == npos) {
-                ++from;
+            if (!inner->ok()) {
+                ++vertex;
                 seek();
             }
         }
@@ -9567,49 +9577,28 @@ template <class W = int> class ngraph_forward {
 
       public:
         explicit arcs_view(graph_type* graph) : graph_(graph) {}
-        int len() const { return graph_->edges(); }
-        bool empty() const { return graph_->edges() == 0; }
+        int len() const noexcept { return graph_->edges(); }
+        bool empty() const noexcept { return !graph_->edges(); }
         auto enumerate() const { return arcs_cursor<Constant>(graph_); }
     };
 
   public:
     using edge = nedge<W>;
-    using view = adjacency_view<false>;
-    using const_view = adjacency_view<true>;
+    using view = typename topology_type::view;
+    using const_view = typename topology_type::const_view;
 
     ngraph_forward() = default;
     explicit ngraph_forward(int vertices, int expected_edges = 0)
-        : vertices_(vertices), head_(checked_vertices(vertices), npos) {
-        reserve(expected_edges);
-    }
+        : topology_(vertices, expected_edges) {}
 
-    int len() const noexcept { return vertices_; }
-    int edges() const {
-        npre(to_.size() <= size_t(INT_MAX));
-        return int(to_.size());
-    }
-    bool empty() const noexcept { return vertices_ == 0; }
-    void reserve(int expected_edges) {
-        npre(expected_edges >= 0);
-        to_.reserve(size_t(expected_edges));
-        next_.reserve(size_t(expected_edges));
-        weight_.reserve(size_t(expected_edges));
-    }
-    void clear_edges() {
-        fill(head_.begin(), head_.end(), npos);
-        to_.clear();
-        next_.clear();
-        weight_.clear();
-    }
+    int len() const noexcept { return topology_.len(); }
+    int edges() const noexcept { return topology_.edges(); }
+    bool empty() const noexcept { return topology_.empty(); }
+    void reserve(int expected_edges) { topology_.reserve(expected_edges); }
+    void clear_edges() { topology_.reset_edges(); }
+
     int add(int from, int to, W weight = W{1}) {
-        npre(0 <= from && from < vertices_ && 0 <= to && to < vertices_);
-        npre(to_.size() < size_t(INT_MAX));
-        int id = edges();
-        to_.push_back(to);
-        next_.push_back(head_[from]);
-        weight_.push_back(move(weight));
-        head_[from] = id;
-        return id;
+        return topology_.add_front(from, to, move(weight));
     }
     pair<int, int> add2(int a, int b, W weight = W{1}) {
         int forward = add(a, b, weight);
@@ -9617,14 +9606,8 @@ template <class W = int> class ngraph_forward {
         return {forward, backward};
     }
 
-    view neighbors(int vertex) {
-        npre(0 <= vertex && vertex < vertices_);
-        return {this, vertex};
-    }
-    const_view neighbors(int vertex) const {
-        npre(0 <= vertex && vertex < vertices_);
-        return {this, vertex};
-    }
+    view neighbors(int vertex) { return topology_.neighbors(vertex); }
+    const_view neighbors(int vertex) const { return topology_.neighbors(vertex); }
     view operator[](int vertex) & { return neighbors(vertex); }
     const_view operator[](int vertex) const& { return neighbors(vertex); }
     view operator[](int) && = delete;
@@ -9636,35 +9619,22 @@ template <class W = int> class ngraph_forward {
 
     int degree(int vertex) const { return neighbors(vertex).len(); }
     int find(int from, int to, int fallback = npos) const {
-        npre(0 <= from && from < vertices_ && 0 <= to && to < vertices_);
-        nfor(edge, neighbors(from))
-            if (edge.to == to)
-                return edge.id;
-        return fallback;
+        return topology_.find(from, to, fallback);
     }
-    bool has(int from, int to) const { return find(from, to) != npos; }
-    W* weight(int edge) { return 0 <= edge && edge < edges() ? addressof(weight_[edge]) : nullptr; }
-    const W* weight(int edge) const {
-        return 0 <= edge && edge < edges() ? addressof(weight_[edge]) : nullptr;
-    }
-    W weight(int edge, W fallback) const {
-        return 0 <= edge && edge < edges() ? weight_[edge] : move(fallback);
-    }
-    bool set(int edge, W weight) {
-        if (edge < 0 || edge >= edges())
-            return false;
-        weight_[edge] = move(weight);
-        return true;
-    }
+    bool has(int from, int to) const { return topology_.has(from, to); }
+    W* weight(int edge) { return topology_.weight(edge); }
+    const W* weight(int edge) const { return topology_.weight(edge); }
+    W weight(int edge, W fallback) const { return topology_.weight(edge, move(fallback)); }
+    bool set(int edge, W weight) { return topology_.set(edge, move(weight)); }
 
-    auto vertices() const { return nrange(vertices_); }
+    auto vertices() const { return topology_.vertices(); }
     auto arcs() & { return arcs_view<false>(this); }
     auto arcs() const& { return arcs_view<true>(this); }
     auto arcs() && = delete;
     auto arcs() const&& = delete;
 
     ngraph_forward reverse() const {
-        ngraph_forward result(vertices_, edges());
+        ngraph_forward result(len(), edges());
         nfor(edge, arcs())
             result.add(edge.to, edge.from, edge.w);
         return result;
