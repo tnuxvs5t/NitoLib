@@ -17,6 +17,7 @@
 31_lazy.hpp
 32_dsu_queue.hpp
 33_persistent.hpp
+34_dynamic.hpp
 34_wavelet.hpp
 35_offline.hpp
 36_classic.hpp

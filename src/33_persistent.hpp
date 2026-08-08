@@ -10,10 +10,18 @@ class npersistent_seg {
     int size_ = 0, base_ = 1;
     vector<node> nodes_;
     vector<int> roots_;
+    uint64_t epoch_ = 1;
+
+    friend class nseg_node<npersistent_seg>;
 
     static int checked_size(int n) {
         npre(0 <= n && n <= (1 << 30));
         return n;
+    }
+
+    void touch() noexcept {
+        if (!++epoch_)
+            ++epoch_;
     }
 
     const T& aggregate(int node_index) const { return nodes_[node_index].aggregate; }
@@ -60,9 +68,48 @@ class npersistent_seg {
     }
 
   public:
+    using aggregate_type = T;
+    using node_view = nseg_node<npersistent_seg>;
+
     explicit npersistent_seg(int n = 0, O operation = {})
         : operation_(move(operation)), size_(checked_size(n)), base_(nbitceil(size_)),
           nodes_{{operation_.id(), 0, 0}}, roots_{0} {}
+
+    npersistent_seg(const npersistent_seg& other)
+        : operation_(other.operation_), size_(other.size_), base_(other.base_), nodes_(other.nodes_),
+          roots_(other.roots_) {}
+    npersistent_seg(npersistent_seg&& other) noexcept(
+        is_nothrow_move_constructible_v<O> && is_nothrow_move_constructible_v<vector<node>> &&
+        is_nothrow_move_constructible_v<vector<int>>)
+        : operation_(move(other.operation_)), size_(exchange(other.size_, 0)),
+          base_(exchange(other.base_, 1)), nodes_(move(other.nodes_)), roots_(move(other.roots_)) {
+        other.touch();
+    }
+    npersistent_seg& operator=(const npersistent_seg& other) {
+        if (this != addressof(other)) {
+            operation_ = other.operation_;
+            size_ = other.size_;
+            base_ = other.base_;
+            nodes_ = other.nodes_;
+            roots_ = other.roots_;
+            touch();
+        }
+        return *this;
+    }
+    npersistent_seg& operator=(npersistent_seg&& other) noexcept(
+        is_nothrow_move_assignable_v<O> && is_nothrow_move_assignable_v<vector<node>> &&
+        is_nothrow_move_assignable_v<vector<int>>) {
+        if (this != addressof(other)) {
+            operation_ = move(other.operation_);
+            size_ = exchange(other.size_, 0);
+            base_ = exchange(other.base_, 1);
+            nodes_ = move(other.nodes_);
+            roots_ = move(other.roots_);
+            touch();
+            other.touch();
+        }
+        return *this;
+    }
 
     template <nindexed V>
     explicit npersistent_seg(const V& source, O operation = {})
@@ -113,4 +160,19 @@ class npersistent_seg {
         npre(0 <= index && index < size_);
         return fold(version, index, index + 1);
     }
+
+    node_view root(int version) const {
+        npre(0 <= version && version < versions());
+        return node_view(this, roots_[size_t(version)], epoch_, 0, base_);
+    }
+    node_view root() const { return root(0); }
+
+  private:
+    uint64_t nseg_epoch() const noexcept { return epoch_; }
+    bool nseg_alive(int handle) const noexcept {
+        return 0 < handle && size_t(handle) < nodes_.size();
+    }
+    T nseg_aggregate(int handle) const { return handle ? nodes_[size_t(handle)].aggregate : operation_.id(); }
+    int nseg_left(int handle) const noexcept { return handle ? nodes_[size_t(handle)].left : 0; }
+    int nseg_right(int handle) const noexcept { return handle ? nodes_[size_t(handle)].right : 0; }
 };

@@ -1419,10 +1419,24 @@ constexpr auto nwindows(A&& owner, int width, int step = 1) {
 // ---- 05_ast.hpp ----
 enum class nbranch : unsigned char { left, take, right };
 
+namespace ni {
+template <class S, class = void> struct nnode_tag_traits {
+    using type = monostate;
+    static constexpr bool available = false;
+};
+
+template <class S>
+struct nnode_tag_traits<S, void_t<typename S::tag_type>> {
+    using type = typename S::tag_type;
+    static constexpr bool available = true;
+};
+} // namespace ni
+
 template <class S> class nnode {
   public:
     using value_type = typename S::value_type;
     using info_type = typename S::info_type;
+    using tag_type = typename ni::nnode_tag_traits<S>::type;
 
   private:
     const S* owner_ = nullptr;
@@ -1465,6 +1479,16 @@ template <class S> class nnode {
         return {owner_, owner_->nnode_right(handle_), epoch_};
     }
     int handle() const noexcept { return handle_; }
+
+    template <class Q = S>
+        requires requires(const Q& owner, int handle) {
+            typename Q::tag_type;
+            { owner.nnode_tag(handle) } -> convertible_to<typename Q::tag_type>;
+        }
+    typename Q::tag_type tag() const {
+        npre(current());
+        return owner_->nnode_tag(handle_);
+    }
 };
 
 template <class S>
@@ -1503,6 +1527,33 @@ template <class T> struct nempty_augment {
     constexpr info_type one(const T&, int) const { return {}; }
     constexpr info_type op(info_type, info_type) const { return {}; }
 };
+
+// Default no-op action used by AST containers.  A tree can opt into lazy tags
+// by supplying an action with the same four operations and a `tag_type` alias.
+template <class T, class I> struct nempty_tag {
+    using tag_type = monostate;
+    constexpr tag_type tag_id() const { return {}; }
+    constexpr tag_type compose(const tag_type&, const tag_type&) const { return {}; }
+    constexpr T apply_value(T value, const tag_type&, int) const { return value; }
+    constexpr I apply_info(I info, const tag_type&, int) const { return info; }
+};
+
+template <class L, class T, class I>
+inline constexpr bool nnode_action_laws = false;
+
+template <class T, class I>
+inline constexpr bool nnode_action_laws<nempty_tag<T, I>, T, I> = true;
+
+template <class L, class T, class I>
+concept nnode_action = copyable<typename L::tag_type> &&
+                       nnode_action_laws<remove_cvref_t<L>, T, I> &&
+                       requires(const L& action, T value, I info,
+                                const typename L::tag_type& tag) {
+                           { action.tag_id() } -> convertible_to<typename L::tag_type>;
+                           { action.compose(tag, tag) } -> convertible_to<typename L::tag_type>;
+                           { action.apply_value(move(value), tag, 1) } -> convertible_to<T>;
+                           { action.apply_info(move(info), tag, 1) } -> convertible_to<I>;
+                       };
 
 template <class S>
 concept naugmented_tree = nnode_tree<S> && requires(const S& tree) {
@@ -1546,6 +1597,134 @@ template <naugmented_tree S, class P> nnode<S> nlast_suffix(const S& tree, P&& p
         node = node.left();
     }
     return node;
+}
+
+// Interval-tree node view.  The view stores the interval bounds because an
+// open/dynamic tree does not have to allocate absent children.  An absent child
+// contributes the operation identity; a lazy view additionally applies any
+// carried ancestor tag without materializing that child.
+template <class S> class nseg_node {
+  public:
+    using aggregate_type = typename S::aggregate_type;
+    using tag_type = typename ni::nnode_tag_traits<S>::type;
+
+  private:
+    const S* owner_ = nullptr;
+    int handle_ = 0;
+    uint64_t epoch_ = 0;
+    long long left_ = 0, right_ = 0;
+    optional<tag_type> carry_;
+
+    constexpr nseg_node(const S* owner, int handle, uint64_t epoch, long long left,
+                        long long right, optional<tag_type> carry = nullopt)
+        : owner_(owner), handle_(handle), epoch_(epoch), left_(left), right_(right),
+          carry_(move(carry)) {}
+    friend S;
+
+    static constexpr bool has_lazy_view = requires(const S& owner, int handle,
+                                                   aggregate_type aggregate,
+                                                   const tag_type& tag, int length) {
+        { owner.nseg_pending(handle) } -> convertible_to<bool>;
+        { owner.nseg_tag(handle) } -> convertible_to<tag_type>;
+        { owner.nseg_compose(tag, tag) } -> convertible_to<tag_type>;
+        { owner.nseg_apply(move(aggregate), tag, length) } -> convertible_to<aggregate_type>;
+    };
+
+    optional<tag_type> child_carry() const {
+        optional<tag_type> result = carry_;
+        if constexpr (has_lazy_view) {
+            if (owner_->nseg_pending(handle_)) {
+                tag_type local = owner_->nseg_tag(handle_);
+                result = result ? optional<tag_type>(owner_->nseg_compose(*result, local))
+                                : optional<tag_type>(move(local));
+            }
+        }
+        return result;
+    }
+
+  public:
+    constexpr nseg_node() = default;
+
+    bool current() const { return owner_ && epoch_ == owner_->nseg_epoch(); }
+    bool ok() const { return current() && handle_ && owner_->nseg_alive(handle_); }
+    explicit operator bool() const { return ok(); }
+
+    aggregate_type aggregate() const {
+        npre(current());
+        aggregate_type result = owner_->nseg_aggregate(handle_);
+        if constexpr (has_lazy_view) {
+            if (carry_)
+                result = owner_->nseg_apply(move(result), *carry_, ni::nchecked_int(width()));
+        }
+        return result;
+    }
+    aggregate_type info() const { return aggregate(); }
+    long long left_bound() const {
+        npre(current());
+        return left_;
+    }
+    long long right_bound() const {
+        npre(current());
+        return right_;
+    }
+    long long width() const {
+        npre(current());
+        npre(left_ <= right_);
+        __int128_t result = __int128_t(right_) - left_;
+        npre(result <= __int128_t(LLONG_MAX));
+        return static_cast<long long>(result);
+    }
+    bool leaf() const {
+        npre(current());
+        return width() == 1;
+    }
+    nseg_node left() const {
+        npre(current());
+        npre(width() > 1);
+        long long middle = left_ + (__int128_t(right_) - left_) / 2;
+        return {owner_, owner_->nseg_left(handle_), epoch_, left_, middle, child_carry()};
+    }
+    nseg_node right() const {
+        npre(current());
+        npre(width() > 1);
+        long long middle = left_ + (__int128_t(right_) - left_) / 2;
+        return {owner_, owner_->nseg_right(handle_), epoch_, middle, right_, child_carry()};
+    }
+    int handle() const noexcept { return handle_; }
+
+    template <class Q = S>
+        requires requires(const Q& owner, int handle) {
+            typename Q::tag_type;
+            { owner.nseg_tag(handle) } -> convertible_to<typename Q::tag_type>;
+        }
+    typename Q::tag_type tag() const {
+        npre(current());
+        return owner_->nseg_tag(handle_);
+    }
+};
+
+template <class S>
+concept nseg_tree = requires(const S& tree) {
+    { tree.root() } -> same_as<nseg_node<S>>;
+};
+
+template <class S, class F> nseg_node<S> nseg_walk(nseg_node<S> node, F&& decide) {
+    while (node) {
+        nbranch branch = invoke(decide, node);
+        if (branch == nbranch::left)
+            node = node.left();
+        else if (branch == nbranch::right)
+            node = node.right();
+        else {
+            npre(branch == nbranch::take);
+            return node;
+        }
+    }
+    return node;
+}
+
+template <nseg_tree S, class F> nseg_node<S> nseg_walk(const S& tree, F&& decide) {
+    return nseg_walk(tree.root(), forward<F>(decide));
 }
 
 // ---- 06_func.hpp ----
@@ -3584,24 +3763,29 @@ template <class S> bool nordered_equal(const S& left, const S& right) {
 }
 } // namespace ni
 
-template <class T, class C = nless<T>, bool Multi = false, class A = nempty_augment<T>>
-    requires naugment<A, T>
+template <class T, class C = nless<T>, bool Multi = false, class A = nempty_augment<T>,
+          class L = nempty_tag<T, typename A::info_type>>
+    requires naugment<A, T> && nnode_action<L, T, typename A::info_type>
 class nset_fhq {
     struct node {
         T value;
         uint64_t priority;
         int left = 0, right = 0, size = 1, count = 1;
         typename A::info_type aggregate;
+        typename L::tag_type lazy;
+        bool pending = false;
 
-        node(T value, uint64_t priority, int count, typename A::info_type aggregate)
+        node(T value, uint64_t priority, int count, typename A::info_type aggregate,
+             typename L::tag_type lazy)
             : value(move(value)), priority(priority), size(count), count(count),
-              aggregate(move(aggregate)) {}
+              aggregate(move(aggregate)), lazy(move(lazy)) {}
     };
 
-    ni::nslot_pool<node> pool_;
+    mutable ni::nslot_pool<node> pool_;
     int root_ = 0;
     [[no_unique_address]] C compare_{};
     [[no_unique_address]] A augment_{};
+    [[no_unique_address]] L action_{};
     mutable uint64_t epoch_ = 1;
 
     void touch() const noexcept {
@@ -3620,11 +3804,35 @@ class nset_fhq {
             augment_.op(nnode_info(current.left), augment_.one(current.value, current.count)),
             nnode_info(current.right));
     }
+    void apply_tag(int handle, const typename L::tag_type& tag) const {
+        if (!handle)
+            return;
+        node& current = pool_[handle];
+        current.value = action_.apply_value(move(current.value), tag, current.count);
+        current.aggregate = action_.apply_info(move(current.aggregate), tag, current.size);
+        if (current.pending)
+            current.lazy = action_.compose(tag, current.lazy);
+        else {
+            current.lazy = tag;
+            current.pending = true;
+        }
+    }
+    void push(int handle) const {
+        if (!handle || !pool_[handle].pending)
+            return;
+        node& current = pool_[handle];
+        apply_tag(current.left, current.lazy);
+        apply_tag(current.right, current.lazy);
+        current.lazy = action_.tag_id();
+        current.pending = false;
+    }
     int merge(int left, int right) {
         if (!left)
             return right;
         if (!right)
             return left;
+        push(left);
+        push(right);
         if (pool_[left].priority >= pool_[right].priority) {
             pool_[left].right = merge(pool_[left].right, right);
             pull(left);
@@ -3639,6 +3847,7 @@ class nset_fhq {
             left = right = 0;
             return;
         }
+        push(handle);
         if (invoke(compare_, pool_[handle].value, value)) {
             left = handle;
             split(pool_[handle].right, value, pool_[left].right, right);
@@ -3652,6 +3861,7 @@ class nset_fhq {
     int add_existing(int handle, const T& value, int count) {
         if (!handle)
             return -1;
+        push(handle);
         node& current = pool_[handle];
         if (equivalent(value, current.value)) {
             if constexpr (Multi) {
@@ -3671,6 +3881,7 @@ class nset_fhq {
     int erase_at(int& handle, const T& value, int count, bool all) {
         if (!handle)
             return 0;
+        push(handle);
         node& current = pool_[handle];
         if (equivalent(value, current.value)) {
             if constexpr (Multi) {
@@ -3701,13 +3912,24 @@ class nset_fhq {
     typename A::info_type nnode_info(int handle) const {
         return handle ? pool_[handle].aggregate : augment_.id();
     }
-    int nnode_left(int handle) const { return handle ? pool_[handle].left : 0; }
-    int nnode_right(int handle) const { return handle ? pool_[handle].right : 0; }
+    int nnode_left(int handle) const {
+        push(handle);
+        return handle ? pool_[handle].left : 0;
+    }
+    int nnode_right(int handle) const {
+        push(handle);
+        return handle ? pool_[handle].right : 0;
+    }
+    typename L::tag_type nnode_tag(int handle) const {
+        return handle && pool_[handle].pending ? pool_[handle].lazy : action_.tag_id();
+    }
 
   public:
     using value_type = T;
     using augment_type = A;
     using info_type = typename A::info_type;
+    using tag_action = L;
+    using tag_type = typename L::tag_type;
     using node_view = nnode<nset_fhq>;
 
     nset_fhq() = default;
@@ -3715,18 +3937,23 @@ class nset_fhq {
     explicit nset_fhq(A augment)
         requires(!same_as<C, A>)
         : augment_(move(augment)) {}
-    nset_fhq(C compare, A augment) : compare_(move(compare)), augment_(move(augment)) {}
+    explicit nset_fhq(L action)
+        requires(!same_as<C, L> && !same_as<A, L>)
+        : action_(move(action)) {}
+    nset_fhq(C compare, A augment, L action = {})
+        : compare_(move(compare)), augment_(move(augment)), action_(move(action)) {}
     nset_fhq(initializer_list<T> values) {
         for (const T& value : values)
             ins(value);
     }
     nset_fhq(const nset_fhq& other)
-        : pool_(other.pool_), root_(other.root_), compare_(other.compare_), augment_(other.augment_) {}
+        : pool_(other.pool_), root_(other.root_), compare_(other.compare_), augment_(other.augment_),
+          action_(other.action_) {}
     nset_fhq(nset_fhq&& other) noexcept(
         is_nothrow_move_constructible_v<ni::nslot_pool<node>> && is_nothrow_move_constructible_v<C> &&
-        is_nothrow_move_constructible_v<A>)
+        is_nothrow_move_constructible_v<A> && is_nothrow_move_constructible_v<L>)
         : pool_(move(other.pool_)), root_(exchange(other.root_, 0)), compare_(move(other.compare_)),
-          augment_(move(other.augment_)) {
+          augment_(move(other.augment_)), action_(move(other.action_)) {
         other.touch();
     }
     nset_fhq& operator=(const nset_fhq& other) {
@@ -3735,18 +3962,20 @@ class nset_fhq {
             root_ = other.root_;
             compare_ = other.compare_;
             augment_ = other.augment_;
+            action_ = other.action_;
             touch();
         }
         return *this;
     }
     nset_fhq& operator=(nset_fhq&& other) noexcept(
         is_nothrow_move_assignable_v<ni::nslot_pool<node>> && is_nothrow_move_assignable_v<C> &&
-        is_nothrow_move_assignable_v<A>) {
+        is_nothrow_move_assignable_v<A> && is_nothrow_move_assignable_v<L>) {
         if (this != addressof(other)) {
             pool_ = move(other.pool_);
             root_ = exchange(other.root_, 0);
             compare_ = move(other.compare_);
             augment_ = move(other.augment_);
+            action_ = move(other.action_);
             touch();
             other.touch();
         }
@@ -3759,6 +3988,7 @@ class nset_fhq {
         return !invoke(compare_, a, b) && !invoke(compare_, b, a);
     }
     const A& augment() const noexcept { return augment_; }
+    const L& action() const noexcept { return action_; }
     node_view root() const { return node_view(this, root_, epoch_); }
     template <class F> node_view walk(F&& decide) const {
         return nwalk(*this, forward<F>(decide));
@@ -3776,6 +4006,38 @@ class nset_fhq {
             touch();
         pool_.clear();
         root_ = 0;
+    }
+
+    // Apply a lazy action to the whole tree or to a node selected through the
+    // read-only AST view.  The action must preserve the comparator order; this
+    // is a semantic precondition because a general value transform can destroy
+    // the search-tree invariant.
+    void apply(const typename L::tag_type& tag) {
+        if (root_) {
+            apply_tag(root_, tag);
+            touch();
+        }
+    }
+    void apply(const node_view& node, const typename L::tag_type& tag) {
+        npre(node.current() && node.ok());
+        int target = node.handle();
+        vector<int> ancestors;
+        for (int handle = root_; handle != target;) {
+            npre(handle);
+            push(handle);
+            ancestors.push_back(handle);
+            if (equivalent(pool_[target].value, pool_[handle].value)) {
+                npre(false);
+            } else {
+                handle = invoke(compare_, pool_[target].value, pool_[handle].value)
+                             ? pool_[handle].left
+                             : pool_[handle].right;
+            }
+        }
+        apply_tag(target, tag);
+        for (auto iterator = ancestors.rbegin(); iterator != ancestors.rend(); ++iterator)
+            pull(*iterator);
+        touch();
     }
 
     int ins(const T& value, int count = 1) {
@@ -3797,7 +4059,7 @@ class nset_fhq {
         split(root_, value, left, right);
         int stored_count = Multi ? count : 1;
         auto aggregate = augment_.one(value, stored_count);
-        int fresh = pool_.make(move(value), nrng_global(), stored_count, move(aggregate));
+        int fresh = pool_.make(move(value), nrng_global(), stored_count, move(aggregate), action_.tag_id());
         root_ = merge(merge(left, fresh), right);
         touch();
         return stored_count;
@@ -3817,6 +4079,7 @@ class nset_fhq {
     }
     int findi(const T& value) const {
         for (int handle = root_; handle;) {
+            push(handle);
             const node& current = pool_[handle];
             if (equivalent(value, current.value))
                 return handle;
@@ -3836,6 +4099,7 @@ class nset_fhq {
     int rank(const T& value) const {
         int result = 0;
         for (int handle = root_; handle;) {
+            push(handle);
             const node& current = pool_[handle];
             if (invoke(compare_, current.value, value)) {
                 result += size_of(current.left) + current.count;
@@ -3850,6 +4114,7 @@ class nset_fhq {
         if (index < 0 || index >= len())
             return {};
         for (int handle = root_; handle;) {
+            push(handle);
             const node& current = pool_[handle];
             int left_size = size_of(current.left);
             if (index < left_size)
@@ -3871,6 +4136,7 @@ class nset_fhq {
     nmaybe<T> lower(const T& value) const {
         int result = 0;
         for (int handle = root_; handle;) {
+            push(handle);
             const node& current = pool_[handle];
             if (!invoke(compare_, current.value, value)) {
                 result = handle;
@@ -3884,6 +4150,7 @@ class nset_fhq {
     nmaybe<T> upper(const T& value) const {
         int result = 0;
         for (int handle = root_; handle;) {
+            push(handle);
             const node& current = pool_[handle];
             if (invoke(compare_, value, current.value)) {
                 result = handle;
@@ -3915,6 +4182,7 @@ class nset_fhq {
         explicit cursor(const nset_fhq* owner) : owner(owner) { descend(owner->root_); }
         void descend(int handle) {
             while (handle) {
+                owner->push(handle);
                 stack.push_back(handle);
                 handle = owner->pool_[handle].left;
             }
@@ -3929,6 +4197,7 @@ class nset_fhq {
                 return;
             repetition = 0;
             stack.pop_back();
+            owner->push(handle);
             descend(owner->pool_[handle].right);
         }
     };
@@ -4571,11 +4840,13 @@ template <class T, class C = nless<T>> class nset_stl {
     }
 };
 
-template <class T, class C = nless<T>, class A = nempty_augment<T>>
-using nset = nset_fhq<T, C, false, A>;
+template <class T, class C = nless<T>, class A = nempty_augment<T>,
+          class L = nempty_tag<T, typename A::info_type>>
+using nset = nset_fhq<T, C, false, A, L>;
 
-template <class T, class C = nless<T>, class A = nempty_augment<T>>
-using nbag = nset_fhq<T, C, true, A>;
+template <class T, class C = nless<T>, class A = nempty_augment<T>,
+          class L = nempty_tag<T, typename A::info_type>>
+using nbag = nset_fhq<T, C, true, A, L>;
 
 // ---- 24_map.hpp ----
 template <class K, class V, class H = nhash<K>, class E = equal_to<K>> class nmap_hash {
@@ -5914,17 +6185,59 @@ class nseg {
     [[no_unique_address]] O operation_;
     int size_ = 0, base_ = 1;
     vector<T> tree_;
+    uint64_t epoch_ = 1;
+
+    friend class nseg_node<nseg>;
 
     static int checked_size(int n) {
         npre(0 <= n && n <= (1 << 30));
         return n;
     }
 
+    void touch() noexcept {
+        if (!++epoch_)
+            ++epoch_;
+    }
+
   public:
+    using aggregate_type = T;
+    using node_view = nseg_node<nseg>;
+
     nseg() : tree_(2, operation_.id()) {}
     explicit nseg(int n, O operation = {})
         : operation_(move(operation)), size_(checked_size(n)), base_(nbitceil(size_)),
           tree_(size_t(2) * base_, operation_.id()) {}
+
+    nseg(const nseg& other)
+        : operation_(other.operation_), size_(other.size_), base_(other.base_), tree_(other.tree_) {}
+    nseg(nseg&& other) noexcept(is_nothrow_move_constructible_v<O> &&
+                                is_nothrow_move_constructible_v<vector<T>>)
+        : operation_(move(other.operation_)), size_(exchange(other.size_, 0)),
+          base_(exchange(other.base_, 1)), tree_(move(other.tree_)) {
+        other.touch();
+    }
+    nseg& operator=(const nseg& other) {
+        if (this != addressof(other)) {
+            operation_ = other.operation_;
+            size_ = other.size_;
+            base_ = other.base_;
+            tree_ = other.tree_;
+            touch();
+        }
+        return *this;
+    }
+    nseg& operator=(nseg&& other) noexcept(is_nothrow_move_assignable_v<O> &&
+                                            is_nothrow_move_assignable_v<vector<T>>) {
+        if (this != addressof(other)) {
+            operation_ = move(other.operation_);
+            size_ = exchange(other.size_, 0);
+            base_ = exchange(other.base_, 1);
+            tree_ = move(other.tree_);
+            touch();
+            other.touch();
+        }
+        return *this;
+    }
 
     template <nindexed A>
     explicit nseg(const A& source, O operation = {}) : nseg(nlen(source), move(operation)) {
@@ -5938,7 +6251,10 @@ class nseg {
     bool empty() const noexcept { return size_ == 0; }
     const O& operation() const noexcept { return operation_; }
 
-    void clear() { fill(tree_.begin(), tree_.end(), operation_.id()); }
+    void clear() {
+        fill(tree_.begin(), tree_.end(), operation_.id());
+        touch();
+    }
 
     void set(int index, T value) {
         npre(0 <= index && index < size_);
@@ -5946,6 +6262,7 @@ class nseg {
         tree_[node] = move(value);
         while (node >>= 1)
             tree_[node] = operation_(tree_[node << 1], tree_[node << 1 | 1]);
+        touch();
     }
 
     T get(int index) const {
@@ -5967,6 +6284,25 @@ class nseg {
     }
 
     T fold() const { return size_ ? tree_[1] : operation_.id(); }
+
+    node_view root() const { return node_view(this, size_ ? 1 : 0, epoch_, 0, base_); }
+
+  private:
+    uint64_t nseg_epoch() const noexcept { return epoch_; }
+    bool nseg_alive(int handle) const noexcept {
+        return 0 < handle && size_t(handle) < tree_.size();
+    }
+    T nseg_aggregate(int handle) const {
+        return handle ? tree_[size_t(handle)] : operation_.id();
+    }
+    int nseg_left(int handle) const noexcept {
+        long long child = 2LL * handle;
+        return handle && size_t(child) < tree_.size() ? int(child) : 0;
+    }
+    int nseg_right(int handle) const noexcept {
+        long long child = 2LL * handle + 1;
+        return handle && size_t(child) < tree_.size() ? int(child) : 0;
+    }
 };
 
 template <class T, class O = nadd<T>> using nseg_iter = nseg<T, O>;
@@ -5981,10 +6317,18 @@ class nlazyseg {
     vector<S> tree_;
     vector<F> lazy_;
     vector<unsigned char> pending_;
+    uint64_t epoch_ = 1;
+
+    friend class nseg_node<nlazyseg>;
 
     static int checked_size(int n) {
         npre(0 <= n && n <= (1 << 30));
         return n;
+    }
+
+    void touch() noexcept {
+        if (!++epoch_)
+            ++epoch_;
     }
 
     void put(int node, int length, const F& tag) {
@@ -6023,17 +6367,24 @@ class nlazyseg {
         pull(node);
     }
 
-    S fold0(int node, int left, int right, int query_left, int query_right) {
-        if (query_left <= left && right <= query_right)
-            return tree_[node];
-        push(node, left, right);
+    S fold0(int node, int left, int right, int query_left, int query_right, F carry,
+            bool carried) const {
+        if (query_left <= left && right <= query_right) {
+            S result = tree_[node];
+            return carried ? action_.apply(move(result), carry, right - left) : result;
+        }
+        if (pending_[node]) {
+            carry = carried ? action_.compose(carry, lazy_[node]) : lazy_[node];
+            carried = true;
+        }
         int middle = left + (right - left) / 2;
         if (query_right <= middle)
-            return fold0(node << 1, left, middle, query_left, query_right);
+            return fold0(node << 1, left, middle, query_left, query_right, move(carry), carried);
         if (middle <= query_left)
-            return fold0(node << 1 | 1, middle, right, query_left, query_right);
-        return operation_(fold0(node << 1, left, middle, query_left, query_right),
-                          fold0(node << 1 | 1, middle, right, query_left, query_right));
+            return fold0(node << 1 | 1, middle, right, query_left, query_right, move(carry), carried);
+        return operation_(fold0(node << 1, left, middle, query_left, query_right, carry, carried),
+                          fold0(node << 1 | 1, middle, right, query_left, query_right, move(carry),
+                                carried));
     }
 
     void set0(int node, int left, int right, int index, S value) {
@@ -6053,6 +6404,10 @@ class nlazyseg {
     }
 
   public:
+    using aggregate_type = S;
+    using tag_type = F;
+    using node_view = nseg_node<nlazyseg>;
+
     nlazyseg()
         : tree_(2, operation_.id()), lazy_(2, action_.tag_id()), pending_(2, false) {}
 
@@ -6060,6 +6415,49 @@ class nlazyseg {
         : operation_(move(operation)), action_(move(action)), size_(checked_size(n)), base_(nbitceil(size_)),
           tree_(size_t(2) * base_, operation_.id()), lazy_(size_t(2) * base_, action_.tag_id()),
           pending_(size_t(2) * base_, false) {}
+
+    nlazyseg(const nlazyseg& other)
+        : operation_(other.operation_), action_(other.action_), size_(other.size_), base_(other.base_),
+          tree_(other.tree_), lazy_(other.lazy_), pending_(other.pending_) {}
+    nlazyseg(nlazyseg&& other) noexcept(
+        is_nothrow_move_constructible_v<M> && is_nothrow_move_constructible_v<A> &&
+        is_nothrow_move_constructible_v<vector<S>> && is_nothrow_move_constructible_v<vector<F>> &&
+        is_nothrow_move_constructible_v<vector<unsigned char>>)
+        : operation_(move(other.operation_)), action_(move(other.action_)),
+          size_(exchange(other.size_, 0)), base_(exchange(other.base_, 1)), tree_(move(other.tree_)),
+          lazy_(move(other.lazy_)), pending_(move(other.pending_)) {
+        other.touch();
+    }
+    nlazyseg& operator=(const nlazyseg& other) {
+        if (this != addressof(other)) {
+            operation_ = other.operation_;
+            action_ = other.action_;
+            size_ = other.size_;
+            base_ = other.base_;
+            tree_ = other.tree_;
+            lazy_ = other.lazy_;
+            pending_ = other.pending_;
+            touch();
+        }
+        return *this;
+    }
+    nlazyseg& operator=(nlazyseg&& other) noexcept(
+        is_nothrow_move_assignable_v<M> && is_nothrow_move_assignable_v<A> &&
+        is_nothrow_move_assignable_v<vector<S>> && is_nothrow_move_assignable_v<vector<F>> &&
+        is_nothrow_move_assignable_v<vector<unsigned char>>) {
+        if (this != addressof(other)) {
+            operation_ = move(other.operation_);
+            action_ = move(other.action_);
+            size_ = exchange(other.size_, 0);
+            base_ = exchange(other.base_, 1);
+            tree_ = move(other.tree_);
+            lazy_ = move(other.lazy_);
+            pending_ = move(other.pending_);
+            touch();
+            other.touch();
+        }
+        return *this;
+    }
 
     template <nindexed V>
     explicit nlazyseg(const V& source, M operation = {}, A action = {})
@@ -6079,27 +6477,58 @@ class nlazyseg {
         fill(tree_.begin(), tree_.end(), operation_.id());
         fill(lazy_.begin(), lazy_.end(), action_.tag_id());
         fill(pending_.begin(), pending_.end(), false);
+        touch();
     }
 
     void apply(int left, int right, const F& tag) {
         npre(0 <= left && left <= right && right <= size_);
-        if (left < right)
+        if (left < right) {
             apply0(1, 0, base_, left, right, tag);
+            touch();
+        }
     }
 
-    S fold(int left, int right) {
+    S fold(int left, int right) const {
         npre(0 <= left && left <= right && right <= size_);
-        return left == right ? operation_.id() : fold0(1, 0, base_, left, right);
+        return left == right
+                   ? operation_.id()
+                   : fold0(1, 0, base_, left, right, action_.tag_id(), false);
     }
     S fold() const { return size_ ? tree_[1] : operation_.id(); }
 
     void set(int index, S value) {
         npre(0 <= index && index < size_);
         set0(1, 0, base_, index, move(value));
+        touch();
     }
-    S get(int index) {
+    S get(int index) const {
         npre(0 <= index && index < size_);
         return fold(index, index + 1);
+    }
+
+    node_view root() const { return node_view(this, size_ ? 1 : 0, epoch_, 0, base_); }
+
+  private:
+    uint64_t nseg_epoch() const noexcept { return epoch_; }
+    bool nseg_alive(int handle) const noexcept {
+        return 0 < handle && size_t(handle) < tree_.size();
+    }
+    S nseg_aggregate(int handle) const { return handle ? tree_[size_t(handle)] : operation_.id(); }
+    int nseg_left(int handle) const noexcept {
+        return handle && size_t(2LL * handle) < tree_.size() ? 2 * handle : 0;
+    }
+    int nseg_right(int handle) const noexcept {
+        return handle && size_t(2LL * handle + 1) < tree_.size() ? 2 * handle + 1 : 0;
+    }
+    F nseg_tag(int handle) const {
+        return handle && pending_[size_t(handle)] ? lazy_[size_t(handle)] : action_.tag_id();
+    }
+    bool nseg_pending(int handle) const noexcept {
+        return handle && pending_[size_t(handle)];
+    }
+    F nseg_compose(const F& newer, const F& older) const { return action_.compose(newer, older); }
+    S nseg_apply(S aggregate, const F& tag, int length) const {
+        return action_.apply(move(aggregate), tag, length);
     }
 };
 
@@ -6292,10 +6721,18 @@ class npersistent_seg {
     int size_ = 0, base_ = 1;
     vector<node> nodes_;
     vector<int> roots_;
+    uint64_t epoch_ = 1;
+
+    friend class nseg_node<npersistent_seg>;
 
     static int checked_size(int n) {
         npre(0 <= n && n <= (1 << 30));
         return n;
+    }
+
+    void touch() noexcept {
+        if (!++epoch_)
+            ++epoch_;
     }
 
     const T& aggregate(int node_index) const { return nodes_[node_index].aggregate; }
@@ -6342,9 +6779,48 @@ class npersistent_seg {
     }
 
   public:
+    using aggregate_type = T;
+    using node_view = nseg_node<npersistent_seg>;
+
     explicit npersistent_seg(int n = 0, O operation = {})
         : operation_(move(operation)), size_(checked_size(n)), base_(nbitceil(size_)),
           nodes_{{operation_.id(), 0, 0}}, roots_{0} {}
+
+    npersistent_seg(const npersistent_seg& other)
+        : operation_(other.operation_), size_(other.size_), base_(other.base_), nodes_(other.nodes_),
+          roots_(other.roots_) {}
+    npersistent_seg(npersistent_seg&& other) noexcept(
+        is_nothrow_move_constructible_v<O> && is_nothrow_move_constructible_v<vector<node>> &&
+        is_nothrow_move_constructible_v<vector<int>>)
+        : operation_(move(other.operation_)), size_(exchange(other.size_, 0)),
+          base_(exchange(other.base_, 1)), nodes_(move(other.nodes_)), roots_(move(other.roots_)) {
+        other.touch();
+    }
+    npersistent_seg& operator=(const npersistent_seg& other) {
+        if (this != addressof(other)) {
+            operation_ = other.operation_;
+            size_ = other.size_;
+            base_ = other.base_;
+            nodes_ = other.nodes_;
+            roots_ = other.roots_;
+            touch();
+        }
+        return *this;
+    }
+    npersistent_seg& operator=(npersistent_seg&& other) noexcept(
+        is_nothrow_move_assignable_v<O> && is_nothrow_move_assignable_v<vector<node>> &&
+        is_nothrow_move_assignable_v<vector<int>>) {
+        if (this != addressof(other)) {
+            operation_ = move(other.operation_);
+            size_ = exchange(other.size_, 0);
+            base_ = exchange(other.base_, 1);
+            nodes_ = move(other.nodes_);
+            roots_ = move(other.roots_);
+            touch();
+            other.touch();
+        }
+        return *this;
+    }
 
     template <nindexed V>
     explicit npersistent_seg(const V& source, O operation = {})
@@ -6395,7 +6871,472 @@ class npersistent_seg {
         npre(0 <= index && index < size_);
         return fold(version, index, index + 1);
     }
+
+    node_view root(int version) const {
+        npre(0 <= version && version < versions());
+        return node_view(this, roots_[size_t(version)], epoch_, 0, base_);
+    }
+    node_view root() const { return root(0); }
+
+  private:
+    uint64_t nseg_epoch() const noexcept { return epoch_; }
+    bool nseg_alive(int handle) const noexcept {
+        return 0 < handle && size_t(handle) < nodes_.size();
+    }
+    T nseg_aggregate(int handle) const { return handle ? nodes_[size_t(handle)].aggregate : operation_.id(); }
+    int nseg_left(int handle) const noexcept { return handle ? nodes_[size_t(handle)].left : 0; }
+    int nseg_right(int handle) const noexcept { return handle ? nodes_[size_t(handle)].right : 0; }
 };
+
+// ---- 34_dynamic.hpp ----
+// Dynamic (open-point) segment trees.  Nodes are allocated only on paths that
+// are written; absent children represent the operation identity.
+
+template <class T, class O = nadd<T>>
+    requires nmonoid<O, T>
+class ndynamic_seg {
+    struct node {
+        T aggregate;
+        int left = 0, right = 0;
+    };
+
+    [[no_unique_address]] O operation_;
+    long long domain_left_ = 0, domain_right_ = 1;
+    vector<node> nodes_{{operation_.id(), 0, 0}};
+    int root_ = 0;
+    uint64_t epoch_ = 1;
+
+    friend class nseg_node<ndynamic_seg>;
+
+    static void check_domain(long long left, long long right) {
+        npre(left < right);
+        npre(__int128_t(right) - left <= __int128_t(LLONG_MAX));
+    }
+    static long long middle(long long left, long long right) {
+        return left + static_cast<long long>((__int128_t(right) - left) / 2);
+    }
+    void touch() noexcept {
+        if (!++epoch_)
+            ++epoch_;
+    }
+    int make_node() {
+        npre(nodes_.size() < size_t(INT_MAX));
+        nodes_.push_back({operation_.id(), 0, 0});
+        return int(nodes_.size() - 1);
+    }
+    int ensure(int& handle) {
+        if (!handle)
+            handle = make_node();
+        return handle;
+    }
+    void pull(int handle) {
+        nodes_[size_t(handle)].aggregate =
+            operation_(nodes_[size_t(nodes_[size_t(handle)].left)].aggregate,
+                       nodes_[size_t(nodes_[size_t(handle)].right)].aggregate);
+    }
+    void set0(int& handle, long long left, long long right, long long index, T value) {
+        ensure(handle);
+        if (right - left == 1) {
+            nodes_[size_t(handle)].aggregate = move(value);
+            return;
+        }
+        long long mid = middle(left, right);
+        if (index < mid) {
+            int child = nodes_[size_t(handle)].left;
+            ensure(child);
+            set0(child, left, mid, index, move(value));
+            nodes_[size_t(handle)].left = child;
+        } else {
+            int child = nodes_[size_t(handle)].right;
+            ensure(child);
+            set0(child, mid, right, index, move(value));
+            nodes_[size_t(handle)].right = child;
+        }
+        pull(handle);
+    }
+    void combine0(int& handle, long long left, long long right, long long index, const T& delta) {
+        ensure(handle);
+        if (right - left == 1) {
+            nodes_[size_t(handle)].aggregate = operation_(move(nodes_[size_t(handle)].aggregate), delta);
+            return;
+        }
+        long long mid = middle(left, right);
+        if (index < mid) {
+            int child = nodes_[size_t(handle)].left;
+            combine0(child, left, mid, index, delta);
+            nodes_[size_t(handle)].left = child;
+        } else {
+            int child = nodes_[size_t(handle)].right;
+            combine0(child, mid, right, index, delta);
+            nodes_[size_t(handle)].right = child;
+        }
+        pull(handle);
+    }
+    T fold0(int handle, long long left, long long right, long long query_left,
+            long long query_right) const {
+        if (!handle || query_right <= left || right <= query_left)
+            return operation_.id();
+        if (query_left <= left && right <= query_right)
+            return nodes_[size_t(handle)].aggregate;
+        long long mid = middle(left, right);
+        return operation_(fold0(nodes_[size_t(handle)].left, left, mid, query_left, query_right),
+                          fold0(nodes_[size_t(handle)].right, mid, right, query_left, query_right));
+    }
+
+  public:
+    using value_type = T;
+    using aggregate_type = T;
+    using node_view = nseg_node<ndynamic_seg>;
+
+    ndynamic_seg() = default;
+    explicit ndynamic_seg(long long left, long long right, O operation = {})
+        : operation_(move(operation)), domain_left_(left), domain_right_(right),
+          nodes_{{operation_.id(), 0, 0}} {
+        check_domain(left, right);
+    }
+
+    ndynamic_seg(const ndynamic_seg& other)
+        : operation_(other.operation_), domain_left_(other.domain_left_),
+          domain_right_(other.domain_right_), nodes_(other.nodes_), root_(other.root_) {}
+    ndynamic_seg(ndynamic_seg&& other) noexcept(
+        is_nothrow_move_constructible_v<O> && is_nothrow_move_constructible_v<vector<node>>)
+        : operation_(move(other.operation_)), domain_left_(other.domain_left_),
+          domain_right_(other.domain_right_), nodes_(move(other.nodes_)), root_(exchange(other.root_, 0)) {
+        other.touch();
+    }
+    ndynamic_seg& operator=(const ndynamic_seg& other) {
+        if (this != addressof(other)) {
+            operation_ = other.operation_;
+            domain_left_ = other.domain_left_;
+            domain_right_ = other.domain_right_;
+            nodes_ = other.nodes_;
+            root_ = other.root_;
+            touch();
+        }
+        return *this;
+    }
+    ndynamic_seg& operator=(ndynamic_seg&& other) noexcept(
+        is_nothrow_move_assignable_v<O> && is_nothrow_move_assignable_v<vector<node>>) {
+        if (this != addressof(other)) {
+            operation_ = move(other.operation_);
+            domain_left_ = other.domain_left_;
+            domain_right_ = other.domain_right_;
+            nodes_ = move(other.nodes_);
+            root_ = exchange(other.root_, 0);
+            touch();
+            other.touch();
+        }
+        return *this;
+    }
+
+    long long left_bound() const noexcept { return domain_left_; }
+    long long right_bound() const noexcept { return domain_right_; }
+    long long width() const { return domain_right_ - domain_left_; }
+    int nodes() const {
+        npre(nodes_.size() <= size_t(INT_MAX));
+        return int(nodes_.size() - 1);
+    }
+    bool empty() const noexcept { return root_ == 0; }
+    const O& operation() const noexcept { return operation_; }
+    void reserve_nodes(int count) {
+        npre(count >= 0);
+        nodes_.reserve(size_t(count) + 1);
+    }
+    void clear() {
+        nodes_.clear();
+        nodes_.push_back({operation_.id(), 0, 0});
+        root_ = 0;
+        touch();
+    }
+
+    void set(long long index, T value) {
+        npre(domain_left_ <= index && index < domain_right_);
+        set0(root_, domain_left_, domain_right_, index, move(value));
+        touch();
+    }
+    void combine(long long index, const T& delta) {
+        npre(domain_left_ <= index && index < domain_right_);
+        combine0(root_, domain_left_, domain_right_, index, delta);
+        touch();
+    }
+    T fold(long long left, long long right) const {
+        npre(domain_left_ <= left && left <= right && right <= domain_right_);
+        return left == right ? operation_.id() : fold0(root_, domain_left_, domain_right_, left, right);
+    }
+    T fold() const { return fold(domain_left_, domain_right_); }
+    T get(long long index) const {
+        npre(domain_left_ <= index && index < domain_right_);
+        return fold(index, index + 1);
+    }
+
+    node_view root() const { return node_view(this, root_, epoch_, domain_left_, domain_right_); }
+
+  private:
+    uint64_t nseg_epoch() const noexcept { return epoch_; }
+    bool nseg_alive(int handle) const noexcept {
+        return 0 < handle && size_t(handle) < nodes_.size();
+    }
+    T nseg_aggregate(int handle) const { return handle ? nodes_[size_t(handle)].aggregate : operation_.id(); }
+    int nseg_left(int handle) const noexcept { return handle ? nodes_[size_t(handle)].left : 0; }
+    int nseg_right(int handle) const noexcept { return handle ? nodes_[size_t(handle)].right : 0; }
+};
+
+template <class S, class F, class M, class A>
+    requires nmonoid<M, S> && naction<A, S, F>
+class ndynamic_lazyseg {
+    struct node {
+        S aggregate;
+        int left = 0, right = 0;
+        F lazy;
+        bool pending = false;
+    };
+
+    [[no_unique_address]] M operation_;
+    [[no_unique_address]] A action_;
+    long long domain_left_ = 0, domain_right_ = 1;
+    vector<node> nodes_;
+    int root_ = 0;
+    uint64_t epoch_ = 1;
+
+    friend class nseg_node<ndynamic_lazyseg>;
+
+    static void check_domain(long long left, long long right) {
+        npre(left < right);
+        npre(__int128_t(right) - left <= __int128_t(INT_MAX));
+    }
+    static long long middle(long long left, long long right) {
+        return left + static_cast<long long>((__int128_t(right) - left) / 2);
+    }
+    void touch() noexcept {
+        if (!++epoch_)
+            ++epoch_;
+    }
+    int make_node() {
+        npre(nodes_.size() < size_t(INT_MAX));
+        nodes_.push_back({operation_.id(), 0, 0, action_.tag_id(), false});
+        return int(nodes_.size() - 1);
+    }
+    int ensure(int& handle) {
+        if (!handle)
+            handle = make_node();
+        return handle;
+    }
+    void put(int handle, long long length, const F& tag) {
+        node& current = nodes_[size_t(handle)];
+        current.aggregate = action_.apply(move(current.aggregate), tag, ni::nchecked_int(length));
+        if (current.pending)
+            current.lazy = action_.compose(tag, current.lazy);
+        else {
+            current.lazy = tag;
+            current.pending = true;
+        }
+    }
+    void push(int handle, long long left, long long right) {
+        if (!nodes_[size_t(handle)].pending || right - left == 1)
+            return;
+        long long mid = middle(left, right);
+        F tag = nodes_[size_t(handle)].lazy;
+        int left_child = nodes_[size_t(handle)].left;
+        int right_child = nodes_[size_t(handle)].right;
+        ensure(left_child);
+        ensure(right_child);
+        nodes_[size_t(handle)].left = left_child;
+        nodes_[size_t(handle)].right = right_child;
+        put(left_child, mid - left, tag);
+        put(right_child, right - mid, tag);
+        nodes_[size_t(handle)].lazy = action_.tag_id();
+        nodes_[size_t(handle)].pending = false;
+    }
+    void pull(int handle) {
+        node& current = nodes_[size_t(handle)];
+        current.aggregate =
+            operation_(nodes_[size_t(current.left)].aggregate, nodes_[size_t(current.right)].aggregate);
+    }
+    void apply0(int& handle, long long left, long long right, long long query_left,
+                long long query_right, const F& tag) {
+        if (query_right <= left || right <= query_left)
+            return;
+        ensure(handle);
+        if (query_left <= left && right <= query_right) {
+            put(handle, right - left, tag);
+            return;
+        }
+        push(handle, left, right);
+        long long mid = middle(left, right);
+        int left_child = nodes_[size_t(handle)].left;
+        int right_child = nodes_[size_t(handle)].right;
+        apply0(left_child, left, mid, query_left, query_right, tag);
+        apply0(right_child, mid, right, query_left, query_right, tag);
+        nodes_[size_t(handle)].left = left_child;
+        nodes_[size_t(handle)].right = right_child;
+        pull(handle);
+    }
+    S fold0(int handle, long long left, long long right, long long query_left,
+            long long query_right, F carry, bool carried) const {
+        if (query_right <= left || right <= query_left || (!handle && !carried))
+            return operation_.id();
+        if (query_left <= left && right <= query_right) {
+            S result = handle ? nodes_[size_t(handle)].aggregate : operation_.id();
+            return carried ? action_.apply(move(result), carry, ni::nchecked_int(right - left))
+                           : result;
+        }
+        if (handle && nodes_[size_t(handle)].pending) {
+            carry = carried ? action_.compose(carry, nodes_[size_t(handle)].lazy)
+                            : nodes_[size_t(handle)].lazy;
+            carried = true;
+        }
+        long long mid = middle(left, right);
+        int left_child = handle ? nodes_[size_t(handle)].left : 0;
+        int right_child = handle ? nodes_[size_t(handle)].right : 0;
+        return operation_(fold0(left_child, left, mid, query_left, query_right, carry, carried),
+                          fold0(right_child, mid, right, query_left, query_right, carry, carried));
+    }
+    void set0(int handle, long long left, long long right, long long index, S value) {
+        if (right - left == 1) {
+            node& current = nodes_[size_t(handle)];
+            current.aggregate = move(value);
+            current.lazy = action_.tag_id();
+            current.pending = false;
+            return;
+        }
+        push(handle, left, right);
+        long long mid = middle(left, right);
+        if (index < mid) {
+            int child = nodes_[size_t(handle)].left;
+            ensure(child);
+            set0(child, left, mid, index, move(value));
+            nodes_[size_t(handle)].left = child;
+        } else {
+            int child = nodes_[size_t(handle)].right;
+            ensure(child);
+            set0(child, mid, right, index, move(value));
+            nodes_[size_t(handle)].right = child;
+        }
+        pull(handle);
+    }
+
+  public:
+    using value_type = S;
+    using aggregate_type = S;
+    using tag_type = F;
+    using node_view = nseg_node<ndynamic_lazyseg>;
+
+    ndynamic_lazyseg()
+        : nodes_{{operation_.id(), 0, 0, action_.tag_id(), false}} {}
+    explicit ndynamic_lazyseg(long long left, long long right, M operation = {}, A action = {})
+        : operation_(move(operation)), action_(move(action)), domain_left_(left), domain_right_(right),
+          nodes_{{operation_.id(), 0, 0, action_.tag_id(), false}} {
+        check_domain(left, right);
+    }
+
+    ndynamic_lazyseg(const ndynamic_lazyseg& other)
+        : operation_(other.operation_), action_(other.action_), domain_left_(other.domain_left_),
+          domain_right_(other.domain_right_), nodes_(other.nodes_), root_(other.root_) {}
+    ndynamic_lazyseg(ndynamic_lazyseg&& other) noexcept(
+        is_nothrow_move_constructible_v<M> && is_nothrow_move_constructible_v<A> &&
+        is_nothrow_move_constructible_v<vector<node>>)
+        : operation_(move(other.operation_)), action_(move(other.action_)),
+          domain_left_(other.domain_left_), domain_right_(other.domain_right_), nodes_(move(other.nodes_)),
+          root_(exchange(other.root_, 0)) {
+        other.touch();
+    }
+    ndynamic_lazyseg& operator=(const ndynamic_lazyseg& other) {
+        if (this != addressof(other)) {
+            operation_ = other.operation_;
+            action_ = other.action_;
+            domain_left_ = other.domain_left_;
+            domain_right_ = other.domain_right_;
+            nodes_ = other.nodes_;
+            root_ = other.root_;
+            touch();
+        }
+        return *this;
+    }
+    ndynamic_lazyseg& operator=(ndynamic_lazyseg&& other) noexcept(
+        is_nothrow_move_assignable_v<M> && is_nothrow_move_assignable_v<A> &&
+        is_nothrow_move_assignable_v<vector<node>>) {
+        if (this != addressof(other)) {
+            operation_ = move(other.operation_);
+            action_ = move(other.action_);
+            domain_left_ = other.domain_left_;
+            domain_right_ = other.domain_right_;
+            nodes_ = move(other.nodes_);
+            root_ = exchange(other.root_, 0);
+            touch();
+            other.touch();
+        }
+        return *this;
+    }
+
+    long long left_bound() const noexcept { return domain_left_; }
+    long long right_bound() const noexcept { return domain_right_; }
+    long long width() const { return domain_right_ - domain_left_; }
+    int nodes() const {
+        npre(nodes_.size() <= size_t(INT_MAX));
+        return int(nodes_.size() - 1);
+    }
+    bool empty() const noexcept { return root_ == 0; }
+    const M& operation() const noexcept { return operation_; }
+    const A& action() const noexcept { return action_; }
+    void reserve_nodes(int count) {
+        npre(count >= 0);
+        nodes_.reserve(size_t(count) + 1);
+    }
+    void clear() {
+        nodes_.clear();
+        nodes_.push_back({operation_.id(), 0, 0, action_.tag_id(), false});
+        root_ = 0;
+        touch();
+    }
+
+    void apply(long long left, long long right, const F& tag) {
+        npre(domain_left_ <= left && left <= right && right <= domain_right_);
+        if (left < right) {
+            apply0(root_, domain_left_, domain_right_, left, right, tag);
+            touch();
+        }
+    }
+    S fold(long long left, long long right) const {
+        npre(domain_left_ <= left && left <= right && right <= domain_right_);
+        return left == right
+                   ? operation_.id()
+                   : fold0(root_, domain_left_, domain_right_, left, right, action_.tag_id(), false);
+    }
+    S fold() const { return fold(domain_left_, domain_right_); }
+    void set(long long index, S value) {
+        npre(domain_left_ <= index && index < domain_right_);
+        ensure(root_);
+        set0(root_, domain_left_, domain_right_, index, move(value));
+        touch();
+    }
+    S get(long long index) const {
+        npre(domain_left_ <= index && index < domain_right_);
+        return fold(index, index + 1);
+    }
+
+    node_view root() const { return node_view(this, root_, epoch_, domain_left_, domain_right_); }
+
+  private:
+    uint64_t nseg_epoch() const noexcept { return epoch_; }
+    bool nseg_alive(int handle) const noexcept {
+        return 0 < handle && size_t(handle) < nodes_.size();
+    }
+    S nseg_aggregate(int handle) const { return handle ? nodes_[size_t(handle)].aggregate : operation_.id(); }
+    int nseg_left(int handle) const noexcept { return handle ? nodes_[size_t(handle)].left : 0; }
+    int nseg_right(int handle) const noexcept { return handle ? nodes_[size_t(handle)].right : 0; }
+    F nseg_tag(int handle) const {
+        return handle && nodes_[size_t(handle)].pending ? nodes_[size_t(handle)].lazy : action_.tag_id();
+    }
+    bool nseg_pending(int handle) const noexcept {
+        return handle && nodes_[size_t(handle)].pending;
+    }
+    F nseg_compose(const F& newer, const F& older) const { return action_.compose(newer, older); }
+    S nseg_apply(S aggregate, const F& tag, int length) const {
+        return action_.apply(move(aggregate), tag, length);
+    }
+};
+
+template <class T> using ndynamic_addsum = ndynamic_lazyseg<T, T, nadd<T>, naddsum_action<T>>;
 
 // ---- 34_wavelet.hpp ----
 template <integral T>

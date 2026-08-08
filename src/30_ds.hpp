@@ -90,17 +90,59 @@ class nseg {
     [[no_unique_address]] O operation_;
     int size_ = 0, base_ = 1;
     vector<T> tree_;
+    uint64_t epoch_ = 1;
+
+    friend class nseg_node<nseg>;
 
     static int checked_size(int n) {
         npre(0 <= n && n <= (1 << 30));
         return n;
     }
 
+    void touch() noexcept {
+        if (!++epoch_)
+            ++epoch_;
+    }
+
   public:
+    using aggregate_type = T;
+    using node_view = nseg_node<nseg>;
+
     nseg() : tree_(2, operation_.id()) {}
     explicit nseg(int n, O operation = {})
         : operation_(move(operation)), size_(checked_size(n)), base_(nbitceil(size_)),
           tree_(size_t(2) * base_, operation_.id()) {}
+
+    nseg(const nseg& other)
+        : operation_(other.operation_), size_(other.size_), base_(other.base_), tree_(other.tree_) {}
+    nseg(nseg&& other) noexcept(is_nothrow_move_constructible_v<O> &&
+                                is_nothrow_move_constructible_v<vector<T>>)
+        : operation_(move(other.operation_)), size_(exchange(other.size_, 0)),
+          base_(exchange(other.base_, 1)), tree_(move(other.tree_)) {
+        other.touch();
+    }
+    nseg& operator=(const nseg& other) {
+        if (this != addressof(other)) {
+            operation_ = other.operation_;
+            size_ = other.size_;
+            base_ = other.base_;
+            tree_ = other.tree_;
+            touch();
+        }
+        return *this;
+    }
+    nseg& operator=(nseg&& other) noexcept(is_nothrow_move_assignable_v<O> &&
+                                            is_nothrow_move_assignable_v<vector<T>>) {
+        if (this != addressof(other)) {
+            operation_ = move(other.operation_);
+            size_ = exchange(other.size_, 0);
+            base_ = exchange(other.base_, 1);
+            tree_ = move(other.tree_);
+            touch();
+            other.touch();
+        }
+        return *this;
+    }
 
     template <nindexed A>
     explicit nseg(const A& source, O operation = {}) : nseg(nlen(source), move(operation)) {
@@ -114,7 +156,10 @@ class nseg {
     bool empty() const noexcept { return size_ == 0; }
     const O& operation() const noexcept { return operation_; }
 
-    void clear() { fill(tree_.begin(), tree_.end(), operation_.id()); }
+    void clear() {
+        fill(tree_.begin(), tree_.end(), operation_.id());
+        touch();
+    }
 
     void set(int index, T value) {
         npre(0 <= index && index < size_);
@@ -122,6 +167,7 @@ class nseg {
         tree_[node] = move(value);
         while (node >>= 1)
             tree_[node] = operation_(tree_[node << 1], tree_[node << 1 | 1]);
+        touch();
     }
 
     T get(int index) const {
@@ -143,6 +189,25 @@ class nseg {
     }
 
     T fold() const { return size_ ? tree_[1] : operation_.id(); }
+
+    node_view root() const { return node_view(this, size_ ? 1 : 0, epoch_, 0, base_); }
+
+  private:
+    uint64_t nseg_epoch() const noexcept { return epoch_; }
+    bool nseg_alive(int handle) const noexcept {
+        return 0 < handle && size_t(handle) < tree_.size();
+    }
+    T nseg_aggregate(int handle) const {
+        return handle ? tree_[size_t(handle)] : operation_.id();
+    }
+    int nseg_left(int handle) const noexcept {
+        long long child = 2LL * handle;
+        return handle && size_t(child) < tree_.size() ? int(child) : 0;
+    }
+    int nseg_right(int handle) const noexcept {
+        long long child = 2LL * handle + 1;
+        return handle && size_t(child) < tree_.size() ? int(child) : 0;
+    }
 };
 
 template <class T, class O = nadd<T>> using nseg_iter = nseg<T, O>;

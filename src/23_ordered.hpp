@@ -68,24 +68,29 @@ template <class S> bool nordered_equal(const S& left, const S& right) {
 }
 } // namespace ni
 
-template <class T, class C = nless<T>, bool Multi = false, class A = nempty_augment<T>>
-    requires naugment<A, T>
+template <class T, class C = nless<T>, bool Multi = false, class A = nempty_augment<T>,
+          class L = nempty_tag<T, typename A::info_type>>
+    requires naugment<A, T> && nnode_action<L, T, typename A::info_type>
 class nset_fhq {
     struct node {
         T value;
         uint64_t priority;
         int left = 0, right = 0, size = 1, count = 1;
         typename A::info_type aggregate;
+        typename L::tag_type lazy;
+        bool pending = false;
 
-        node(T value, uint64_t priority, int count, typename A::info_type aggregate)
+        node(T value, uint64_t priority, int count, typename A::info_type aggregate,
+             typename L::tag_type lazy)
             : value(move(value)), priority(priority), size(count), count(count),
-              aggregate(move(aggregate)) {}
+              aggregate(move(aggregate)), lazy(move(lazy)) {}
     };
 
-    ni::nslot_pool<node> pool_;
+    mutable ni::nslot_pool<node> pool_;
     int root_ = 0;
     [[no_unique_address]] C compare_{};
     [[no_unique_address]] A augment_{};
+    [[no_unique_address]] L action_{};
     mutable uint64_t epoch_ = 1;
 
     void touch() const noexcept {
@@ -104,11 +109,35 @@ class nset_fhq {
             augment_.op(nnode_info(current.left), augment_.one(current.value, current.count)),
             nnode_info(current.right));
     }
+    void apply_tag(int handle, const typename L::tag_type& tag) const {
+        if (!handle)
+            return;
+        node& current = pool_[handle];
+        current.value = action_.apply_value(move(current.value), tag, current.count);
+        current.aggregate = action_.apply_info(move(current.aggregate), tag, current.size);
+        if (current.pending)
+            current.lazy = action_.compose(tag, current.lazy);
+        else {
+            current.lazy = tag;
+            current.pending = true;
+        }
+    }
+    void push(int handle) const {
+        if (!handle || !pool_[handle].pending)
+            return;
+        node& current = pool_[handle];
+        apply_tag(current.left, current.lazy);
+        apply_tag(current.right, current.lazy);
+        current.lazy = action_.tag_id();
+        current.pending = false;
+    }
     int merge(int left, int right) {
         if (!left)
             return right;
         if (!right)
             return left;
+        push(left);
+        push(right);
         if (pool_[left].priority >= pool_[right].priority) {
             pool_[left].right = merge(pool_[left].right, right);
             pull(left);
@@ -123,6 +152,7 @@ class nset_fhq {
             left = right = 0;
             return;
         }
+        push(handle);
         if (invoke(compare_, pool_[handle].value, value)) {
             left = handle;
             split(pool_[handle].right, value, pool_[left].right, right);
@@ -136,6 +166,7 @@ class nset_fhq {
     int add_existing(int handle, const T& value, int count) {
         if (!handle)
             return -1;
+        push(handle);
         node& current = pool_[handle];
         if (equivalent(value, current.value)) {
             if constexpr (Multi) {
@@ -155,6 +186,7 @@ class nset_fhq {
     int erase_at(int& handle, const T& value, int count, bool all) {
         if (!handle)
             return 0;
+        push(handle);
         node& current = pool_[handle];
         if (equivalent(value, current.value)) {
             if constexpr (Multi) {
@@ -185,13 +217,24 @@ class nset_fhq {
     typename A::info_type nnode_info(int handle) const {
         return handle ? pool_[handle].aggregate : augment_.id();
     }
-    int nnode_left(int handle) const { return handle ? pool_[handle].left : 0; }
-    int nnode_right(int handle) const { return handle ? pool_[handle].right : 0; }
+    int nnode_left(int handle) const {
+        push(handle);
+        return handle ? pool_[handle].left : 0;
+    }
+    int nnode_right(int handle) const {
+        push(handle);
+        return handle ? pool_[handle].right : 0;
+    }
+    typename L::tag_type nnode_tag(int handle) const {
+        return handle && pool_[handle].pending ? pool_[handle].lazy : action_.tag_id();
+    }
 
   public:
     using value_type = T;
     using augment_type = A;
     using info_type = typename A::info_type;
+    using tag_action = L;
+    using tag_type = typename L::tag_type;
     using node_view = nnode<nset_fhq>;
 
     nset_fhq() = default;
@@ -199,18 +242,23 @@ class nset_fhq {
     explicit nset_fhq(A augment)
         requires(!same_as<C, A>)
         : augment_(move(augment)) {}
-    nset_fhq(C compare, A augment) : compare_(move(compare)), augment_(move(augment)) {}
+    explicit nset_fhq(L action)
+        requires(!same_as<C, L> && !same_as<A, L>)
+        : action_(move(action)) {}
+    nset_fhq(C compare, A augment, L action = {})
+        : compare_(move(compare)), augment_(move(augment)), action_(move(action)) {}
     nset_fhq(initializer_list<T> values) {
         for (const T& value : values)
             ins(value);
     }
     nset_fhq(const nset_fhq& other)
-        : pool_(other.pool_), root_(other.root_), compare_(other.compare_), augment_(other.augment_) {}
+        : pool_(other.pool_), root_(other.root_), compare_(other.compare_), augment_(other.augment_),
+          action_(other.action_) {}
     nset_fhq(nset_fhq&& other) noexcept(
         is_nothrow_move_constructible_v<ni::nslot_pool<node>> && is_nothrow_move_constructible_v<C> &&
-        is_nothrow_move_constructible_v<A>)
+        is_nothrow_move_constructible_v<A> && is_nothrow_move_constructible_v<L>)
         : pool_(move(other.pool_)), root_(exchange(other.root_, 0)), compare_(move(other.compare_)),
-          augment_(move(other.augment_)) {
+          augment_(move(other.augment_)), action_(move(other.action_)) {
         other.touch();
     }
     nset_fhq& operator=(const nset_fhq& other) {
@@ -219,18 +267,20 @@ class nset_fhq {
             root_ = other.root_;
             compare_ = other.compare_;
             augment_ = other.augment_;
+            action_ = other.action_;
             touch();
         }
         return *this;
     }
     nset_fhq& operator=(nset_fhq&& other) noexcept(
         is_nothrow_move_assignable_v<ni::nslot_pool<node>> && is_nothrow_move_assignable_v<C> &&
-        is_nothrow_move_assignable_v<A>) {
+        is_nothrow_move_assignable_v<A> && is_nothrow_move_assignable_v<L>) {
         if (this != addressof(other)) {
             pool_ = move(other.pool_);
             root_ = exchange(other.root_, 0);
             compare_ = move(other.compare_);
             augment_ = move(other.augment_);
+            action_ = move(other.action_);
             touch();
             other.touch();
         }
@@ -243,6 +293,7 @@ class nset_fhq {
         return !invoke(compare_, a, b) && !invoke(compare_, b, a);
     }
     const A& augment() const noexcept { return augment_; }
+    const L& action() const noexcept { return action_; }
     node_view root() const { return node_view(this, root_, epoch_); }
     template <class F> node_view walk(F&& decide) const {
         return nwalk(*this, forward<F>(decide));
@@ -260,6 +311,38 @@ class nset_fhq {
             touch();
         pool_.clear();
         root_ = 0;
+    }
+
+    // Apply a lazy action to the whole tree or to a node selected through the
+    // read-only AST view.  The action must preserve the comparator order; this
+    // is a semantic precondition because a general value transform can destroy
+    // the search-tree invariant.
+    void apply(const typename L::tag_type& tag) {
+        if (root_) {
+            apply_tag(root_, tag);
+            touch();
+        }
+    }
+    void apply(const node_view& node, const typename L::tag_type& tag) {
+        npre(node.current() && node.ok());
+        int target = node.handle();
+        vector<int> ancestors;
+        for (int handle = root_; handle != target;) {
+            npre(handle);
+            push(handle);
+            ancestors.push_back(handle);
+            if (equivalent(pool_[target].value, pool_[handle].value)) {
+                npre(false);
+            } else {
+                handle = invoke(compare_, pool_[target].value, pool_[handle].value)
+                             ? pool_[handle].left
+                             : pool_[handle].right;
+            }
+        }
+        apply_tag(target, tag);
+        for (auto iterator = ancestors.rbegin(); iterator != ancestors.rend(); ++iterator)
+            pull(*iterator);
+        touch();
     }
 
     int ins(const T& value, int count = 1) {
@@ -281,7 +364,7 @@ class nset_fhq {
         split(root_, value, left, right);
         int stored_count = Multi ? count : 1;
         auto aggregate = augment_.one(value, stored_count);
-        int fresh = pool_.make(move(value), nrng_global(), stored_count, move(aggregate));
+        int fresh = pool_.make(move(value), nrng_global(), stored_count, move(aggregate), action_.tag_id());
         root_ = merge(merge(left, fresh), right);
         touch();
         return stored_count;
@@ -301,6 +384,7 @@ class nset_fhq {
     }
     int findi(const T& value) const {
         for (int handle = root_; handle;) {
+            push(handle);
             const node& current = pool_[handle];
             if (equivalent(value, current.value))
                 return handle;
@@ -320,6 +404,7 @@ class nset_fhq {
     int rank(const T& value) const {
         int result = 0;
         for (int handle = root_; handle;) {
+            push(handle);
             const node& current = pool_[handle];
             if (invoke(compare_, current.value, value)) {
                 result += size_of(current.left) + current.count;
@@ -334,6 +419,7 @@ class nset_fhq {
         if (index < 0 || index >= len())
             return {};
         for (int handle = root_; handle;) {
+            push(handle);
             const node& current = pool_[handle];
             int left_size = size_of(current.left);
             if (index < left_size)
@@ -355,6 +441,7 @@ class nset_fhq {
     nmaybe<T> lower(const T& value) const {
         int result = 0;
         for (int handle = root_; handle;) {
+            push(handle);
             const node& current = pool_[handle];
             if (!invoke(compare_, current.value, value)) {
                 result = handle;
@@ -368,6 +455,7 @@ class nset_fhq {
     nmaybe<T> upper(const T& value) const {
         int result = 0;
         for (int handle = root_; handle;) {
+            push(handle);
             const node& current = pool_[handle];
             if (invoke(compare_, value, current.value)) {
                 result = handle;
@@ -399,6 +487,7 @@ class nset_fhq {
         explicit cursor(const nset_fhq* owner) : owner(owner) { descend(owner->root_); }
         void descend(int handle) {
             while (handle) {
+                owner->push(handle);
                 stack.push_back(handle);
                 handle = owner->pool_[handle].left;
             }
@@ -413,6 +502,7 @@ class nset_fhq {
                 return;
             repetition = 0;
             stack.pop_back();
+            owner->push(handle);
             descend(owner->pool_[handle].right);
         }
     };
@@ -1055,8 +1145,10 @@ template <class T, class C = nless<T>> class nset_stl {
     }
 };
 
-template <class T, class C = nless<T>, class A = nempty_augment<T>>
-using nset = nset_fhq<T, C, false, A>;
+template <class T, class C = nless<T>, class A = nempty_augment<T>,
+          class L = nempty_tag<T, typename A::info_type>>
+using nset = nset_fhq<T, C, false, A, L>;
 
-template <class T, class C = nless<T>, class A = nempty_augment<T>>
-using nbag = nset_fhq<T, C, true, A>;
+template <class T, class C = nless<T>, class A = nempty_augment<T>,
+          class L = nempty_tag<T, typename A::info_type>>
+using nbag = nset_fhq<T, C, true, A, L>;

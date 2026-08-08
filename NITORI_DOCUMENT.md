@@ -1607,7 +1607,7 @@ s.min(); s.max();
 
 | 类型 | 结构 | 搜索/更新/rank/kth | 说明 |
 |---|---|---|---|
-| `nset_fhq<T,C,Multi,A>` | 随机 FHQ treap | 期望 `O(log n)` | 默认；支持重数和 augmentation |
+| `nset_fhq<T,C,Multi,A,L>` | 随机 FHQ treap | 期望 `O(log n)` | 默认；支持重数、augmentation 和可选 lazy action |
 | `nset_splay<T,C,Multi,A>` | splay | 摊还 `O(log n)` | 访问会旋转；支持重数和 augmentation |
 | `nset_stl<T,C>` | `std::set` 参考后端 | 搜索/更新 `O(log n)`，rank/kth `O(n)` | 仅唯一集合，不支持 AST augmentation |
 
@@ -1692,6 +1692,42 @@ root.info(); root.len(); root.left(); root.right();
 `nfirst_prefix`/`nlast_suffix` 依赖 augmentation 做前缀/后缀单调定位。对应成员
 `walk/first_prefix/last_suffix` 只是短桥。
 
+FHQ 另有第五个模板参数 `L`，为 AST 节点提供真正的 lazy tag：
+
+```cpp
+struct add_tag {
+    using tag_type = int;
+    int tag_id() const { return 0; }
+    int compose(int newer, int older) const { return newer + older; }
+    int apply_value(int value, int tag, int) const { return value + tag; }
+    long long apply_info(long long info, int tag, int length) const {
+        return info + 1LL * tag * length;
+    }
+};
+
+template<>
+inline constexpr bool nnode_action_laws<add_tag, int, long long> = true;
+
+using tagged_bag = nset_fhq<int, nless<int>, true, sum_augment, add_tag>;
+tagged_bag t(nless<int>{}, sum_augment{}, add_tag{});
+t.apply(tag);                 // 整棵树
+auto node = t.root().left();
+t.apply(node, tag);           // AST 选中的子树
+t.root().tag();               // 当前节点尚未下推的 tag
+```
+
+`nnode_action<L,T,I>` 检查 `tag_id/compose/apply_value/apply_info` 以及显式的
+`nnode_action_laws<L,T,I>` 定律声明；
+`nempty_tag<T,I>` 是默认 no-op action。`compose(newer,older)` 仍表示先 `older` 后 `newer`。
+`apply_value` 的第三个参数是当前键的重数，`apply_info` 的第三个参数是整棵子树长度。
+该定律位声明 tag 单位、compose 结合，以及逐键作用与整棵子树信息作用相容；concept
+只能要求声明存在，不能替调用者证明这些等式。
+
+这是 **FHQ 有序树** 的 lazy action，不是隐式序列 treap。调用者必须保证把 tag 作用于所选
+子树后，比较器下的中序顺序和等价类仍然合法；整树平移是典型合法例子，对任意局部子树
+取负通常会破坏 BST 不变量。Splay 当前仍只有 augmentation，没有 lazy action。读取子节点
+会按需下推 tag；这是逻辑只读的表示变化，不会单独让 epoch 失效。
+
 两种聚合定位都要求 predicate 随前缀/后缀扩展具有正确单调性；它们只利用子树聚合
 下降，不会替调用者证明“首次为真”之后不会再次变假。
 
@@ -1703,6 +1739,27 @@ splay 的 `has/get/rank/...` 也可能旋转，不能把 `nnode` 跨下一次树
 ---
 
 ## 10. 代数数据结构
+
+线段树家族共享结构视图 `nseg_node<S>`。`nseg`、`nlazyseg`、`npersistent_seg`、
+`ndynamic_seg` 与 `ndynamic_lazyseg` 都提供 `root()`；持久化树另有 `root(version)`：
+
+```cpp
+auto node = seg.root();
+node.aggregate(); node.info();
+node.left_bound(); node.right_bound(); node.width(); node.leaf();
+node.left(); node.right(); node.handle();
+
+auto found = nseg_walk(seg, decide);             // 从 root() 调度
+auto old_found = nseg_walk(p.root(version), decide); // 从指定节点调度
+```
+
+`decide(node)` 返回 `nbranch::left/take/right`。`nseg_tree<S>` 表示具有默认 `root()` 的
+区间树能力。固定树和持久化树的视图区间是内部 `[0,bit_ceil(n))`，`n` 以后的叶子为单位元；
+动态树的视图区间就是构造时给出的坐标域。普通/lazy/dynamic 树修改后旧视图 epoch 失效；
+持久化节点不可变，所以旧版本视图保持有效。带 lazy 的节点额外有 `tag()`，它返回当前
+节点尚未下推的表示 tag，而不是从根到节点的累计作用；沿 `left()/right()` 取得的子视图会
+携带祖先未下推作用，因此 `aggregate()` 仍是该区间的逻辑聚合，且不会为动态树的只读视图
+补开缺失节点。
 
 ### 10.1 Fenwick：`nfenwick<T,O>`
 
@@ -1790,13 +1847,45 @@ int v1 = p.set(0, index, value);  // 从版本 0 创建新版本
 int v2 = p.fork(v1);              // 相同 root 的新版本
 p.fold(version, l, r);
 p.get(version, i);
+p.root(version);                     // nseg_node 结构视图
 p.versions(); p.nodes();
 p.reserve_nodes(count);
 ```
 
 点设与查询 `O(log n)`，每次 set 产生 `O(log n)` 新节点。
 
-### 10.7 Wavelet Matrix：`nwavelet<T>`
+### 10.7 动态开点线段树
+
+`ndynamic_seg<T,O>` 在 `long long` 坐标域 `[lo,hi)` 上只为写入路径开点；未开节点表示
+幺半群单位元：
+
+```cpp
+ndynamic_seg<long long> seg(-1'000'000'000'000LL, 1'000'000'000'000LL);
+seg.set(x, value);
+seg.combine(x, delta);       // leaf = op(old, delta)，顺序不可交换
+seg.get(x); seg.fold(l, r); seg.fold();
+seg.nodes(); seg.reserve_nodes(capacity); seg.clear();
+```
+
+设坐标域宽度为 `W`：点修改和区间查询为 `O(log W)`，每个首次写入的点至多增加
+`O(log W)` 节点；只读查询不分配节点。坐标域宽度必须能装入 `long long`。
+
+`ndynamic_lazyseg<S,F,M,A>` 使用与 `nlazyseg` 相同的 monoid/action 协议，支持动态开点
+区间 tag：
+
+```cpp
+ndynamic_lazyseg<S,F,M,A> seg(lo, hi, merge, action);
+seg.apply(l, r, tag);
+seg.fold(l, r); seg.set(x, value); seg.get(x);
+
+ndynamic_addsum<long long> sum(lo, hi); // 区间加、区间和
+```
+
+更新、查询均为 `O(log W)`；查询通过携带未下推 tag 计算，不为缺失子树开点。更新在下推
+已有 tag 时可能建立两个孩子，总空间仍为 `O(q log W)`。由于统一 `naction` 的 length 是
+`int`，lazy 动态树要求 `hi-lo <= INT_MAX`；坐标本身仍可为 `long long`。
+
+### 10.8 Wavelet Matrix：`nwavelet<T>`
 
 静态 integral 序列，支持有符号顺序编码。
 
@@ -1812,7 +1901,7 @@ w.successor(l, r, bound);          // 最小 >= bound
 
 时间 `O(bit-width(T))`，可选结果使用 `nmaybe<T>`。
 
-### 10.8 Mo 调度
+### 10.9 Mo 调度
 
 ```cpp
 struct ninterval_query { int left, right, id; };
@@ -1828,7 +1917,7 @@ nrun_mo(queries, universe, add, remove, answer); // 左右操作相同
 调度器按引用转发回调，不复制回调状态；简化重载的左右移动会调用同一个 `add/remove`
 对象，也支持不可复制 functor。
 
-### 10.9 Disjoint Sparse Table：`nsparse<T,O>`
+### 10.10 Disjoint Sparse Table：`nsparse<T,O>`
 
 `nsparse` 的名字兼容经典 sparse table，但实现是 disjoint sparse table：只要求有序
 幺半群，不要求幂等，也不要求交换。因此字符串拼接等操作也能 `O(1)` 查询：
@@ -1843,7 +1932,7 @@ table[i];
 预处理 `O(n log n)` 时间和空间，非空区间查询 `O(1)`。合并严格保持从左到右的顺序；
 若只需 `min/max/gcd`，默认 `nmin<T>` 仍可直接用。
 
-### 10.10 带势能并查集：`npotential_dsu<T>`
+### 10.11 带势能并查集：`npotential_dsu<T>`
 
 维护可加群意义下的差值约束：
 
@@ -2876,6 +2965,10 @@ python3 tools/audit.py
 
 不要为了复用 STL 算法给 `ndeque` 或 view 补 iterator。直接实现 Nitori 能力版本。
 
+线段树后端也遵循同一原则：实现固定、lazy、持久化或动态存储时，优先提供
+`nseg_node<S>` 所需的 `aggregate/child/interval/epoch` 能力，再让 `nseg_walk` 等调度器
+依赖这个最小协议；不要为每个后端复制一套“按节点下降”的算法。
+
 ### 19.3 离散函数先写清 position/key/value
 
 新增离散函数适配器必须明确三件事：输入序列中的整数代表源枚举位置还是语义 key，
@@ -3081,7 +3174,9 @@ nunique_compact nunique nsort_unique
 nscan nsuffix_scan nfirst_true nlast_true nrollback
 nscratch narena npool_dynamic npool
 npartition npart npart_dense nperm
-nbranch nnode nnode_tree nwalk naugment nempty_augment naugmented_tree nfirst_prefix nlast_suffix
+nbranch nnode nnode_tree nwalk naugment nempty_augment nempty_tag nnode_action_laws nnode_action
+naugmented_tree nfirst_prefix nlast_suffix
+nseg_node nseg_tree nseg_walk
 nset_fhq nset_splay nset_stl nset nbag
 nmap_flat nmap_hash nmap_stl nmap
 nrel_scan nrel npartial_hash nfunc_hash npartial
@@ -3092,6 +3187,7 @@ nbije_hash nbije_rank nbije ninj ncompress ncompress_stl
 
 ```text
 nfenwick nseg nseg_iter nlazyseg nlazy_addsum
+ndynamic_seg ndynamic_lazyseg ndynamic_addsum
 nqueue_agg ndsu nrollback_dsu ndsu_rollback npotential_dsu
 npersistent_seg nwavelet nsparse
 ninterval_query nmo_order nrun_mo
