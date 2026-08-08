@@ -1689,6 +1689,22 @@ s.min(); s.max();
 | `nset_splay<T,C,Multi,A>` | splay | 摊还 `O(log n)` | 访问会旋转；支持重数和 augmentation |
 | `nset_stl<T,C>` | `std::set` 参考后端 | 搜索/更新 `O(log n)`，rank/kth `O(n)` | 仅唯一集合，不支持 AST augmentation |
 
+`nset_fhq` 和 `nset_splay` 也可以从同一 `domain()` 构造多个协作 owner。两者都提供
+消费式 `split_by(value)`，结果是 `[key < value]` 与 `[key >= value]` 两个共享 domain 的
+集合；`merge_from(move(other))` 再把右侧集合接到左侧。合并要求 root 不重叠、domain 相同、
+比较器/augmentation/action 语义等价，并且 `max(left) < min(right)`；这些是调用点的
+数学与所有权契约，代码旁的注释是故意保留的自由接口边界，不以 concept 森林替代它们。
+合并/切分/清空只释放当前 owner 的 root，不会把同 domain 的兄弟 owner 一起清空；共享 epoch
+会让所有旧 `nnode_view` 一起失效。复制集合会 `clone()` 出独立 domain，不能意外修改原树。
+
+```cpp
+auto domain = nset_fhq<int>{}.domain();
+nset_fhq<int> left(domain), right(domain);
+left.ins(1); right.ins(9);
+left.merge_from(move(right));
+auto [small, large] = move(left).split_by(5);
+```
+
 `nseed(seed)` 可固定 FHQ priority 流和默认哈希盐，便于可复现对拍。比较器必须满足严格
 弱序；等价定义为 `!cmp(a,b) && !cmp(b,a)`。
 

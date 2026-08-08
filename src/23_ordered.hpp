@@ -591,16 +591,18 @@ class nset_fhq {
               aggregate(move(aggregate)), lazy(move(lazy)) {}
     };
 
-    mutable ni::nslot_pool<node> pool_;
+  public:
+    using domain_type = nnode_domain<node>;
+
+  private:
+    mutable domain_type pool_;
     int root_ = 0;
     [[no_unique_address]] C compare_{};
     [[no_unique_address]] A augment_{};
     [[no_unique_address]] L action_{};
-    mutable uint64_t epoch_ = 1;
 
     void touch() const noexcept {
-        if (!++epoch_)
-            ++epoch_;
+        pool_.touch();
     }
     int size_of(int handle) const { return handle ? pool_[handle].size : 0; }
     void pull(int handle) {
@@ -713,8 +715,49 @@ class nset_fhq {
         return removed;
     }
 
+    void release(int handle) {
+        if (!handle)
+            return;
+        int left = pool_[handle].left, right = pool_[handle].right;
+        release(left);
+        release(right);
+        pool_.erase(handle);
+    }
+
+    int minimum_handle(int handle) const {
+        npre(handle);
+        while (pool_[handle].left) {
+            push(handle);
+            handle = pool_[handle].left;
+        }
+        return handle;
+    }
+    int maximum_handle(int handle) const {
+        npre(handle);
+        while (pool_[handle].right) {
+            push(handle);
+            handle = pool_[handle].right;
+        }
+        return handle;
+    }
+
+    // The recursive join is valid only when every key in left precedes every key
+    // in right.  The public consuming wrapper checks that boundary; this core stays
+    // a free structural mechanism instead of growing a concept/trait protocol.
+    bool ordered_before(const nset_fhq& other) const {
+        if (!root_ || !other.root_)
+            return true;
+        return invoke(compare_, pool_[maximum_handle(root_)].value,
+                      other.pool_[other.minimum_handle(other.root_)].value);
+    }
+
     friend class nnode_view<nset_fhq>;
-    uint64_t nnode_epoch() const noexcept { return epoch_; }
+    uint64_t nnode_epoch() const noexcept { return pool_.epoch(); }
+    const void* nnode_domain_token() const noexcept { return pool_.domain_token(); }
+    nnode_identity nnode_identity_of(int handle) const noexcept {
+        return handle ? pool_.identity(handle)
+                      : nnode_identity{pool_.domain_token(), 0, 0};
+    }
     bool nnode_alive(int handle) const noexcept { return pool_.alive(handle); }
     const T& nnode_val(int handle) const { return pool_[handle].value; }
     int nnode_count(int handle) const { return handle ? pool_[handle].count : 0; }
@@ -752,15 +795,17 @@ class nset_fhq {
         : action_(move(action)) {}
     nset_fhq(C compare, A augment, L action = {})
         : compare_(move(compare)), augment_(move(augment)), action_(move(action)) {}
+    explicit nset_fhq(domain_type domain, C compare = {}, A augment = {}, L action = {})
+        : pool_(move(domain)), compare_(move(compare)), augment_(move(augment)), action_(move(action)) {}
     nset_fhq(initializer_list<T> values) {
         for (const T& value : values)
             ins(value);
     }
     nset_fhq(const nset_fhq& other)
-        : pool_(other.pool_), root_(other.root_), compare_(other.compare_), augment_(other.augment_),
+        : pool_(other.pool_.clone()), root_(other.root_), compare_(other.compare_), augment_(other.augment_),
           action_(other.action_) {}
     nset_fhq(nset_fhq&& other) noexcept(
-        is_nothrow_move_constructible_v<ni::nslot_pool<node>> && is_nothrow_move_constructible_v<C> &&
+        is_nothrow_move_constructible_v<domain_type> && is_nothrow_move_constructible_v<C> &&
         is_nothrow_move_constructible_v<A> && is_nothrow_move_constructible_v<L>)
         : pool_(move(other.pool_)), root_(exchange(other.root_, 0)), compare_(move(other.compare_)),
           augment_(move(other.augment_)), action_(move(other.action_)) {
@@ -768,7 +813,7 @@ class nset_fhq {
     }
     nset_fhq& operator=(const nset_fhq& other) {
         if (this != addressof(other)) {
-            pool_ = other.pool_;
+            pool_ = other.pool_.clone();
             root_ = other.root_;
             compare_ = other.compare_;
             augment_ = other.augment_;
@@ -778,7 +823,7 @@ class nset_fhq {
         return *this;
     }
     nset_fhq& operator=(nset_fhq&& other) noexcept(
-        is_nothrow_move_assignable_v<ni::nslot_pool<node>> && is_nothrow_move_assignable_v<C> &&
+        is_nothrow_move_assignable_v<domain_type> && is_nothrow_move_assignable_v<C> &&
         is_nothrow_move_assignable_v<A> && is_nothrow_move_assignable_v<L>) {
         if (this != addressof(other)) {
             pool_ = move(other.pool_);
@@ -799,7 +844,11 @@ class nset_fhq {
     }
     const A& augment() const noexcept { return augment_; }
     const L& action() const noexcept { return action_; }
-    node_view root() const { return node_view(this, root_, epoch_); }
+    domain_type domain() const { return pool_; }
+    bool same_domain(const nset_fhq& other) const noexcept {
+        return pool_.same_domain(other.pool_);
+    }
+    node_view root() const { return node_view(this, root_, pool_.epoch()); }
     template <class F> node_view walk(F&& decide) const {
         return nwalk(*this, forward<F>(decide));
     }
@@ -812,10 +861,11 @@ class nset_fhq {
 
     void reserve(int capacity) { pool_.reserve(capacity); }
     void clear() {
-        if (root_)
+        if (root_) {
+            int old_root = exchange(root_, 0);
+            release(old_root);
             touch();
-        pool_.clear();
-        root_ = 0;
+        }
     }
 
     // Apply a lazy action to the whole tree or to a node selected through the
@@ -887,6 +937,39 @@ class nset_fhq {
             touch();
         return removed;
     }
+
+    /**
+     * Consume `other` and join its ordered tree after this tree.  The owners must
+     * share one node domain, own disjoint roots, and use semantically equivalent
+     * comparator/augmentation/action state.  The strict boundary is checked as
+     * `max(*this) < min(other)`; equal keys are deliberately not silently merged.
+     * `other` is empty after success.  Expected complexity is O(log n).
+     */
+    void merge_from(nset_fhq&& other) {
+        npre(this != addressof(other));
+        npre(same_domain(other));
+        npre(ordered_before(other));
+        root_ = merge(root_, exchange(other.root_, 0));
+        touch();
+    }
+
+    /**
+     * Consume this owner and split it into `[key < value]` and `[key >= value]`.
+     * Both returned owners share the original domain and retain copies of the
+     * comparator/augmentation/action objects.  The source becomes empty.
+     */
+    pair<nset_fhq, nset_fhq> split_by(const T& value) && {
+        nset_fhq left(pool_, compare_, augment_, action_);
+        nset_fhq right(pool_, compare_, augment_, action_);
+        int left_root, right_root;
+        split(root_, value, left_root, right_root);
+        root_ = 0;
+        left.root_ = left_root;
+        right.root_ = right_root;
+        touch();
+        return {move(left), move(right)};
+    }
+
     int findi(const T& value) const {
         for (int handle = root_; handle;) {
             push(handle);
@@ -1102,15 +1185,17 @@ class nset_splay {
             : value(move(value)), size(count), count(count), aggregate(move(aggregate)) {}
     };
 
-    mutable ni::nslot_pool<node> pool_;
+  public:
+    using domain_type = nnode_domain<node>;
+
+  private:
+    mutable domain_type pool_;
     mutable int root_ = 0;
     [[no_unique_address]] C compare_{};
     [[no_unique_address]] A augment_{};
-    mutable uint64_t epoch_ = 1;
 
     void touch() const noexcept {
-        if (!++epoch_)
-            ++epoch_;
+        pool_.touch();
     }
     int size_of(int handle) const { return handle ? pool_[handle].size : 0; }
     void pull(int handle) const {
@@ -1177,8 +1262,98 @@ class nset_splay {
         return result ? nmaybe<T>(pool_[result].value) : nmaybe<T>{};
     }
 
+    void release(int handle) {
+        if (!handle)
+            return;
+        int left = pool_[handle].left, right = pool_[handle].right;
+        release(left);
+        release(right);
+        pool_.erase(handle);
+    }
+
+    int minimum_handle(int handle) const {
+        npre(handle);
+        while (pool_[handle].left)
+            handle = pool_[handle].left;
+        return handle;
+    }
+    int maximum_handle(int handle) const {
+        npre(handle);
+        while (pool_[handle].right)
+            handle = pool_[handle].right;
+        return handle;
+    }
+
+    // Split the BST into keys < value and keys >= value.  Parent links are repaired
+    // at every returned root; no type-level topology certificate is needed because
+    // the local recursive invariant is visible here beside the mutation.
+    void split_by_handle(int handle, const T& value, int& left, int& right) const {
+        if (!handle) {
+            left = right = 0;
+            return;
+        }
+        pool_[handle].parent = 0;
+        if (invoke(compare_, pool_[handle].value, value)) {
+            int child_left, child_right;
+            split_by_handle(pool_[handle].right, value, child_left, child_right);
+            pool_[handle].right = child_left;
+            if (child_left)
+                pool_[child_left].parent = handle;
+            pool_[handle].parent = 0;
+            pull(handle);
+            left = handle;
+            right = child_right;
+        } else {
+            int child_left, child_right;
+            split_by_handle(pool_[handle].left, value, child_left, child_right);
+            pool_[handle].left = child_right;
+            if (child_right)
+                pool_[child_right].parent = handle;
+            pool_[handle].parent = 0;
+            pull(handle);
+            left = child_left;
+            right = handle;
+        }
+        if (left)
+            pool_[left].parent = 0;
+        if (right)
+            pool_[right].parent = 0;
+    }
+
+    int join_ordered(int left, int right) const {
+        if (!left) {
+            if (right)
+                pool_[right].parent = 0;
+            return right;
+        }
+        if (!right) {
+            pool_[left].parent = 0;
+            return left;
+        }
+        root_ = left;
+        pool_[left].parent = 0;
+        int maximum = maximum_handle(left);
+        splay(maximum);
+        pool_[root_].right = right;
+        pool_[right].parent = root_;
+        pull(root_);
+        return root_;
+    }
+
+    bool ordered_before(const nset_splay& other) const {
+        if (!root_ || !other.root_)
+            return true;
+        return invoke(compare_, pool_[maximum_handle(root_)].value,
+                      other.pool_[other.minimum_handle(other.root_)].value);
+    }
+
     friend class nnode_view<nset_splay>;
-    uint64_t nnode_epoch() const noexcept { return epoch_; }
+    uint64_t nnode_epoch() const noexcept { return pool_.epoch(); }
+    const void* nnode_domain_token() const noexcept { return pool_.domain_token(); }
+    nnode_identity nnode_identity_of(int handle) const noexcept {
+        return handle ? pool_.identity(handle)
+                      : nnode_identity{pool_.domain_token(), 0, 0};
+    }
     bool nnode_alive(int handle) const noexcept { return pool_.alive(handle); }
     const T& nnode_val(int handle) const { return pool_[handle].value; }
     int nnode_count(int handle) const { return handle ? pool_[handle].count : 0; }
@@ -1188,6 +1363,7 @@ class nset_splay {
     }
     int nnode_left(int handle) const { return handle ? pool_[handle].left : 0; }
     int nnode_right(int handle) const { return handle ? pool_[handle].right : 0; }
+    int nnode_parent(int handle) const { return handle ? pool_[handle].parent : 0; }
 
   public:
     using value_type = T;
@@ -1201,14 +1377,16 @@ class nset_splay {
         requires(!same_as<C, A>)
         : augment_(move(augment)) {}
     nset_splay(C compare, A augment) : compare_(move(compare)), augment_(move(augment)) {}
+    explicit nset_splay(domain_type domain, C compare = {}, A augment = {})
+        : pool_(move(domain)), compare_(move(compare)), augment_(move(augment)) {}
     nset_splay(initializer_list<T> values) {
         for (const T& value : values)
             ins(value);
     }
     nset_splay(const nset_splay& other)
-        : pool_(other.pool_), root_(other.root_), compare_(other.compare_), augment_(other.augment_) {}
+        : pool_(other.pool_.clone()), root_(other.root_), compare_(other.compare_), augment_(other.augment_) {}
     nset_splay(nset_splay&& other) noexcept(
-        is_nothrow_move_constructible_v<ni::nslot_pool<node>> && is_nothrow_move_constructible_v<C> &&
+        is_nothrow_move_constructible_v<domain_type> && is_nothrow_move_constructible_v<C> &&
         is_nothrow_move_constructible_v<A>)
         : pool_(move(other.pool_)), root_(exchange(other.root_, 0)), compare_(move(other.compare_)),
           augment_(move(other.augment_)) {
@@ -1216,7 +1394,7 @@ class nset_splay {
     }
     nset_splay& operator=(const nset_splay& other) {
         if (this != addressof(other)) {
-            pool_ = other.pool_;
+            pool_ = other.pool_.clone();
             root_ = other.root_;
             compare_ = other.compare_;
             augment_ = other.augment_;
@@ -1225,7 +1403,7 @@ class nset_splay {
         return *this;
     }
     nset_splay& operator=(nset_splay&& other) noexcept(
-        is_nothrow_move_assignable_v<ni::nslot_pool<node>> && is_nothrow_move_assignable_v<C> &&
+        is_nothrow_move_assignable_v<domain_type> && is_nothrow_move_assignable_v<C> &&
         is_nothrow_move_assignable_v<A>) {
         if (this != addressof(other)) {
             pool_ = move(other.pool_);
@@ -1244,7 +1422,11 @@ class nset_splay {
         return !invoke(compare_, a, b) && !invoke(compare_, b, a);
     }
     const A& augment() const noexcept { return augment_; }
-    node_view root() const { return node_view(this, root_, epoch_); }
+    domain_type domain() const { return pool_; }
+    bool same_domain(const nset_splay& other) const noexcept {
+        return pool_.same_domain(other.pool_);
+    }
+    node_view root() const { return node_view(this, root_, pool_.epoch()); }
     template <class F> node_view walk(F&& decide) const {
         return nwalk(*this, forward<F>(decide));
     }
@@ -1257,10 +1439,11 @@ class nset_splay {
 
     void reserve(int capacity) { pool_.reserve(capacity); }
     void clear() {
-        if (root_)
+        if (root_) {
+            int old_root = exchange(root_, 0);
+            release(old_root);
             touch();
-        pool_.clear();
-        root_ = 0;
+        }
     }
     int findi(const T& value) const {
         int handle = root_, last = 0;
@@ -1364,6 +1547,39 @@ class nset_splay {
         int multiplicity = count(value);
         return multiplicity ? del(value, multiplicity) : 0;
     }
+
+    /**
+     * Consume `other` and join its ordered tree after this tree.  The owners must
+     * share one node domain, own disjoint roots, and use semantically equivalent
+     * comparator/augmentation state.  The strict boundary is checked as
+     * `max(*this) < min(other)`; equal keys are deliberately not silently merged.
+     * `other` is empty after success.  The join is amortized O(log n).
+     */
+    void merge_from(nset_splay&& other) {
+        npre(this != addressof(other));
+        npre(same_domain(other));
+        npre(ordered_before(other));
+        root_ = join_ordered(root_, exchange(other.root_, 0));
+        touch();
+    }
+
+    /**
+     * Consume this owner and split it into `[key < value]` and `[key >= value]`.
+     * Both returned owners share the original domain and retain copies of the
+     * comparator/augmentation objects.  The source becomes empty.
+     */
+    pair<nset_splay, nset_splay> split_by(const T& value) && {
+        nset_splay left(pool_, compare_, augment_);
+        nset_splay right(pool_, compare_, augment_);
+        int left_root, right_root;
+        split_by_handle(root_, value, left_root, right_root);
+        root_ = 0;
+        left.root_ = left_root;
+        right.root_ = right_root;
+        touch();
+        return {move(left), move(right)};
+    }
+
     int rank(const T& value) const {
         int handle = root_, last = 0, result = 0;
         while (handle) {
