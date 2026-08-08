@@ -142,6 +142,435 @@ template <class W = int> class ngraph_list {
     }
 };
 
+enum class ngraph_node_kind : unsigned char { vertex, arc };
+
+/**
+ * Resource record used by `ngraph_topology`.  Vertex and arc records deliberately
+ * share one `nnode_domain` so a node view can identify either kind without a second
+ * graph-specific view type.  `head/tail/degree` belong to a vertex; `from/to/next/prev`
+ * belong to an arc; link fields are resource handles, not dense public ids.  They are
+ * exposed only through a const `nnode_view` and must be changed by the owner methods.
+ */
+template <class W = int, class V = monostate> struct ngraph_node_record {
+    ngraph_node_kind kind;
+    int id;
+    int from = npos, to = npos;
+    int next = 0, prev = 0;
+    int head = 0, tail = 0, degree = 0;
+    W weight{};
+    optional<V> payload;
+
+    ngraph_node_record(ngraph_node_kind kind, int id, V payload)
+        : kind(kind), id(id), payload(move(payload)) {}
+    ngraph_node_record(ngraph_node_kind kind, int id, int from, int to, W weight)
+        : kind(kind), id(id), from(from), to(to), weight(move(weight)) {}
+};
+
+/**
+ * Resource-backed owning graph topology.  Dense vertex ids and public arc ids are
+ * kept as stable owner-side maps, while records live in one reusable node domain.
+ * The first version intentionally exposes directed append/erase/rewire operations;
+ * all of them publish one shared epoch after restoring the adjacency-chain and id-map
+ * invariants.  `neighbors()` and `arcs()` are borrowed enumerable projections and
+ * must not be retained across structural mutation.  Expected costs are O(1) for
+ * add/erase/rewire (apart from resource allocation), O(1) for degree/weight access,
+ * and O(outdegree) for find and adjacency enumeration.
+ *
+ * `V` is a vertex payload type and is value-initialized for the constructor's initial
+ * vertices.  Weight edits are not topology edits: existing node views remain current
+ * and see the new weight.  Public arc ids are never reused before clear(), which
+ * avoids a second ABA channel even though resource handles are recyclable.
+ */
+template <class W = int, class V = monostate> class ngraph_topology {
+  public:
+    using weight_type = W;
+    using vertex_value_type = V;
+    using value_type = ngraph_node_record<W, V>;
+    using info_type = monostate;
+    using record_type = value_type;
+    using domain_type = nnode_domain<value_type>;
+    using node_view = nnode_view<ngraph_topology>;
+
+  private:
+    domain_type pool_;
+    nvector<int> vertex_handles_;
+    nvector<int> arc_handles_;
+    int arc_count_ = 0;
+
+    static int checked_vertices(int vertices) {
+        npre(vertices >= 0);
+        return vertices;
+    }
+    static int checked_capacity(int vertices, int expected_edges) {
+        npre(expected_edges >= 0 && vertices <= INT_MAX - expected_edges);
+        return vertices + expected_edges;
+    }
+
+    void initialize(int vertices, int expected_edges) {
+        vertices = checked_vertices(vertices);
+        expected_edges = checked_vertices(expected_edges);
+        npre(vertex_handles_.len() == 0 && arc_handles_.len() == 0);
+        vertex_handles_.reserve(vertices);
+        arc_handles_.reserve(expected_edges);
+        pool_.reserve(checked_capacity(vertices, expected_edges));
+        for (int vertex = 0; vertex < vertices; ++vertex)
+            make_vertex(vertex, V{});
+        if (vertices)
+            touch();
+    }
+
+    void touch() noexcept { pool_.touch(); }
+
+    int vertex_handle(int vertex) const noexcept {
+        return 0 <= vertex && vertex < vertex_handles_.len() ? vertex_handles_[vertex] : 0;
+    }
+    int arc_handle(int id) const noexcept {
+        return 0 <= id && id < arc_handles_.len() ? arc_handles_[id] : 0;
+    }
+    bool active_arc(int id) const noexcept { return arc_handle(id) != 0; }
+
+    void make_vertex(int id, V payload) {
+        vertex_handles_.push(pool_.make(ngraph_node_record<W, V>(ngraph_node_kind::vertex, id,
+                                                                  move(payload))));
+    }
+
+    void link_arc(int handle) {
+        value_type& arc = pool_[handle];
+        npre(arc.kind == ngraph_node_kind::arc);
+        value_type& vertex = pool_[vertex_handles_[arc.from]];
+        arc.prev = vertex.tail;
+        arc.next = 0;
+        if (vertex.tail)
+            pool_[vertex.tail].next = handle;
+        else
+            vertex.head = handle;
+        vertex.tail = handle;
+        npre(vertex.degree < INT_MAX);
+        ++vertex.degree;
+    }
+
+    void unlink_arc(int handle) {
+        value_type& arc = pool_[handle];
+        npre(arc.kind == ngraph_node_kind::arc);
+        value_type& vertex = pool_[vertex_handles_[arc.from]];
+        if (arc.prev)
+            pool_[arc.prev].next = arc.next;
+        else
+            vertex.head = arc.next;
+        if (arc.next)
+            pool_[arc.next].prev = arc.prev;
+        else
+            vertex.tail = arc.prev;
+        npre(vertex.degree > 0);
+        --vertex.degree;
+        arc.next = arc.prev = 0;
+    }
+
+    int add0(int from, int to, W weight) {
+        npre(0 <= from && from < len() && 0 <= to && to < len());
+        npre(arc_handles_.len() < INT_MAX && arc_count_ < INT_MAX);
+        int id = arc_handles_.len();
+        int handle = pool_.make(
+            ngraph_node_record<W, V>(ngraph_node_kind::arc, id, from, to, move(weight)));
+        arc_handles_.push(handle);
+        link_arc(handle);
+        ++arc_count_;
+        return id;
+    }
+
+    friend class nnode_view<ngraph_topology>;
+    uint64_t nnode_epoch() const noexcept { return pool_.epoch(); }
+    const void* nnode_domain_token() const noexcept { return pool_.domain_token(); }
+    nnode_identity nnode_identity_of(int handle) const noexcept {
+        return handle ? pool_.identity(handle)
+                      : nnode_identity{pool_.domain_token(), 0, 0};
+    }
+    bool nnode_alive(int handle) const noexcept { return pool_.alive(handle); }
+    const value_type& nnode_val(int handle) const { return pool_[handle]; }
+    int nnode_count(int handle) const { return handle ? 1 : 0; }
+    int nnode_len(int handle) const { return handle ? 1 : 0; }
+    info_type nnode_info(int) const { return {}; }
+    int nnode_left(int) const noexcept { return 0; }
+    int nnode_right(int) const noexcept { return 0; }
+
+    template <bool Constant> struct adjacency_cursor {
+        using graph_type = conditional_t<Constant, const ngraph_topology, ngraph_topology>;
+        using weight_reference = conditional_t<Constant, const W&, W&>;
+        graph_type* graph;
+        int from, handle, index = 0;
+
+        bool ok() const noexcept { return handle != 0; }
+        nedge<weight_reference> val() const {
+            auto& arc = graph->pool_[handle];
+            return {from, arc.to, arc.id, arc.weight};
+        }
+        int idx() const noexcept { return index; }
+        void next() {
+            npre(handle);
+            handle = graph->pool_[handle].next;
+            ++index;
+        }
+    };
+
+    template <bool Constant> class adjacency_view {
+        using graph_type = conditional_t<Constant, const ngraph_topology, ngraph_topology>;
+        graph_type* graph_;
+        int vertex_;
+
+      public:
+        adjacency_view(graph_type* graph, int vertex) : graph_(graph), vertex_(vertex) {}
+        int len() const { return graph_->pool_[graph_->vertex_handles_[vertex_]].degree; }
+        bool empty() const { return !graph_->pool_[graph_->vertex_handles_[vertex_]].head; }
+        auto enumerate() const {
+            int handle = graph_->pool_[graph_->vertex_handles_[vertex_]].head;
+            return adjacency_cursor<Constant>{graph_, vertex_, handle};
+        }
+    };
+
+    template <bool Constant> struct arcs_cursor {
+        using graph_type = conditional_t<Constant, const ngraph_topology, ngraph_topology>;
+        using weight_reference = conditional_t<Constant, const W&, W&>;
+        graph_type* graph;
+        int id = 0, index = 0;
+
+        explicit arcs_cursor(graph_type* graph) : graph(graph) { seek(); }
+        void seek() {
+            while (id < graph->arc_handles_.len() && !graph->arc_handles_[id])
+                ++id;
+        }
+        bool ok() const noexcept { return id < graph->arc_handles_.len(); }
+        nedge<weight_reference> val() const {
+            auto& arc = graph->pool_[graph->arc_handles_[id]];
+            return {arc.from, arc.to, arc.id, arc.weight};
+        }
+        int idx() const noexcept { return index; }
+        void next() {
+            npre(ok());
+            ++id;
+            ++index;
+            seek();
+        }
+    };
+
+    template <bool Constant> class arcs_view {
+        using graph_type = conditional_t<Constant, const ngraph_topology, ngraph_topology>;
+        graph_type* graph_;
+
+      public:
+        explicit arcs_view(graph_type* graph) : graph_(graph) {}
+        int len() const noexcept { return graph_->arc_count_; }
+        bool empty() const noexcept { return !graph_->arc_count_; }
+        auto enumerate() const { return arcs_cursor<Constant>(graph_); }
+    };
+
+  public:
+    using edge = nedge<W>;
+    using view = adjacency_view<false>;
+    using const_view = adjacency_view<true>;
+
+    ngraph_topology() = default;
+    explicit ngraph_topology(int vertices, int expected_edges = 0) {
+        initialize(vertices, expected_edges);
+    }
+    explicit ngraph_topology(domain_type domain, int vertices = 0, int expected_edges = 0)
+        : pool_(move(domain)) {
+        initialize(vertices, expected_edges);
+    }
+
+    ngraph_topology(const ngraph_topology& other)
+        : pool_(other.pool_.clone()), vertex_handles_(other.vertex_handles_),
+          arc_handles_(other.arc_handles_), arc_count_(other.arc_count_) {}
+    ngraph_topology(ngraph_topology&& other) noexcept(
+        is_nothrow_move_constructible_v<domain_type> && is_nothrow_move_constructible_v<nvector<int>>)
+        : pool_(move(other.pool_)), vertex_handles_(move(other.vertex_handles_)),
+          arc_handles_(move(other.arc_handles_)), arc_count_(exchange(other.arc_count_, 0)) {
+        other.touch();
+    }
+    ngraph_topology& operator=(const ngraph_topology& other) {
+        if (this != addressof(other)) {
+            pool_ = other.pool_.clone();
+            vertex_handles_ = other.vertex_handles_;
+            arc_handles_ = other.arc_handles_;
+            arc_count_ = other.arc_count_;
+            touch();
+        }
+        return *this;
+    }
+    ngraph_topology& operator=(ngraph_topology&& other) noexcept(
+        is_nothrow_move_assignable_v<domain_type> && is_nothrow_move_assignable_v<nvector<int>>) {
+        if (this != addressof(other)) {
+            pool_ = move(other.pool_);
+            vertex_handles_ = move(other.vertex_handles_);
+            arc_handles_ = move(other.arc_handles_);
+            arc_count_ = exchange(other.arc_count_, 0);
+            touch();
+            other.touch();
+        }
+        return *this;
+    }
+
+    int len() const noexcept { return vertex_handles_.len(); }
+    bool empty() const noexcept { return !len(); }
+    int edges() const noexcept { return arc_count_; }
+    auto vertices() const { return nrange(len()); }
+    domain_type domain() const { return pool_; }
+    bool same_domain(const ngraph_topology& other) const noexcept {
+        return pool_.same_domain(other.pool_);
+    }
+
+    int add_vertex(V payload = V{}) {
+        npre(vertex_handles_.len() < INT_MAX);
+        int id = vertex_handles_.len();
+        make_vertex(id, move(payload));
+        touch();
+        return id;
+    }
+    V& vertex_value(int vertex) {
+        npre(0 <= vertex && vertex < len());
+        value_type& record = pool_[vertex_handles_[vertex]];
+        npre(record.kind == ngraph_node_kind::vertex && record.payload.has_value());
+        return *record.payload;
+    }
+    const V& vertex_value(int vertex) const {
+        npre(0 <= vertex && vertex < len());
+        const value_type& record = pool_[vertex_handles_[vertex]];
+        npre(record.kind == ngraph_node_kind::vertex && record.payload.has_value());
+        return *record.payload;
+    }
+    void set_vertex(int vertex, V payload) { vertex_value(vertex) = move(payload); }
+
+    int add(int from, int to, W weight = W{1}) {
+        int id = add0(from, to, move(weight));
+        touch();
+        return id;
+    }
+    pair<int, int> add2(int a, int b, const W& weight = W{1}) {
+        int forward = add0(a, b, W(weight));
+        int backward = add0(b, a, W(weight));
+        touch();
+        return {forward, backward};
+    }
+    bool erase(int id) {
+        int handle = arc_handle(id);
+        if (!handle)
+            return false;
+        unlink_arc(handle);
+        pool_.erase(handle);
+        arc_handles_[id] = 0;
+        --arc_count_;
+        touch();
+        return true;
+    }
+    bool del(int id) { return erase(id); }
+    bool rewire(int id, int from, int to) {
+        int handle = arc_handle(id);
+        if (!handle)
+            return false;
+        npre(0 <= from && from < len() && 0 <= to && to < len());
+        value_type& arc = pool_[handle];
+        if (arc.from == from && arc.to == to)
+            return true;
+        unlink_arc(handle);
+        arc.from = from;
+        arc.to = to;
+        link_arc(handle);
+        touch();
+        return true;
+    }
+    void clear_edges() {
+        if (!arc_count_)
+            return;
+        for (int id = 0; id < arc_handles_.len(); ++id) {
+            int handle = arc_handles_[id];
+            if (!handle)
+                continue;
+            unlink_arc(handle);
+            pool_.erase(handle);
+            arc_handles_[id] = 0;
+        }
+        arc_count_ = 0;
+        touch();
+    }
+    void clear() {
+        if (!len() && !arc_count_ && arc_handles_.empty())
+            return;
+        for (int id = 0; id < arc_handles_.len(); ++id) {
+            int handle = arc_handles_[id];
+            if (!handle)
+                continue;
+            unlink_arc(handle);
+            pool_.erase(handle);
+        }
+        for (int index = 0; index < vertex_handles_.len(); ++index)
+            pool_.erase(vertex_handles_[index]);
+        vertex_handles_.clear();
+        arc_handles_.clear();
+        arc_count_ = 0;
+        touch();
+    }
+
+    node_view vertex_node(int vertex) const {
+        npre(0 <= vertex && vertex < len());
+        return node_view(this, vertex_handles_[vertex], pool_.epoch());
+    }
+    node_view arc_node(int id) const {
+        int handle = arc_handle(id);
+        npre(handle);
+        return node_view(this, handle, pool_.epoch());
+    }
+
+    adjacency_view<false> neighbors(int vertex) {
+        npre(0 <= vertex && vertex < len());
+        return {this, vertex};
+    }
+    adjacency_view<true> neighbors(int vertex) const {
+        npre(0 <= vertex && vertex < len());
+        return {this, vertex};
+    }
+    adjacency_view<false> operator[](int vertex) & { return neighbors(vertex); }
+    adjacency_view<true> operator[](int vertex) const& { return neighbors(vertex); }
+    adjacency_view<false> operator[](int) && = delete;
+    adjacency_view<true> operator[](int) const&& = delete;
+    adjacency_view<false> from(int vertex) & { return neighbors(vertex); }
+    adjacency_view<true> from(int vertex) const& { return neighbors(vertex); }
+    adjacency_view<false> from(int) && = delete;
+    adjacency_view<true> from(int) const&& = delete;
+
+    int degree(int vertex) const { return neighbors(vertex).len(); }
+    int find(int from, int to, int fallback = npos) const {
+        npre(0 <= from && from < len() && 0 <= to && to < len());
+        nfor(edge, neighbors(from))
+            if (edge.to == to)
+                return edge.id;
+        return fallback;
+    }
+    bool has(int from, int to) const { return find(from, to) != npos; }
+    W* weight(int id) {
+        int handle = arc_handle(id);
+        return handle ? addressof(pool_[handle].weight) : nullptr;
+    }
+    const W* weight(int id) const {
+        int handle = arc_handle(id);
+        return handle ? addressof(pool_[handle].weight) : nullptr;
+    }
+    W weight(int id, W fallback) const {
+        const W* value = weight(id);
+        return value ? *value : move(fallback);
+    }
+    bool set(int id, W weight) {
+        int handle = arc_handle(id);
+        if (!handle)
+            return false;
+        pool_[handle].weight = move(weight);
+        return true;
+    }
+
+    auto arcs() & { return arcs_view<false>(this); }
+    auto arcs() const& { return arcs_view<true>(this); }
+    auto arcs() && = delete;
+    auto arcs() const&& = delete;
+};
+
 // Owning forward-star graph.  Edge handles are representation details and may change
 // on rebuild; neighbor iteration is directed and permits parallel arcs.
 template <class W = int> class ngraph_forward {

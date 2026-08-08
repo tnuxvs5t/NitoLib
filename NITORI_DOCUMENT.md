@@ -4466,6 +4466,22 @@ kind(vertex/arc)、from/to、next/prev、public id、edge weight、可选 vertex
 `nnode_view<Owner>`；不公开第二套图节点对象。图的 `nnode_view` 不承诺 `left/right`，邻接
 遍历仍是 enumerable cursor，避免把“资源链接”误当成“树结构”。
 
+V3-2 的第一份实现是 `ngraph_topology<W,V>`。它保留 dense vertex id，并让弧的 public id
+在 owner 的 `clear()` 之前单调增长；`erase()` 和 `clear_edges()` 只留下 id tombstone，因而
+新弧不会意外继承旧弧的 public id。邻接链按 `add()`/`rewire()` 完成交易后的尾插顺序枚举，
+`arcs()` 按 public id 顺序跳过 tombstone；平行弧和自环是合法资源，算法是否接受它们仍由
+具体算法的原有契约决定。`weight/set` 和 `vertex_value/set_vertex` 只改记录，不推进 topology
+epoch；`add/add2/erase/rewire/add_vertex/clear_edges/clear` 在恢复链表、degree、弧计数和
+owner 映射后各推进一次共享 epoch。共享 domain 的 owner 可以互相借用资源域，但一次结构
+交易会让同域的旧 `nnode_view` 全部失效；`clear()` 只回收当前 topology 自己持有的记录，
+不会调用会清空其他 owner 资源的 `nnode_domain::clear()`。
+
+因此它可以直接实例化现有 `ngraph_like` 算法，也可以由 `ngraph_csr` 物化为独立的 immutable
+compact projection。结构操作的链维护、id 映射和资源回收均为摊销 O(1)，`degree/weight` 为
+O(1)，单点 `find` 和邻接枚举为 O(outdegree)；`arcs()` 的跳过 tombstone 使一次完整枚举为
+O(public-id 上界)，这是稳定 id 换取的明确成本。该后端是新增能力，不替换
+`ngraph_list`/`ngraph_forward`/`ngraph_csr`，也不改变它们的插入顺序、edge id 或低常数语义。
+
 #### 19.8.4 树与既有 DS 的接合
 
 `ntree_layout` 不能被删除或偷偷改成另一种字段语义。它继续是从任意 `ngraph_like` 得到
@@ -4503,7 +4519,7 @@ epoch：`same_domain` 仍然必须为真才可转移资源，scope 不能授权�
 |---|---|---|
 | V3-0 | 已完成基线：node domain、FHQ domain、五类 segment merge | 现有全库、audit、两 profile sanitizer |
 | V3-1 | 抽出 `nnode_view`/`nseg_node` 共用的 identity/epoch/generation 检查；评估 scope token，暂不引入未接入 owner 的空壳 | 固定 stale/ABA/move/copy 测试；无公共签名回归 |
-| V3-2 | 资源化 owning graph topology；先做 node identity、邻接链和只读枚举 | graph topology fixed/property/death；list/forward/CSR differential |
+| V3-2 | 资源化 owning graph topology；先做 node identity、邻接链和只读枚举 | `graph_topology` fixed/property/death；list/forward/CSR differential |
 | V3-3 | 让 `ngraph_forward` 以兼容 facade 接入资源层；锁定 edge id、顺序、权值修改语义 | 旧 graph/compat 全测；随机 add/weight/reverse/narcs 对拍；ASan/UBSan |
 | V3-4 | 把 `ntree_layout` 变成兼容投影并增加 rooted tree/forest owner | 连通/无环/对称/root/order death；LCA/HLD/reroot differential |
 | V3-5 | 组件拆并与动态森林底座：FHQ Euler 序列 + 既有 segment family；先实现可验证 link/cut 子集 | vector oracle、字符串非交换聚合、跨组件 merge/split、stale view death |
