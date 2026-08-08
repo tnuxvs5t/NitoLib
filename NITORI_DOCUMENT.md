@@ -4370,26 +4370,165 @@ forest 的理由。引擎只拥有 split/merge、priority、size、parent、pool
 
 ### 19.8 Nitori v3 图论拓扑施工路线
 
-v3 的施工顺序不是把图论另做一套 `nview/nfunc`，而是沿已有基础能力向上装配：
+这一节是 v3 的长期施工合同。目标不是把所有后端改成同一个容器，而是像建塔一样把
+“位置/函数 → 资源/身份 → 可变结构 → 拓扑投影 → 图树算法”逐层装配。**已有 public API、
+后端、算法和能力不得删除**；新层先以兼容适配器存在，只有在独立证据证明语义、复杂度和
+常数都不退化后，才可以让旧入口改为委托实现。
+
+#### 19.8.1 不可退让的设计决定
 
 ```text
-nview / nfunc / nobject_holder / nindexed
-→ nresource_pool / nnode_domain
-→ nnode_identity / nnode_view
-→ DS engine（FHQ、动态/持久化线段树、线段树合并）
-→ 普通 ntree_layout 与图资源适配
-→ BFS/DFS、LCA、HLD、流、匹配及更高层算法
+统一资源身份和失效协议，不统一所有物理表示。
+复用 nview / nfunc / nobject_holder / nindexed / nenumerable，不新增图论专用的
+nview 或 nfunc。
+继续走自由策略路线；不建立 concept/trait 森林。
+所有数学、所有权、顺序、生命周期和复杂度前提写在依赖它们的局部注释中。
+图算法仍面向 ngraph_like；不能因为有资源后端就把 dense vertex id API 换掉。
 ```
 
-每一层都保留旧后端和旧 public API；统一层先作为兼容后端接入，等 fixed/property/death
-和 sanitizer 证据齐全后才迁移下一层。图论只复用资源遍历和处理基础，不重新发明图论
-专用 view/function 类型，也不以 concept 证书替代结构不变量。树的连通、无环、对称、
-rooted parent/order 等前提继续放在 `ntree_layout` 附近的注释和窄验证中。
+这里有一个必须说清的边界：`nnode_domain<T>` 的 `T` 是资源记录类型，
+`same_domain` 只表示同一份可变资源池，不能伪装成跨类型的万能句柄。FHQ 节点、动态线段
+树节点和图记录的物理类型可以不同；它们通过 `nnode_identity` 和 owner 级交易协议协作，
+而不是互相强转 handle。跨类型组合若需要共同失效，增加的只能是一个极小的共享 epoch
+token（暂名 `nnode_scope`），它只负责生命周期，不负责存储、算法或类型约束。
 
-跨树 merge/split、线段树结构合并和持久化共享是同一类问题：先确认 domain、root 所有权、
-节点是否可变以及聚合/action 的结合顺序，再选择 destructive merge、path-copy 或显式
-clone。任何新适配器都必须给出旧 API 对照、复杂度、边界和独立 property test，不能只因
-模板能实例化就宣称拓扑统一完成。
+#### 19.8.2 拓扑高塔
+
+```text
+L0  nview / nfunc / nindexed / nenumerable / nfor
+    └─ 只表达位置、映射和借用；不拥有图节点
+
+L1  nresource_pool<T> / nnode_domain<T> / nnode_identity / nnode_view<S>
+    └─ handle、generation、domain、epoch；不解释 T 是树节点还是图记录
+
+L2  既有结构引擎
+    ├─ nimplicit_fhq：同 domain 的 destructive split/merge、自由 policy
+    ├─ nset_fhq / nset_splay：有序树的分割、合法有序 join、增强信息
+    ├─ nseg / nlazyseg：定长叶的 pointwise merge
+    ├─ npersistent_seg：append-only version/path-copy/merge
+    └─ ndynamic_seg / ndynamic_lazyseg：稀疏 domain 的 destructive merge
+
+L3  资源化拓扑
+    ├─ graph topology record：vertex/arc 共用一个带标签的资源记录类型
+    ├─ owning topology：稳定 node identity、head/next/prev 和 topology epoch
+    ├─ borrowed topology projection：借用左值 owner，沿旧枚举协议访问
+    └─ immutable compact projection：CSR 保持独立的缓存友好表示
+
+L4  树/森林投影
+    ├─ ntree_layout：旧字段和旧 dense API 的兼容物化层
+    ├─ rooted tree/forest node owner：parent、children、component、Euler 顺序
+    ├─ nview/nfunc：vertex ↔ position ↔ payload 的投影
+    └─ FHQ/segment family：组件拆并、序列搬运、路径/子树数据维护
+
+L5  算法
+    └─ BFS/DFS、最短路、topo/SCC、LCA、HLD、reroot、MST、flow、matching 以及后续算法
+```
+
+`nnode_view<S>` 是 L1 的统一借用结构视图。它只承诺身份、当前性、`val()` 和 owner
+提供的资源字段；树的 `left/right/parent`、lazy 的 `tag`、区间边界等是分层特化，不能
+把图的邻接链硬解释成二叉树。必要时给 `nnode_view` 增加可选的局部访问器，但不复制一
+份 `ngraph_view`/`ngraph_func`。`nseg_node<S>` 保留现有公共类型和区间 carry 语义，内部
+只应与 `nnode_view` 共享身份/epoch 底座，不应再出现第三套 lifetime 检查。
+
+#### 19.8.3 图资源层的候选形态
+
+先实现一个资源化 owning topology（候选名 `ngraph_topology<W,V>`，名称和字段在测试后
+冻结），其资源记录至少包含：
+
+```text
+kind(vertex/arc)、from/to、next/prev、public id、edge weight、可选 vertex payload
+```
+
+顶点和弧使用同一个 `nnode_domain<record>`，所以一个 node view 可以表达两者；记录的
+`kind` 是数据，不是新的 view 类型。dense vertex id 和现有 edge id 仍由 owner 的
+`nvector<int>` 映射维护，用户不会被迫改用资源 handle。所有 `make/erase/rewire` 在一个
+公共操作中完成，恢复 head/next/prev、弧计数和 owner 根集合后只推进一次 topology epoch。
+
+后端的职责明确分开：
+
+| 后端 | 所有权/拓扑 | v3 处理 |
+|---|---|---|
+| `ngraph_forward` | owning、可追加、低常数 | 第一迁移目标；委托资源层但保留 `add/find/weight/set/arcs` 和 edge id |
+| `ngraph_list` | owning、朴素参考 | 保留为最小正确性 oracle；不为统一而牺牲可读性 |
+| `ngraph_csr` | owning、拓扑不可变、紧凑 | 保留独立 CSR；它是 immutable projection，不伪装成可删除资源池 |
+| `ngraph_view` | borrowed、按需邻接 | 原样复用 `nview`/枚举和 owner 生命周期契约 |
+| `ngraph_where_view` | borrowed、过滤 projection | 继续只保存左值 graph + predicate；不复制资源 |
+
+`narcs`、`nvertices`、`ngraph_where` 和所有算法继续通过 `nfor`/`nenumerate` 消除后端
+差异。资源节点访问只增加 `vertex_node/arc_node` 之类的 owner 入口并返回现有
+`nnode_view<Owner>`；不公开第二套图节点对象。图的 `nnode_view` 不承诺 `left/right`，邻接
+遍历仍是 enumerable cursor，避免把“资源链接”误当成“树结构”。
+
+#### 19.8.4 树与既有 DS 的接合
+
+`ntree_layout` 不能被删除或偷偷改成另一种字段语义。它继续是从任意 `ngraph_like` 得到
+的 dense、可检查、可读 layout；资源化树 owner 作为上层新增能力，必要时导出同样的
+`adjacency/parent/order`，让 `nlca`、`nhld`、`nreroot` 先零改动接入。
+
+组件拆并时严格按下面的矩阵选择操作，禁止直接复制裸 handle：
+
+| 结构 | 共享条件 | 正确交易 | 旧视图 |
+|---|---|---|---|
+| FHQ/splay | 同一节点记录 domain；root 不重叠 | `split_at/split_by` 或有序 `merge_from` | 共享 epoch 后失效 |
+| fixed/lazy seg | 长度和操作/action 语义相同 | 逐叶 `merge_from`，不是 root aggregate 合并 | 两 owner 旧 view 失效 |
+| persistent seg | 旧节点不可变 | version `merge`/path-copy；不 destructive erase | 旧版本保持 current |
+| dynamic seg | 同 domain、同 bounds、root 不重叠 | union-of-materialized-nodes 的 destructive merge | shared domain 旧 view 失效 |
+| graph/tree topology | 同资源 domain 或显式迁移 | 重连资源链并更新 owner root 集合；跨类型 DS 调其自身交易 | topology transaction 后统一失效 |
+
+树节点记录只保存能证明拓扑不变量所需的 parent/child/component/顺序字段；路径摘要、
+区间信息和 lazy tag 留在现有 FHQ/segment policy 中。vertex 到 Euler/HLD position、
+position 到 vertex、vertex 到 payload 的映射分别用 `nview`/`nfunc` 表达，不能用一个高阶
+graph facade 把 position、key、value 混成一个类型。
+
+跨多个 typed domain 时，`nnode_scope`（若窄测试证明确有必要）只提供共享 epoch：
+`same_domain` 仍然必须为真才可转移资源，scope 不能授权跨池 merge。一个 component
+transaction 要么调用各子结构的 `merge_from/split`，要么 clone/rebuild；任何只复制
+`int handle` 的实现都是错误的。
+
+#### 19.8.5 分阶段施工与回滚点
+
+每阶段独立提交，前一阶段的全套 checked/unsafe/property/death/sanitizer 证据必须保留：
+
+| 阶段 | 施工内容 | 必须新增的证据 |
+|---|---|---|
+| V3-0 | 已完成基线：node domain、FHQ domain、五类 segment merge | 现有全库、audit、两 profile sanitizer |
+| V3-1 | 抽出 `nnode_view`/`nseg_node` 共用的 identity/epoch 检查；评估并实现 scope token | 固定 stale/ABA/move/copy 测试；无公共签名回归 |
+| V3-2 | 资源化 owning graph topology；先做 node identity、邻接链和只读枚举 | graph topology fixed/property/death；list/forward/CSR differential |
+| V3-3 | 让 `ngraph_forward` 以兼容 facade 接入资源层；锁定 edge id、顺序、权值修改语义 | 旧 graph/compat 全测；随机 add/weight/reverse/narcs 对拍；ASan/UBSan |
+| V3-4 | 把 `ntree_layout` 变成兼容投影并增加 rooted tree/forest owner | 连通/无环/对称/root/order death；LCA/HLD/reroot differential |
+| V3-5 | 组件拆并与动态森林底座：FHQ Euler 序列 + 既有 segment family；先实现可验证 link/cut 子集 | vector oracle、字符串非交换聚合、跨组件 merge/split、stale view death |
+| V3-6 | 算法层适配：遍历/最短路/topo/SCC/MST、LCA/HLD/reroot、flow/matching 的资源入口 | 各后端结果等价；流/匹配独立 oracle；递归深度与容量边界测试 |
+| V3-7 | 性能和提交体验收口；只在 benchmark 证明不退化时替换更多后端 | deterministic benchmark、checksum、内存/节点计数、两 profile valid-input 等价 |
+
+阶段中止条件是“接口能实例化”之外的任何失败：若复杂度、edge 顺序、旧字段、view
+失效时机或非交换聚合无法对拍，就保留兼容后端，回滚当前适配器，不删旧实现。每个新类
+都必须在局部注释写出功能、前提、生命周期、顺序和复杂度；没有必要的语法能力不新增
+concept。
+
+#### 19.8.6 测试和发布门禁
+
+每个拓扑阶段至少补一组 fixed、一组 property/differential、一组 checked death；涉及
+资源或递归时再加 sanitizer 和 benchmark。固定种子必须覆盖空图、单点、平行弧、自环、
+不连通、父子单向/双向、极深链、星形树、非交换字符串聚合、跨 domain、移动后 owner、
+删除后 generation 复用和 pending lazy tag。
+
+阶段门禁固定为：
+
+```bash
+python3 tools/amalgamate.py
+python3 tools/amalgamate.py --check
+python3 tools/test.py <窄测试>
+python3 tools/test.py
+python3 tools/test.py --profile checked --sanitize
+python3 tools/test.py --profile unsafe --sanitize
+python3 tools/audit.py
+python3 tools/audit_authority.py
+python3 tools/bench.py
+```
+
+未实际执行的命令不得写成“已通过”。`Nitori.h` 和 `Nitori_unsafe.h` 始终由
+`tools/amalgamate.py` 生成；源码、测试和本文是唯一需要审查的变更，v3 施工不建立第二
+份文档、第二份头文件或隐藏兼容实现。
 
 ---
 
