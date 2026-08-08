@@ -1,7 +1,7 @@
 #include "common.hpp"
 
 int main() {
-    static_assert(nversion == 20000);
+    static_assert(nversion == 30000);
 #ifdef NITORI_X_TEST_UNSAFE
     static_assert(nunsafe);
 #else

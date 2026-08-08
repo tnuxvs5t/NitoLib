@@ -24,6 +24,11 @@ namespace ni {
 // nconv_auto checks those runtime preconditions before selecting NTT.
 template <class T> inline constexpr bool nstatic_modular = false;
 template <uint64_t Modulus> inline constexpr bool nstatic_modular<nmodint<Modulus>> = true;
+// This marker only rejects statically known composite moduli at overload selection;
+// transform-length and other runtime preconditions remain local npre contracts below.
+template <class T> inline constexpr bool nstatic_field = false;
+template <uint64_t Modulus>
+inline constexpr bool nstatic_field<nmodint<Modulus>> = nisprime(Modulus);
 
 inline uint64_t nprimitive_root(uint64_t modulus) {
     npre(2 <= modulus && modulus <= UINT32_MAX && nisprime(modulus));
@@ -114,10 +119,11 @@ template <nindexed A, nindexed B> auto nconv_naive(const A& a, const B& b) {
  * fits uint32, and the power-of-two transform length divides mod-1.  These preconditions
  * are checked at runtime because the deleted algebra trait system no longer certifies a field.
  */
+namespace ni {
 template <nindexed A, nindexed B>
-    requires ni::nstatic_modular<nindex_value_t<const A>> &&
+    requires nstatic_modular<nindex_value_t<const A>> &&
              same_as<nindex_value_t<const A>, nindex_value_t<const B>>
-auto nconv_ntt(const A& a, const B& b) {
+auto nconv_ntt_impl(const A& a, const B& b) {
     using mint = nindex_value_t<const A>;
     npre(nisprime(mint::mod()));
     if (!nlen(a) || !nlen(b))
@@ -138,6 +144,14 @@ auto nconv_ntt(const A& a, const B& b) {
     left.resize(size);
     return left;
 }
+} // namespace ni
+
+template <nindexed A, nindexed B>
+    requires ni::nstatic_field<nindex_value_t<const A>> &&
+             same_as<nindex_value_t<const A>, nindex_value_t<const B>>
+auto nconv_ntt(const A& a, const B& b) {
+    return ni::nconv_ntt_impl(a, b);
+}
 
 template <nindexed A, nindexed B> auto nconv_auto(const A& a, const B& b) {
     using T = nindex_value_t<const A>;
@@ -150,7 +164,7 @@ template <nindexed A, nindexed B> auto nconv_auto(const A& a, const B& b) {
                 int transform_size = nbitceil(int(size));
                 if (T::mod() <= UINT32_MAX && nisprime(T::mod()) &&
                     (T::mod() - 1) % uint64_t(transform_size) == 0)
-                    return nconv_ntt(a, b);
+                    return ni::nconv_ntt_impl(a, b);
             }
         }
     }
@@ -169,7 +183,10 @@ template <nindexed A> auto npoly_derivative(const A& polynomial) {
 
 // Formal integral and FPS inverse require every performed scalar division to be exact
 // and invertible.  Ordinary integer truncation and nonunits under composite moduli are invalid.
-template <nindexed A> auto npoly_integral(const A& polynomial) {
+template <nindexed A>
+    requires floating_point<nindex_value_t<const A>> ||
+             ni::nstatic_field<nindex_value_t<const A>>
+auto npoly_integral(const A& polynomial) {
     using T = nindex_value_t<const A>;
     npre(nlen(polynomial) < INT_MAX);
     nvector<T> result(nlen(polynomial) + 1);

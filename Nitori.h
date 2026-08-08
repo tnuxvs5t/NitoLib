@@ -37,7 +37,7 @@ namespace ni {
 
 #define nassert(expr) npre(expr)
 
-inline constexpr int nversion = 20000;
+inline constexpr int nversion = 30000;
 #if defined(NITORI_X_UNSAFE)
 inline constexpr bool nunsafe = true;
 #else
@@ -1255,6 +1255,18 @@ constexpr auto nwindows(A&& owner, int width, int step = 1) {
 }
 
 // ---- 05_ast.hpp ----
+// Stable node identity shared by every owner/view layer.  The domain owns the
+// meaning of the handle and generation; this record deliberately carries no tree
+// or graph semantics.
+struct nnode_identity {
+    const void* domain = nullptr;
+    int handle = 0;
+    uint64_t generation = 0;
+
+    explicit operator bool() const noexcept { return domain && handle && generation; }
+    friend bool operator==(const nnode_identity&, const nnode_identity&) = default;
+};
+
 enum class nbranch : unsigned char { left, take, right };
 
 /**
@@ -1263,24 +1275,35 @@ enum class nbranch : unsigned char { left, take, right };
  * operations invalidate old snapshots.  A zero handle is a valid empty subtree and
  * still supports count/len/info, but not val().
  */
-template <class S> class nnode {
+template <class S> class nnode_view {
   public:
     using value_type = typename S::value_type;
     using info_type = typename S::info_type;
 
   private:
     const S* owner_ = nullptr;
+    const void* domain_ = nullptr;
     int handle_ = 0;
     uint64_t epoch_ = 0;
 
-    constexpr nnode(const S* owner, int handle, uint64_t epoch)
-        : owner_(owner), handle_(handle), epoch_(epoch) {}
+    static const void* domain_token_of(const S* owner) noexcept {
+        if (!owner)
+            return nullptr;
+        if constexpr (requires(const S& value) { value.nnode_domain_token(); })
+            return owner->nnode_domain_token();
+        return owner;
+    }
+
+    nnode_view(const S* owner, int handle, uint64_t epoch)
+        : owner_(owner), domain_(domain_token_of(owner)), handle_(handle), epoch_(epoch) {}
     friend S;
 
   public:
-    constexpr nnode() = default;
+    constexpr nnode_view() = default;
 
-    bool current() const { return owner_ && epoch_ == owner_->nnode_epoch(); }
+    bool current() const {
+        return owner_ && domain_ == domain_token_of(owner_) && epoch_ == owner_->nnode_epoch();
+    }
     bool ok() const { return current() && handle_ && owner_->nnode_alive(handle_); }
     explicit operator bool() const { return ok(); }
 
@@ -1288,7 +1311,20 @@ template <class S> class nnode {
         npre(current());
         return *owner_;
     }
-    bool same_owner(const nnode& other) const noexcept { return owner_ == other.owner_; }
+    bool same_owner(const nnode_view& other) const noexcept { return owner_ == other.owner_; }
+    bool same_domain(const nnode_view& other) const noexcept {
+        return domain_ && domain_ == other.domain_;
+    }
+    nnode_identity identity() const {
+        npre(current());
+        if constexpr (requires(const S& owner, int handle) {
+                          owner.nnode_identity_of(handle);
+                      }) {
+            return owner_->nnode_identity_of(handle_);
+        } else {
+            return {domain_, handle_, handle_ ? 1u : 0u};
+        }
+    }
 
     const value_type& val() const {
         npre(ok());
@@ -1306,11 +1342,11 @@ template <class S> class nnode {
         npre(current());
         return owner_->nnode_info(handle_);
     }
-    nnode left() const {
+    nnode_view left() const {
         npre(current());
         return {owner_, owner_->nnode_left(handle_), epoch_};
     }
-    nnode right() const {
+    nnode_view right() const {
         npre(current());
         return {owner_, owner_->nnode_right(handle_), epoch_};
     }
@@ -1324,7 +1360,7 @@ template <class S> class nnode {
         requires requires(const Q& owner, int handle) {
             { owner.nnode_parent(handle) } -> convertible_to<int>;
         }
-    nnode parent() const {
+    nnode_view parent() const {
         npre(current());
         return {owner_, owner_->nnode_parent(handle_), epoch_};
     }
@@ -1349,6 +1385,11 @@ template <class S> class nnode {
         return owner_->nnode_state(handle_);
     }
 };
+
+// `nnode<S>` was the original public spelling.  Keep it as a source-compatible
+// alias while making the role explicit for new code: identity/lifetime belongs to
+// the owner domain, and this type is the borrowed structural view.
+template <class S> using nnode = nnode_view<S>;
 
 // Walk may start at an owner root or at any current subtree snapshot.  The decision
 // must eventually take a node or descend toward an existing child.
@@ -3392,12 +3433,22 @@ template <class T> class narena {
 };
 
 /**
- * Reusable 1-based handles over optional slots.  A handle is valid only while alive();
- * erase invalidates it and a later make may reuse the number for a different object.
- * The pool owns all slots and is not a stable-address arena.
+ * Owning reusable resource pool.
+ *
+ * Handles are positive integers and zero is the empty handle.  A deleted slot may
+ * be reused, but its generation changes; callers that keep a node identity must
+ * retain both the handle and the generation (or use a domain epoch).  References
+ * and pointers may be invalidated by growth, while integer handles are stable until
+ * erase/clear.  This is deliberately a small storage primitive: it does not impose
+ * a graph/tree meaning on T and it does not try to encode algebraic laws in types.
  */
-template <class T> class npool_dynamic {
-    vector<optional<T>> storage_;
+template <class T> class nresource_pool {
+    struct slot {
+        optional<T> value;
+        uint64_t generation = 1;
+    };
+
+    vector<slot> storage_;
     vector<int> free_;
     int live_ = 0;
 
@@ -3408,6 +3459,7 @@ template <class T> class npool_dynamic {
         return int(storage_.size());
     }
     bool empty() const noexcept { return live_ == 0; }
+
     void reserve(int capacity) {
         npre(capacity >= 0);
         storage_.reserve(size_t(capacity));
@@ -3415,45 +3467,54 @@ template <class T> class npool_dynamic {
     }
 
     template <class... A> int make(A&&... arguments) {
+        npre(live_ < INT_MAX);
         int handle;
         if (free_.empty()) {
             npre(storage_.size() < size_t(INT_MAX));
-            storage_.emplace_back(in_place, forward<A>(arguments)...);
+            storage_.emplace_back();
             handle = int(storage_.size());
+            storage_.back().value.emplace(forward<A>(arguments)...);
         } else {
             handle = free_.back();
             free_.pop_back();
-            storage_[handle - 1].emplace(forward<A>(arguments)...);
+            storage_[size_t(handle - 1)].value.emplace(forward<A>(arguments)...);
         }
         ++live_;
         return handle;
     }
-    void del(int handle) {
-        npre(get(handle) != nullptr);
-        storage_[handle - 1].reset();
+
+    bool alive(int handle) const noexcept {
+        return 0 < handle && handle <= int(storage_.size()) &&
+               storage_[size_t(handle - 1)].value.has_value();
+    }
+    uint64_t generation(int handle) const noexcept {
+        npre(0 < handle && handle <= int(storage_.size()));
+        return storage_[size_t(handle - 1)].generation;
+    }
+    T& operator[](int handle) {
+        npre(alive(handle));
+        return *storage_[size_t(handle - 1)].value;
+    }
+    const T& operator[](int handle) const {
+        npre(alive(handle));
+        return *storage_[size_t(handle - 1)].value;
+    }
+    T* get(int handle) noexcept {
+        return alive(handle) ? addressof(*storage_[size_t(handle - 1)].value) : nullptr;
+    }
+    const T* get(int handle) const noexcept {
+        return alive(handle) ? addressof(*storage_[size_t(handle - 1)].value) : nullptr;
+    }
+    void erase(int handle) {
+        npre(alive(handle));
+        slot& current = storage_[size_t(handle - 1)];
+        current.value.reset();
+        if (!++current.generation)
+            ++current.generation;
         free_.push_back(handle);
         --live_;
     }
-    T& operator[](int handle) {
-        T* value = get(handle);
-        npre(value != nullptr);
-        return *value;
-    }
-    const T& operator[](int handle) const {
-        const T* value = get(handle);
-        npre(value != nullptr);
-        return *value;
-    }
-    T* get(int handle) noexcept {
-        return 0 < handle && handle <= cap() && storage_[handle - 1]
-                   ? addressof(*storage_[handle - 1])
-                   : nullptr;
-    }
-    const T* get(int handle) const noexcept {
-        return 0 < handle && handle <= cap() && storage_[handle - 1]
-                   ? addressof(*storage_[handle - 1])
-                   : nullptr;
-    }
+    void del(int handle) { erase(handle); }
     void clear() noexcept {
         storage_.clear();
         free_.clear();
@@ -3461,7 +3522,106 @@ template <class T> class npool_dynamic {
     }
 };
 
-template <class T> using npool = npool_dynamic<T>;
+/**
+ * Shared node domain: one resource pool and one structural epoch for several
+ * cooperating owners.  Copying a domain shares it; `clone()` makes an independent
+ * deep copy for an owning container copy.  A domain does not know whether its T is a
+ * sequence node, ordered-tree node, segment node or graph record.  The owner above
+ * it decides which roots are live and calls touch() once per public mutation.
+ *
+ * The shared epoch is intentional.  A view into one owner becomes stale when another
+ * owner rewires the same domain, which is safer than allowing an old handle to look
+ * current after cross-owner merge/split.  `make/erase` are low-level allocation
+ * primitives and do not touch the epoch; higher layers publish one transaction with
+ * touch() after restoring all invariants.
+ */
+template <class T> class nnode_domain {
+    struct state {
+        nresource_pool<T> resources;
+        uint64_t epoch = 1;
+    };
+
+    shared_ptr<state> state_ = make_shared<state>();
+
+    state& writable() {
+        if (!state_)
+            state_ = make_shared<state>();
+        return *state_;
+    }
+  public:
+    nnode_domain() = default;
+    nnode_domain(const nnode_domain&) = default;
+    nnode_domain& operator=(const nnode_domain&) = default;
+    nnode_domain(nnode_domain&&) noexcept = default;
+    nnode_domain& operator=(nnode_domain&&) noexcept = default;
+
+    nnode_domain clone() const {
+        nnode_domain result;
+        if (state_)
+            result.state_ = make_shared<state>(*state_);
+        return result;
+    }
+
+    bool same_domain(const nnode_domain& other) const noexcept {
+        return state_.get() == other.state_.get();
+    }
+    const void* domain_token() const noexcept { return state_.get(); }
+    uint64_t epoch() const noexcept { return state_ ? state_->epoch : 0; }
+    void touch() noexcept {
+        // A moved-from domain has no live roots.  Keeping touch() noexcept lets
+        // owners invalidate the moved-from shell without allocating; its next
+        // actual allocation recreates the state through writable().
+        if (!state_)
+            return;
+        state& current = *state_;
+        if (!++current.epoch)
+            ++current.epoch;
+    }
+
+    int len() const noexcept { return state_ ? state_->resources.len() : 0; }
+    int cap() const noexcept { return state_ ? state_->resources.cap() : 0; }
+    bool empty() const noexcept { return len() == 0; }
+    void reserve(int capacity) { writable().resources.reserve(capacity); }
+    template <class... A> int make(A&&... arguments) {
+        return writable().resources.make(forward<A>(arguments)...);
+    }
+    bool alive(int handle) const noexcept { return state_ && state_->resources.alive(handle); }
+    uint64_t generation(int handle) const noexcept {
+        npre(state_);
+        return state_->resources.generation(handle);
+    }
+    nnode_identity identity(int handle) const noexcept {
+        npre(alive(handle));
+        return {domain_token(), handle, generation(handle)};
+    }
+    T& operator[](int handle) { return writable().resources[handle]; }
+    const T& operator[](int handle) const {
+        npre(state_);
+        return state_->resources[handle];
+    }
+    T* get(int handle) noexcept { return state_ ? state_->resources.get(handle) : nullptr; }
+    const T* get(int handle) const noexcept {
+        return state_ ? state_->resources.get(handle) : nullptr;
+    }
+    void erase(int handle) { writable().resources.erase(handle); }
+    void del(int handle) { erase(handle); }
+    void clear() {
+        writable().resources.clear();
+        touch();
+    }
+};
+
+template <class T> using nnode_pool = nnode_domain<T>;
+
+// The legacy names remain available, but all new storage code goes through the
+// resource primitive above so AST, ordered trees and future graph domains share one
+// lifetime/generation vocabulary.
+template <class T> using npool_dynamic = nresource_pool<T>;
+template <class T> using npool = nresource_pool<T>;
+
+namespace ni {
+template <class T> using nslot_pool = nresource_pool<T>;
+} // namespace ni
 
 // ---- 22_finite.hpp ----
 // Dense partition of [0,n).  Every element has exactly one class; numeric class ids
@@ -3607,63 +3767,6 @@ class nperm {
 
 // ---- 23_ordered.hpp ----
 namespace ni {
-// Internal reusable-handle pool.  Erased handles may be recycled, so node snapshots
-// rely on the owning tree epoch as well as handle liveness to reject stale identity.
-template <class T> class nslot_pool {
-    vector<optional<T>> slots_;
-    vector<int> free_;
-    int live_ = 0;
-
-  public:
-    int len() const noexcept { return live_; }
-    bool empty() const noexcept { return live_ == 0; }
-
-    void reserve(int capacity) {
-        npre(capacity >= 0);
-        slots_.reserve(size_t(capacity));
-        free_.reserve(size_t(capacity));
-    }
-
-    template <class... A> int make(A&&... args) {
-        npre(live_ < INT_MAX);
-        int handle;
-        if (free_.empty()) {
-            npre(slots_.size() < size_t(INT_MAX));
-            slots_.emplace_back(in_place, forward<A>(args)...);
-            handle = int(slots_.size());
-        } else {
-            handle = free_.back();
-            free_.pop_back();
-            slots_[handle - 1].emplace(forward<A>(args)...);
-        }
-        ++live_;
-        return handle;
-    }
-
-    bool alive(int handle) const noexcept {
-        return 0 < handle && handle <= int(slots_.size()) && slots_[handle - 1].has_value();
-    }
-    T& operator[](int handle) {
-        npre(alive(handle));
-        return *slots_[handle - 1];
-    }
-    const T& operator[](int handle) const {
-        npre(alive(handle));
-        return *slots_[handle - 1];
-    }
-    void erase(int handle) {
-        npre(alive(handle));
-        slots_[handle - 1].reset();
-        free_.push_back(handle);
-        --live_;
-    }
-    void clear() noexcept {
-        slots_.clear();
-        free_.clear();
-        live_ = 0;
-    }
-};
-
 template <class S> bool nordered_equal(const S& left, const S& right) {
     if (left.len() != right.len())
         return false;
@@ -3764,6 +3867,7 @@ template <class T, class P = nfhq_policy<T>> class nimplicit_fhq {
     using policy_type = P;
     using info_type = typename P::info_type;
     using state_type = typename P::state_type;
+    using domain_type = nnode_domain<node>;
     using node_view = nnode<nimplicit_fhq>;
 
     /**
@@ -3812,14 +3916,12 @@ template <class T, class P = nfhq_policy<T>> class nimplicit_fhq {
     };
 
   private:
-    mutable ni::nslot_pool<node> pool_;
+    mutable domain_type pool_;
     int root_ = 0;
     [[no_unique_address]] P policy_{};
-    mutable uint64_t epoch_ = 1;
 
     void touch() const noexcept {
-        if (!++epoch_)
-            ++epoch_;
+        pool_.touch();
     }
     int size_of(int handle) const { return handle ? pool_[handle].size : 0; }
     void make_root(int handle) {
@@ -3943,8 +4045,13 @@ template <class T, class P = nfhq_policy<T>> class nimplicit_fhq {
         pool_.erase(handle);
     }
 
-    friend class nnode<nimplicit_fhq>;
-    uint64_t nnode_epoch() const noexcept { return epoch_; }
+    friend class nnode_view<nimplicit_fhq>;
+    uint64_t nnode_epoch() const noexcept { return pool_.epoch(); }
+    const void* nnode_domain_token() const noexcept { return pool_.domain_token(); }
+    nnode_identity nnode_identity_of(int handle) const noexcept {
+        return handle ? pool_.identity(handle)
+                      : nnode_identity{pool_.domain_token(), 0, 0};
+    }
     bool nnode_alive(int handle) const noexcept { return pool_.alive(handle); }
     const T& nnode_val(int handle) const { return pool_[handle].value; }
     int nnode_count(int handle) const { return handle ? 1 : 0; }
@@ -3967,15 +4074,17 @@ template <class T, class P = nfhq_policy<T>> class nimplicit_fhq {
   public:
     nimplicit_fhq() = default;
     explicit nimplicit_fhq(P policy) : policy_(move(policy)) {}
+    explicit nimplicit_fhq(domain_type domain, P policy = {})
+        : pool_(move(domain)), policy_(move(policy)) {}
     nimplicit_fhq(initializer_list<T> values, P policy = {}) : policy_(move(policy)) {
         reserve(int(values.size()));
         for (const T& value : values)
             ins(len(), value);
     }
     nimplicit_fhq(const nimplicit_fhq& other)
-        : pool_(other.pool_), root_(other.root_), policy_(other.policy_) {}
+        : pool_(other.pool_.clone()), root_(other.root_), policy_(other.policy_) {}
     nimplicit_fhq(nimplicit_fhq&& other) noexcept(
-        is_nothrow_move_constructible_v<ni::nslot_pool<node>> &&
+        is_nothrow_move_constructible_v<domain_type> &&
         is_nothrow_move_constructible_v<P>)
         : pool_(move(other.pool_)), root_(exchange(other.root_, 0)),
           policy_(move(other.policy_)) {
@@ -3983,7 +4092,7 @@ template <class T, class P = nfhq_policy<T>> class nimplicit_fhq {
     }
     nimplicit_fhq& operator=(const nimplicit_fhq& other) {
         if (this != addressof(other)) {
-            pool_ = other.pool_;
+            pool_ = other.pool_.clone();
             root_ = other.root_;
             policy_ = other.policy_;
             touch();
@@ -3991,7 +4100,7 @@ template <class T, class P = nfhq_policy<T>> class nimplicit_fhq {
         return *this;
     }
     nimplicit_fhq& operator=(nimplicit_fhq&& other) noexcept(
-        is_nothrow_move_assignable_v<ni::nslot_pool<node>> &&
+        is_nothrow_move_assignable_v<domain_type> &&
         is_nothrow_move_assignable_v<P>) {
         if (this != addressof(other)) {
             pool_ = move(other.pool_);
@@ -4006,17 +4115,22 @@ template <class T, class P = nfhq_policy<T>> class nimplicit_fhq {
     int len() const { return size_of(root_); }
     bool empty() const noexcept { return root_ == 0; }
     const P& policy() const noexcept { return policy_; }
-    node_view root() const { return node_view(this, root_, epoch_); }
+    domain_type domain() const { return pool_; }
+    bool same_domain(const nimplicit_fhq& other) const noexcept {
+        return pool_.same_domain(other.pool_);
+    }
+    node_view root() const { return node_view(this, root_, pool_.epoch()); }
     template <class F> node_view walk(F&& decide) const {
         return nwalk(*this, forward<F>(decide));
     }
 
     void reserve(int capacity) { pool_.reserve(capacity); }
     void clear() {
-        if (root_)
+        if (root_) {
+            int old_root = exchange(root_, 0);
+            release(old_root);
             touch();
-        pool_.clear();
-        root_ = 0;
+        }
     }
 
     const T& operator[](int index) const { return pool_[find_handle(index)].value; }
@@ -4151,6 +4265,42 @@ template <class T, class P = nfhq_policy<T>> class nimplicit_fhq {
         split(ab, left, a, b);
         make_root(merge(merge(merge(a, c), b), d));
         touch();
+    }
+
+    /**
+     * Consume `other` and concatenate its sequence after this sequence.  Both
+     * owners must be handles into the same domain and the two roots must be
+     * disjoint; after success `other` is empty.  The policy type is shared by the
+     * class, so callers must also use equivalent policy state (augmentation and
+     * action semantics) for both owners.  This is a local semantic contract rather
+     * than a concept: custom policies remain fully free-form.
+     */
+    void merge_from(nimplicit_fhq&& other) {
+        npre(this != addressof(other));
+        npre(same_domain(other));
+        root_ = merge(root_, exchange(other.root_, 0));
+        touch();
+    }
+
+    nimplicit_fhq& operator+=(nimplicit_fhq&& other) {
+        merge_from(move(other));
+        return *this;
+    }
+
+    /**
+     * Consume this owner and return two owners sharing its node domain.  The source
+     * becomes empty; the returned roots are disjoint and retain the policy copy.
+     */
+    pair<nimplicit_fhq, nimplicit_fhq> split_at(int index) && {
+        npre(0 <= index && index <= len());
+        nimplicit_fhq left(pool_, policy_), right(pool_, policy_);
+        int left_root, right_root;
+        split(root_, index, left_root, right_root);
+        root_ = 0;
+        left.root_ = left_root;
+        right.root_ = right_root;
+        touch();
+        return {move(left), move(right)};
     }
 
     struct cursor {
@@ -4331,7 +4481,7 @@ class nset_fhq {
         return removed;
     }
 
-    friend class nnode<nset_fhq>;
+    friend class nnode_view<nset_fhq>;
     uint64_t nnode_epoch() const noexcept { return epoch_; }
     bool nnode_alive(int handle) const noexcept { return pool_.alive(handle); }
     const T& nnode_val(int handle) const { return pool_[handle].value; }
@@ -4795,7 +4945,7 @@ class nset_splay {
         return result ? nmaybe<T>(pool_[result].value) : nmaybe<T>{};
     }
 
-    friend class nnode<nset_splay>;
+    friend class nnode_view<nset_splay>;
     uint64_t nnode_epoch() const noexcept { return epoch_; }
     bool nnode_alive(int handle) const noexcept { return pool_.alive(handle); }
     const T& nnode_val(int handle) const { return pool_[handle].value; }
@@ -11561,6 +11711,11 @@ namespace ni {
 // nconv_auto checks those runtime preconditions before selecting NTT.
 template <class T> inline constexpr bool nstatic_modular = false;
 template <uint64_t Modulus> inline constexpr bool nstatic_modular<nmodint<Modulus>> = true;
+// This marker only rejects statically known composite moduli at overload selection;
+// transform-length and other runtime preconditions remain local npre contracts below.
+template <class T> inline constexpr bool nstatic_field = false;
+template <uint64_t Modulus>
+inline constexpr bool nstatic_field<nmodint<Modulus>> = nisprime(Modulus);
 
 inline uint64_t nprimitive_root(uint64_t modulus) {
     npre(2 <= modulus && modulus <= UINT32_MAX && nisprime(modulus));
@@ -11651,10 +11806,11 @@ template <nindexed A, nindexed B> auto nconv_naive(const A& a, const B& b) {
  * fits uint32, and the power-of-two transform length divides mod-1.  These preconditions
  * are checked at runtime because the deleted algebra trait system no longer certifies a field.
  */
+namespace ni {
 template <nindexed A, nindexed B>
-    requires ni::nstatic_modular<nindex_value_t<const A>> &&
+    requires nstatic_modular<nindex_value_t<const A>> &&
              same_as<nindex_value_t<const A>, nindex_value_t<const B>>
-auto nconv_ntt(const A& a, const B& b) {
+auto nconv_ntt_impl(const A& a, const B& b) {
     using mint = nindex_value_t<const A>;
     npre(nisprime(mint::mod()));
     if (!nlen(a) || !nlen(b))
@@ -11675,6 +11831,14 @@ auto nconv_ntt(const A& a, const B& b) {
     left.resize(size);
     return left;
 }
+} // namespace ni
+
+template <nindexed A, nindexed B>
+    requires ni::nstatic_field<nindex_value_t<const A>> &&
+             same_as<nindex_value_t<const A>, nindex_value_t<const B>>
+auto nconv_ntt(const A& a, const B& b) {
+    return ni::nconv_ntt_impl(a, b);
+}
 
 template <nindexed A, nindexed B> auto nconv_auto(const A& a, const B& b) {
     using T = nindex_value_t<const A>;
@@ -11687,7 +11851,7 @@ template <nindexed A, nindexed B> auto nconv_auto(const A& a, const B& b) {
                 int transform_size = nbitceil(int(size));
                 if (T::mod() <= UINT32_MAX && nisprime(T::mod()) &&
                     (T::mod() - 1) % uint64_t(transform_size) == 0)
-                    return nconv_ntt(a, b);
+                    return ni::nconv_ntt_impl(a, b);
             }
         }
     }
@@ -11706,7 +11870,10 @@ template <nindexed A> auto npoly_derivative(const A& polynomial) {
 
 // Formal integral and FPS inverse require every performed scalar division to be exact
 // and invertible.  Ordinary integer truncation and nonunits under composite moduli are invalid.
-template <nindexed A> auto npoly_integral(const A& polynomial) {
+template <nindexed A>
+    requires floating_point<nindex_value_t<const A>> ||
+             ni::nstatic_field<nindex_value_t<const A>>
+auto npoly_integral(const A& polynomial) {
     using T = nindex_value_t<const A>;
     npre(nlen(polynomial) < INT_MAX);
     nvector<T> result(nlen(polynomial) + 1);

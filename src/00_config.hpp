@@ -32,7 +32,7 @@ namespace ni {
 
 #define nassert(expr) npre(expr)
 
-inline constexpr int nversion = 20000;
+inline constexpr int nversion = 30000;
 #if defined(NITORI_X_UNSAFE)
 inline constexpr bool nunsafe = true;
 #else

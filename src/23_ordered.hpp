@@ -1,61 +1,4 @@
 namespace ni {
-// Internal reusable-handle pool.  Erased handles may be recycled, so node snapshots
-// rely on the owning tree epoch as well as handle liveness to reject stale identity.
-template <class T> class nslot_pool {
-    vector<optional<T>> slots_;
-    vector<int> free_;
-    int live_ = 0;
-
-  public:
-    int len() const noexcept { return live_; }
-    bool empty() const noexcept { return live_ == 0; }
-
-    void reserve(int capacity) {
-        npre(capacity >= 0);
-        slots_.reserve(size_t(capacity));
-        free_.reserve(size_t(capacity));
-    }
-
-    template <class... A> int make(A&&... args) {
-        npre(live_ < INT_MAX);
-        int handle;
-        if (free_.empty()) {
-            npre(slots_.size() < size_t(INT_MAX));
-            slots_.emplace_back(in_place, forward<A>(args)...);
-            handle = int(slots_.size());
-        } else {
-            handle = free_.back();
-            free_.pop_back();
-            slots_[handle - 1].emplace(forward<A>(args)...);
-        }
-        ++live_;
-        return handle;
-    }
-
-    bool alive(int handle) const noexcept {
-        return 0 < handle && handle <= int(slots_.size()) && slots_[handle - 1].has_value();
-    }
-    T& operator[](int handle) {
-        npre(alive(handle));
-        return *slots_[handle - 1];
-    }
-    const T& operator[](int handle) const {
-        npre(alive(handle));
-        return *slots_[handle - 1];
-    }
-    void erase(int handle) {
-        npre(alive(handle));
-        slots_[handle - 1].reset();
-        free_.push_back(handle);
-        --live_;
-    }
-    void clear() noexcept {
-        slots_.clear();
-        free_.clear();
-        live_ = 0;
-    }
-};
-
 template <class S> bool nordered_equal(const S& left, const S& right) {
     if (left.len() != right.len())
         return false;
@@ -156,6 +99,7 @@ template <class T, class P = nfhq_policy<T>> class nimplicit_fhq {
     using policy_type = P;
     using info_type = typename P::info_type;
     using state_type = typename P::state_type;
+    using domain_type = nnode_domain<node>;
     using node_view = nnode<nimplicit_fhq>;
 
     /**
@@ -204,14 +148,12 @@ template <class T, class P = nfhq_policy<T>> class nimplicit_fhq {
     };
 
   private:
-    mutable ni::nslot_pool<node> pool_;
+    mutable domain_type pool_;
     int root_ = 0;
     [[no_unique_address]] P policy_{};
-    mutable uint64_t epoch_ = 1;
 
     void touch() const noexcept {
-        if (!++epoch_)
-            ++epoch_;
+        pool_.touch();
     }
     int size_of(int handle) const { return handle ? pool_[handle].size : 0; }
     void make_root(int handle) {
@@ -335,8 +277,13 @@ template <class T, class P = nfhq_policy<T>> class nimplicit_fhq {
         pool_.erase(handle);
     }
 
-    friend class nnode<nimplicit_fhq>;
-    uint64_t nnode_epoch() const noexcept { return epoch_; }
+    friend class nnode_view<nimplicit_fhq>;
+    uint64_t nnode_epoch() const noexcept { return pool_.epoch(); }
+    const void* nnode_domain_token() const noexcept { return pool_.domain_token(); }
+    nnode_identity nnode_identity_of(int handle) const noexcept {
+        return handle ? pool_.identity(handle)
+                      : nnode_identity{pool_.domain_token(), 0, 0};
+    }
     bool nnode_alive(int handle) const noexcept { return pool_.alive(handle); }
     const T& nnode_val(int handle) const { return pool_[handle].value; }
     int nnode_count(int handle) const { return handle ? 1 : 0; }
@@ -359,15 +306,17 @@ template <class T, class P = nfhq_policy<T>> class nimplicit_fhq {
   public:
     nimplicit_fhq() = default;
     explicit nimplicit_fhq(P policy) : policy_(move(policy)) {}
+    explicit nimplicit_fhq(domain_type domain, P policy = {})
+        : pool_(move(domain)), policy_(move(policy)) {}
     nimplicit_fhq(initializer_list<T> values, P policy = {}) : policy_(move(policy)) {
         reserve(int(values.size()));
         for (const T& value : values)
             ins(len(), value);
     }
     nimplicit_fhq(const nimplicit_fhq& other)
-        : pool_(other.pool_), root_(other.root_), policy_(other.policy_) {}
+        : pool_(other.pool_.clone()), root_(other.root_), policy_(other.policy_) {}
     nimplicit_fhq(nimplicit_fhq&& other) noexcept(
-        is_nothrow_move_constructible_v<ni::nslot_pool<node>> &&
+        is_nothrow_move_constructible_v<domain_type> &&
         is_nothrow_move_constructible_v<P>)
         : pool_(move(other.pool_)), root_(exchange(other.root_, 0)),
           policy_(move(other.policy_)) {
@@ -375,7 +324,7 @@ template <class T, class P = nfhq_policy<T>> class nimplicit_fhq {
     }
     nimplicit_fhq& operator=(const nimplicit_fhq& other) {
         if (this != addressof(other)) {
-            pool_ = other.pool_;
+            pool_ = other.pool_.clone();
             root_ = other.root_;
             policy_ = other.policy_;
             touch();
@@ -383,7 +332,7 @@ template <class T, class P = nfhq_policy<T>> class nimplicit_fhq {
         return *this;
     }
     nimplicit_fhq& operator=(nimplicit_fhq&& other) noexcept(
-        is_nothrow_move_assignable_v<ni::nslot_pool<node>> &&
+        is_nothrow_move_assignable_v<domain_type> &&
         is_nothrow_move_assignable_v<P>) {
         if (this != addressof(other)) {
             pool_ = move(other.pool_);
@@ -398,17 +347,22 @@ template <class T, class P = nfhq_policy<T>> class nimplicit_fhq {
     int len() const { return size_of(root_); }
     bool empty() const noexcept { return root_ == 0; }
     const P& policy() const noexcept { return policy_; }
-    node_view root() const { return node_view(this, root_, epoch_); }
+    domain_type domain() const { return pool_; }
+    bool same_domain(const nimplicit_fhq& other) const noexcept {
+        return pool_.same_domain(other.pool_);
+    }
+    node_view root() const { return node_view(this, root_, pool_.epoch()); }
     template <class F> node_view walk(F&& decide) const {
         return nwalk(*this, forward<F>(decide));
     }
 
     void reserve(int capacity) { pool_.reserve(capacity); }
     void clear() {
-        if (root_)
+        if (root_) {
+            int old_root = exchange(root_, 0);
+            release(old_root);
             touch();
-        pool_.clear();
-        root_ = 0;
+        }
     }
 
     const T& operator[](int index) const { return pool_[find_handle(index)].value; }
@@ -543,6 +497,42 @@ template <class T, class P = nfhq_policy<T>> class nimplicit_fhq {
         split(ab, left, a, b);
         make_root(merge(merge(merge(a, c), b), d));
         touch();
+    }
+
+    /**
+     * Consume `other` and concatenate its sequence after this sequence.  Both
+     * owners must be handles into the same domain and the two roots must be
+     * disjoint; after success `other` is empty.  The policy type is shared by the
+     * class, so callers must also use equivalent policy state (augmentation and
+     * action semantics) for both owners.  This is a local semantic contract rather
+     * than a concept: custom policies remain fully free-form.
+     */
+    void merge_from(nimplicit_fhq&& other) {
+        npre(this != addressof(other));
+        npre(same_domain(other));
+        root_ = merge(root_, exchange(other.root_, 0));
+        touch();
+    }
+
+    nimplicit_fhq& operator+=(nimplicit_fhq&& other) {
+        merge_from(move(other));
+        return *this;
+    }
+
+    /**
+     * Consume this owner and return two owners sharing its node domain.  The source
+     * becomes empty; the returned roots are disjoint and retain the policy copy.
+     */
+    pair<nimplicit_fhq, nimplicit_fhq> split_at(int index) && {
+        npre(0 <= index && index <= len());
+        nimplicit_fhq left(pool_, policy_), right(pool_, policy_);
+        int left_root, right_root;
+        split(root_, index, left_root, right_root);
+        root_ = 0;
+        left.root_ = left_root;
+        right.root_ = right_root;
+        touch();
+        return {move(left), move(right)};
     }
 
     struct cursor {
@@ -723,7 +713,7 @@ class nset_fhq {
         return removed;
     }
 
-    friend class nnode<nset_fhq>;
+    friend class nnode_view<nset_fhq>;
     uint64_t nnode_epoch() const noexcept { return epoch_; }
     bool nnode_alive(int handle) const noexcept { return pool_.alive(handle); }
     const T& nnode_val(int handle) const { return pool_[handle].value; }
@@ -1187,7 +1177,7 @@ class nset_splay {
         return result ? nmaybe<T>(pool_[result].value) : nmaybe<T>{};
     }
 
-    friend class nnode<nset_splay>;
+    friend class nnode_view<nset_splay>;
     uint64_t nnode_epoch() const noexcept { return epoch_; }
     bool nnode_alive(int handle) const noexcept { return pool_.alive(handle); }
     const T& nnode_val(int handle) const { return pool_[handle].value; }

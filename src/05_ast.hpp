@@ -1,3 +1,15 @@
+// Stable node identity shared by every owner/view layer.  The domain owns the
+// meaning of the handle and generation; this record deliberately carries no tree
+// or graph semantics.
+struct nnode_identity {
+    const void* domain = nullptr;
+    int handle = 0;
+    uint64_t generation = 0;
+
+    explicit operator bool() const noexcept { return domain && handle && generation; }
+    friend bool operator==(const nnode_identity&, const nnode_identity&) = default;
+};
+
 enum class nbranch : unsigned char { left, take, right };
 
 /**
@@ -6,24 +18,35 @@ enum class nbranch : unsigned char { left, take, right };
  * operations invalidate old snapshots.  A zero handle is a valid empty subtree and
  * still supports count/len/info, but not val().
  */
-template <class S> class nnode {
+template <class S> class nnode_view {
   public:
     using value_type = typename S::value_type;
     using info_type = typename S::info_type;
 
   private:
     const S* owner_ = nullptr;
+    const void* domain_ = nullptr;
     int handle_ = 0;
     uint64_t epoch_ = 0;
 
-    constexpr nnode(const S* owner, int handle, uint64_t epoch)
-        : owner_(owner), handle_(handle), epoch_(epoch) {}
+    static const void* domain_token_of(const S* owner) noexcept {
+        if (!owner)
+            return nullptr;
+        if constexpr (requires(const S& value) { value.nnode_domain_token(); })
+            return owner->nnode_domain_token();
+        return owner;
+    }
+
+    nnode_view(const S* owner, int handle, uint64_t epoch)
+        : owner_(owner), domain_(domain_token_of(owner)), handle_(handle), epoch_(epoch) {}
     friend S;
 
   public:
-    constexpr nnode() = default;
+    constexpr nnode_view() = default;
 
-    bool current() const { return owner_ && epoch_ == owner_->nnode_epoch(); }
+    bool current() const {
+        return owner_ && domain_ == domain_token_of(owner_) && epoch_ == owner_->nnode_epoch();
+    }
     bool ok() const { return current() && handle_ && owner_->nnode_alive(handle_); }
     explicit operator bool() const { return ok(); }
 
@@ -31,7 +54,20 @@ template <class S> class nnode {
         npre(current());
         return *owner_;
     }
-    bool same_owner(const nnode& other) const noexcept { return owner_ == other.owner_; }
+    bool same_owner(const nnode_view& other) const noexcept { return owner_ == other.owner_; }
+    bool same_domain(const nnode_view& other) const noexcept {
+        return domain_ && domain_ == other.domain_;
+    }
+    nnode_identity identity() const {
+        npre(current());
+        if constexpr (requires(const S& owner, int handle) {
+                          owner.nnode_identity_of(handle);
+                      }) {
+            return owner_->nnode_identity_of(handle_);
+        } else {
+            return {domain_, handle_, handle_ ? 1u : 0u};
+        }
+    }
 
     const value_type& val() const {
         npre(ok());
@@ -49,11 +85,11 @@ template <class S> class nnode {
         npre(current());
         return owner_->nnode_info(handle_);
     }
-    nnode left() const {
+    nnode_view left() const {
         npre(current());
         return {owner_, owner_->nnode_left(handle_), epoch_};
     }
-    nnode right() const {
+    nnode_view right() const {
         npre(current());
         return {owner_, owner_->nnode_right(handle_), epoch_};
     }
@@ -67,7 +103,7 @@ template <class S> class nnode {
         requires requires(const Q& owner, int handle) {
             { owner.nnode_parent(handle) } -> convertible_to<int>;
         }
-    nnode parent() const {
+    nnode_view parent() const {
         npre(current());
         return {owner_, owner_->nnode_parent(handle_), epoch_};
     }
@@ -92,6 +128,11 @@ template <class S> class nnode {
         return owner_->nnode_state(handle_);
     }
 };
+
+// `nnode<S>` was the original public spelling.  Keep it as a source-compatible
+// alias while making the role explicit for new code: identity/lifetime belongs to
+// the owner domain, and this type is the borrowed structural view.
+template <class S> using nnode = nnode_view<S>;
 
 // Walk may start at an owner root or at any current subtree snapshot.  The decision
 // must eventually take a node or descend toward an existing child.

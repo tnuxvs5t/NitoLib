@@ -2,7 +2,7 @@
 
 > 从第一份可提交程序，到能从题目约束反推出合适工具的唯一权威文档
 >
-> 适用版本：`nversion == 20000`
+> 适用版本：`nversion == 30000`（Nitori v3）
 >
 > checked 头文件：`/home/tnuzy/NitoriSTL/Nitori.h`
 >
@@ -156,7 +156,7 @@ g++ -std=gnu++20 -O2 -Wall -Wextra \
 ```cpp
 #include "Nitori.h"
 
-static_assert(nversion == 20000);
+static_assert(nversion == 30000);
 static_assert(!nunsafe); // 训练阶段应该成立
 
 int main() {
@@ -561,7 +561,7 @@ python3 tools/audit.py
 
 | API | 含义 |
 |---|---|
-| `nversion` | 当前为 `20000` |
+| `nversion` | 当前为 `30000`（Nitori v3） |
 | `nunsafe` | 当前头文件是否为 unsafe profile |
 | `npos` | 不存在的位置/编号，值为 `-1` |
 | `nwide_t<T>` | integral → `__int128_t`，其他 → `long double` |
@@ -1603,6 +1603,39 @@ pool.cap();        // 已分配过的 handle 上界
 另有 `reserve/clear/empty`。删除后旧 handle 不是代际句柄：若槽位被复用，数值相同的
 旧 handle 会指向新对象；需要防 ABA 时由上层附加 generation。扩容也可能使已取得的
 `T&/T*` 失效，整数 handle 本身仍可重新查询。
+
+### 9.6.1 v3 节点底座：`nresource_pool`、`nnode_domain` 与 `nnode_view`
+
+v3 不再让每个树结构偷偷复制一份可复用节点池。底层分成三层，但不建立 concept
+森林：
+
+```text
+nresource_pool<T>   只负责槽位、回收、generation 和整数 handle
+nnode_domain<T>     负责共享资源池、结构 epoch 与跨 owner 生命周期
+nnode_view<S>       负责从 owner 读取领域字段的借用结构视图
+```
+
+`npool<T>`、`npool_dynamic<T>` 和有序树内部的 `ni::nslot_pool<T>` 仍保留，都是资源池的
+兼容名字。`nnode<S>` 仍可使用，但它现在是 `nnode_view<S>` 的旧拼写；新代码优先写出
+`nnode_view`，以免把“节点身份”和“节点访问界面”混成一个领域结构。
+
+资源池的 generation 解决槽位 ABA；节点视图还携带 owner/domain 与 epoch，因此跨 owner
+重连后旧视图会失效。共享 domain 的复制只是复制 domain handle，拥有型 DS 的复制构造
+必须显式 `clone()` 出独立资源，不能让两个逻辑容器意外共享同一棵树。
+
+隐式 FHQ 已接入这层底座：
+
+```cpp
+auto domain = nseq_fhq<int>{}.domain();
+nseq_fhq<int> left(domain), right(domain);
+left.merge_from(move(right));       // 同 domain，right 被消费
+auto [prefix, suffix] = move(left).split_at(k);
+```
+
+`merge_from` 要求两个 root 不重叠、策略语义等价且属于同一 domain；这些是调用点的
+数学/所有权契约，故意写在接口注释中而不是编码成一排 concepts。合并或切分会推进
+共享 epoch，使所有相关 owner 的旧视图一起失效。不同 domain 的 root 不能直接复制
+handle；必须 clone/rebuild 或显式迁移。
 
 ### 9.7 `npartition`
 
@@ -4275,6 +4308,29 @@ forest 的理由。引擎只拥有 split/merge、priority、size、parent、pool
 7. sanitizer；
 8. 文档和公共符号索引同步。
 
+### 19.8 Nitori v3 图论拓扑施工路线
+
+v3 的施工顺序不是把图论另做一套 `nview/nfunc`，而是沿已有基础能力向上装配：
+
+```text
+nview / nfunc / nobject_holder / nindexed
+→ nresource_pool / nnode_domain
+→ nnode_identity / nnode_view
+→ DS engine（FHQ、动态/持久化线段树、线段树合并）
+→ 普通 ntree_layout 与图资源适配
+→ BFS/DFS、LCA、HLD、流、匹配及更高层算法
+```
+
+每一层都保留旧后端和旧 public API；统一层先作为兼容后端接入，等 fixed/property/death
+和 sanitizer 证据齐全后才迁移下一层。图论只复用资源遍历和处理基础，不重新发明图论
+专用 view/function 类型，也不以 concept 证书替代结构不变量。树的连通、无环、对称、
+rooted parent/order 等前提继续放在 `ntree_layout` 附近的注释和窄验证中。
+
+跨树 merge/split、线段树结构合并和持久化共享是同一类问题：先确认 domain、root 所有权、
+节点是否可变以及聚合/action 的结合顺序，再选择 destructive merge、path-copy 或显式
+clone。任何新适配器都必须给出旧 API 对照、复杂度、边界和独立 property test，不能只因
+模板能实例化就宣称拓扑统一完成。
+
 ---
 
 ## 20. 旧版到 Nitori X 的迁移桥梁
@@ -4442,8 +4498,9 @@ nunique_compact nunique nsort_unique
 ```text
 nscan nsuffix_scan nfirst_true nlast_true nrollback
 nscratch narena npool_dynamic npool
+nresource_pool nnode_domain nnode_pool nnode_identity
 npartition npart npart_dense nperm
-nbranch nnode nwalk nempty_augment nempty_tag nfirst_prefix nlast_suffix
+nbranch nnode_view nnode nwalk nempty_augment nempty_tag nfirst_prefix nlast_suffix
 nfhq_policy nimplicit_fhq nseq_fhq
 nseg_node nseg_walk
 nset_fhq nset_splay nset_stl nset nbag

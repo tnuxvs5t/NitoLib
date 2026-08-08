@@ -33,6 +33,22 @@ int main() {
     ntest(pool.get(first_handle) == nullptr && pool.len() == 1);
     int recycled = pool.make(second_handle, 11);
     ntest(recycled == first_handle && pool[recycled].parent == second_handle);
+    uint64_t first_generation = pool.generation(recycled);
+    auto first_identity = nnode_identity{&pool, recycled, first_generation};
+    pool.del(recycled);
+    int recycled_again = pool.make(second_handle, 13);
+    ntest(recycled_again == recycled && pool.generation(recycled_again) != first_generation);
+    ntest(first_identity.generation != pool.generation(recycled_again));
     pool.clear();
     ntest(pool.empty() && pool.cap() == 0);
+
+    nnode_domain<record> domain;
+    int node = domain.make(npos, 21);
+    auto identity = domain.identity(node);
+    auto shared = domain;
+    ntest(identity && shared.same_domain(domain) && shared.identity(node) == identity);
+    domain.touch();
+    ntest(shared.epoch() == domain.epoch());
+    auto independent = domain.clone();
+    ntest(!independent.same_domain(domain));
 }

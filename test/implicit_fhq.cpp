@@ -196,4 +196,30 @@ int main() {
             ntest(tree.fold(l, r).best == expected.best);
         }
     }
+
+    auto shared_domain = nseq_fhq<int>{}.domain();
+    nseq_fhq<int> left(shared_domain), right(shared_domain);
+    auto plain_values = [](const nseq_fhq<int>& sequence) {
+        vector<int> result;
+        nfor(value, sequence)
+            result.push_back(value);
+        return result;
+    };
+    left.push(1);
+    left.push(2);
+    right.push(3);
+    right.push(4);
+    auto left_before_merge = left.root();
+    auto right_before_merge = right.root();
+    ntest(left.same_domain(right) && left.root().same_domain(right.root()));
+    left.merge_from(move(right));
+    ntest(plain_values(left) == vector<int>({1, 2, 3, 4}) && right.empty());
+    ntest(!left_before_merge.current() && !right_before_merge.current());
+
+    auto pieces = move(left).split_at(2);
+    ntest(pieces.first.same_domain(pieces.second));
+    ntest(plain_values(pieces.first) == vector<int>({1, 2}));
+    ntest(plain_values(pieces.second) == vector<int>({3, 4}));
+    pieces.first.merge_from(move(pieces.second));
+    ntest(plain_values(pieces.first) == vector<int>({1, 2, 3, 4}) && pieces.second.empty());
 }

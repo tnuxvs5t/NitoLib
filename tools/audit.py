@@ -32,7 +32,7 @@ def isolation_gate() -> None:
 
 
 def include_gate(header: str, macro: str) -> None:
-    source = f'#include "{header}"\nstatic_assert({macro});\nint main(){{return nversion!=20000;}}\n'
+    source = f'#include "{header}"\nstatic_assert({macro});\nint main(){{return nversion!=30000;}}\n'
     run("g++", "-std=gnu++20", "-O2", "-Wall", "-Wextra", "-Werror", "-fsyntax-only", "-x", "c++", "-", input_text=source)
 
 
