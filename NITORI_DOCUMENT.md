@@ -1,6 +1,6 @@
 # Nitori X
 
-> 从第一份可提交程序，到零成本 view、离散函数与竞赛算法装配的唯一权威文档
+> 从第一份可提交程序，到能从题目约束反推出合适工具的唯一权威文档
 >
 > 适用版本：`nversion == 20000`
 >
@@ -8,75 +8,119 @@
 >
 > unsafe 头文件：`/home/tnuzy/NitoriSTL/Nitori_unsafe.h`
 
-本文同时承担两件事：前半部分让第一次接触 Nitori 的选手尽快写题，后半部分提供
-可检索、可验证的完整 API 契约。不要先背完整符号表；先掌握下面这条主线：
+Nitori X 的目标不是让你记住更多以 `n` 开头的名字，而是让你在下一道题中更快完成这
+条链：
 
 ```text
-输入输出 → nvector 与循环 → 通用算法 → nview → projection
-→ 明确物化 ncollect → 数据结构/图论/数学 → nfunc 与自定义扩展
+题目约束 → 暴力瓶颈 → 关键不变量 → 合适的抽象 → 可提交代码 → 反例与复盘
 ```
 
-Nitori X 是面向算法竞赛的 GNU C++20 单头文件系统。它不是给 STL 名字机械加 `n`，
-也不是要求选手先学一套工程框架。它要解决的是：让一份算法能够直接作用在 vector、
-deque、矩阵行列、步长序列、lambda 映射位置和离散函数上，同时保持代码短、引用真实、
-复杂度明确，并在训练阶段尽早抓住越界和错误前提。
+这份文档同时是教程、题型装配手册和 API 参考。三者会出现同一个组件，但承担的任务
+不同：教程回答“为什么需要”，装配手册回答“什么时候选择”，参考卡回答“精确怎样调用”。
+为了不让不同读者互相挡路，正文会明确标出学习路径、题型路径和维护路径。
 
-本文是 Nitori X 唯一的用户文档原稿。不得在 skill、比赛目录、assets 或其他
-reference 中复制本文或头文件。公共签名与真实行为以 checked 头文件为最终事实；
-数学前提、使用语义、复杂度和工作流以本文为最终说明。若二者不一致，停止扩散，
-以实现和测试重建结论并立即修正文档。
+Nitori X 是面向算法竞赛的 GNU C++20 单头文件系统。它允许同一算法作用于 owner、
+矩阵行列、步长序列、lambda 映射位置和离散函数，同时保留真实引用、明确复杂度和可检查
+的生命周期。它不是给 STL 名字机械加 `n`，也不是要求选手先学习一套工程框架。
+
+本文是 Nitori X 唯一的用户文档。公共签名与真实运行行为以
+`/home/tnuzy/NitoriSTL/Nitori.h` 为事实来源；本文件负责解释语义、前提、复杂度、
+配方和维护流程。若二者不一致，停止扩散，先以实现和测试重建结论，再修正文档。
 
 ---
 
 ## 怎样阅读本文
 
-### 第一次使用：只读这些
+### A. 第一次学习：沿着主线走
 
-1. 第 1 章：写出第一份完整程序；
-2. 第 2 章：记住 `int` 下标、`[l,r)` 和 owner/view 生命周期；
-3. 第 6 章：先理解 `nview`、projection 与 `ncollect`；只有需要语义 key 时再读 6.8；
-4. 第 8 章：按表查容器和序列算法；
-5. 第 16 章：查 I/O 边界。
+```text
+第一份程序
+→ [l,r) 与 int 下标
+→ owner/view 生命周期
+→ nview 与 projection
+→ 从暴力选择区间数据结构
+→ 图、数学、字符串、几何的题型入口
+→ 调试、对拍与提交
+```
 
-### 正在做题：按题型跳转
+第 1～5 章是逐步学习，不需要先读 concept、trait 或“代数系统”。遇到不熟的符号，先
+看本章的最小例子，再跳到对应契约卡；不要从第 21 章开始背索引。
 
-| 题目特征 | 先看 |
+### B. 正在做题：先找题目阻碍
+
+| 题目中看到的阻碍 | 推荐入口 |
 |---|---|
-| 区间查询、区间修改、滑动窗口、并查集 | 第 10 章 |
+| 区间查询但没有修改 | 第 9.1、10.8、10.10 节 |
+| 单点修改 + 区间查询 | 第 10.1～10.2 节 |
+| 区间修改或复杂聚合 | 第 10.3 节 |
+| 坐标范围巨大且只改少数位置 | 第 10.7 节 |
+| 需要访问旧答案 | 第 10.6 节 |
+| 有序集合还要维护子树信息 | 第 9.12 节的 AST 树 |
+| 序列需要按位置切分、区间 tag、翻转或搬运 | 第 9.13 节的隐式 FHQ |
 | BFS、最短路、树、流、匹配 | 第 11 章 |
-| gcd、模运算、组合、博弈、异或基 | 第 12 章 |
+| gcd、模运算、组合、博弈 | 第 12 章 |
 | 矩阵、线性方程、卷积、多项式 | 第 13 章 |
 | KMP、后缀数组、Trie、AC 自动机 | 第 14 章 |
 | 几何、Li Chao、单峰优化 | 第 15 章 |
-| 状态 key、分块对应、惰性分流、连续段组合 | 第 6.8 节 |
-| 想把多个组件装成短代码 | 第 17 章 |
+| 已知多个组件，想看完整装配 | 第 17 章 |
 
-### 开发 Nitori：再读这些
+### C. 只查接口：直接看契约卡
 
-第 3、5、9、18、19、20、21 章面向 profile、操作契约、AST、测试、扩展、迁移和
-公共符号审计。普通做题不需要先读完。
+每个非平凡组件都尽量使用同一个顺序：
+
+```text
+解决什么问题 → 识别信号 → 最小接口 → 隐形性质 → 不变量
+→ 复杂度 → 失败边界 → 最小反例 → 相关组件
+```
+
+参考卡可以压缩，学习正文不能删掉“为什么”。如果你已经会算法，只需读契约卡和反例。
+
+### D. 开发 Nitori：最后再读维护路径
+
+第 3、5、9、18、19、20、21 章主要服务于 profile、局部契约、AST、测试、扩展、迁移
+和公共符号审计。它们不是第一次做题的前置课程。
+
+### 本文的教学约定
+
+- **先具体，后抽象**：先看小题目和手算，再给模板参数。
+- **一次只引入一个主要机关**：不要用一个例子同时教学 view、projection 和 DP。
+- **性质必须解释用途**：不只说“需要结合”，要说不结合时哪一步会错。
+- **每章都留迁移信号**：最后回答“下次看到什么，可以想到这个方法？”
+- **篇幅服务理解**：允许重复，但同一事实有一个权威契约位置，重复部分只承担动机、
+  例子或反例中的一种职责。
 
 ---
 
 ## 目录
 
-1. [十分钟快速开始](#1-十分钟快速开始)
+### Part I：从第一份程序到核心模型
+
+1. [第一份可提交程序](#1-第一份可提交程序)
 2. [不可违反的全局约定](#2-不可违反的全局约定)
 3. [checked 与 unsafe](#3-checked-与-unsafe)
 4. [基础值、哨兵和可选结果](#4-基础值哨兵和可选结果)
 5. [操作对象与隐形契约](#5-操作对象与隐形契约)
-6. [统一 Range/View/Projection 与离散函数](#6-统一-rangeviewprojection-与离散函数)
+
+### Part II：从问题阻碍到数据结构
+
+6. [统一 Range/View/Projection：先学轻量位置，再学语义函数](#6-统一-rangeviewprojection先学轻量位置再学语义函数)
 7. [枚举协议与组合视图](#7-枚举协议与组合视图)
 8. [拥有型序列与通用算法](#8-拥有型序列与通用算法)
 9. [机制、内存、关联对象与 AST](#9-机制内存关联对象与-ast)
-10. [代数数据结构](#10-代数数据结构)
+10. [可合并区间信息、历史版本与离线算法](#10-可合并区间信息历史版本与离线算法)
+
+### Part III：图论与竞赛数学工具箱
+
 11. [图、树、流与匹配](#11-图树流与匹配)
-12. [整数、模运算与组合数学](#12-整数模运算与组合数学)
+12. [整数、模运算、组合与博弈](#12-整数模运算组合与博弈)
 13. [矩阵、线性代数与多项式](#13-矩阵线性代数与多项式)
 14. [字符串、Trie 与 AC 自动机](#14-字符串trie-与-ac-自动机)
 15. [几何与优化](#15-几何与优化)
 16. [竞赛 I/O](#16-竞赛-io)
-17. [典型装配配方](#17-典型装配配方)
+
+### Part IV：题型装配与迁移
+
+17. [题型装配配方](#17-题型装配配方)
 18. [调试、测试与提交工作流](#18-调试测试与提交工作流)
 19. [扩展 Nitori 的规则](#19-扩展-nitori-的规则)
 20. [旧版到 Nitori X 的迁移桥梁](#20-旧版到-nitori-x-的迁移桥梁)
@@ -84,10 +128,11 @@ reference 中复制本文或头文件。公共签名与真实行为以 checked �
 
 ---
 
-## 1. 十分钟快速开始
+## 1. 第一份可提交程序
 
-这一章不要求理解模板、concept、游标或代数定律。目标只有一个：十分钟后，你能用
-Nitori 读入数据、保存序列、遍历、排序、切片、输出，并知道何时会产生副本。
+本章只建立最小工作台：包含头文件、读入、拥有序列、循环、排序和输出。目标不是一次
+学完 Nitori，而是先让程序跑起来，再逐层增加抽象。`nview`、projection、区间结构和
+unsafe 都故意放到后面；第一次阅读时不要跳过本章的检查点。
 
 ### 1.1 准备头文件
 
@@ -328,170 +373,64 @@ nassign(destination, source, [](int x) {
 `nassign` 不暗中分配，也不提供隐藏的重叠快照。需要保留 source 原值时先显式
 `ncollect(source)`。完整契约见 8.5。
 
-### 1.7 `nview`：引用一组位置，不复制元素
+### 1.7 第一个 view：只改变访问位置
 
-这是 Nitori 最重要的抽象。先看最小例子：
+现在只增加一个概念：**view 不拥有元素，它只描述“第 `i` 项去哪里取”。**
 
 ```cpp
 nvector<int> a{9, 4, 7, 1, 8};
-
-auto middle = nsub(a, 1, 4); // 引用 a 的 [1,4)
-nsort(middle);
-// a == {9,1,4,7,8}
+auto middle = nsub(a, 1, 4); // 借用 a 的 [1,4)
+nsort(middle);                // 原地写回 a
+// a == {9, 1, 4, 7, 8}
 ```
 
-`middle` 不是新数组。它只保存“第 `i` 项应该访问 `a[1+i]`”这条规则，因此排序会写回
-`a`。其他常用 view：
+先停一下：如果希望得到独立数组，不能写 `auto copy = middle`。那只会复制访问描述，
+必须明确写：
 
 ```cpp
-auto all = nall(a);
-auto backwards = nreverse(a);
-auto every_second = nstride(a, 0, a.len(), 2);
-auto pairs = nzip(a, backwards);
-auto windows = nwindows(a, 3);
+auto copy = ncollect(middle); // O(length)，现在 copy 拥有自己的元素
 ```
 
-lambda 也能定义位置映射，而且返回真实引用时可以直接修改和排序：
+完整的 view 组合器和生命周期规则在第 6 章；第一次这里只记住 owner/view 这组区分。
+
+### 1.8 先分清两种 projection
 
 ```cpp
-auto even_positions = nview((a.len() + 1) / 2,
-    [&](int i) -> int& { return a[2 * i]; });
+struct item { int key, payload; };
+nvector<item> items{{3,30}, {1,10}, {2,20}};
 
-nsort(even_positions);
+nsort(items, nless<>{}, &item::key); // 按 key 比较，交换完整 item
 ```
 
-二维对象仍然使用同一套算法：
+而 `nproject(items, &item::key)` 是“只暴露 key 字段的可写 view”。两者都叫 projection，
+但前者改变算法的观察方式，后者改变算法实际访问的位置。详细对照见第 6 章。
 
-```cpp
-nmatrix<int> matrix(4, 4, 0);
-nfill(matrix.row(1), -1);
-nsort(matrix.column(2));
-nsort(matrix.diagonal());
-```
-
-### 1.8 view 的复制、物化与写入
-
-这是新人最容易混淆的地方：
-
-```cpp
-auto view = nreverse(nsub(a, 1, 4));
-auto alias = view;           // O(1)：复制访问描述，仍引用 a
-auto copy = ncollect(view);  // O(n)：建立独立 nvector
-```
-
-记忆表：
-
-| 操作 | 是否复制元素 | 修改后是否写回 owner |
-|---|---:|---:|
-| `auto b = view` | 否 | 是 |
-| `nall/nsub/nreverse/nstride/nproject` | 否 | 是 |
-| `ncollect(view)` | 是 | 否 |
-| `nassign(destination,view)` | 写入既有目标 | 取决于 destination |
-
-矩阵 DP 不需要 `.data()` 或 `std::copy`：
-
-```cpp
-nmatrix<long long> rows(blocks, width, 0);
-nvector<long long> dp(width, 0);
-
-nassign(rows.row(block), dp);
-nfill(rows.row(block), nninf<long long>);
-```
-
-生命周期规则只有一句话：**view 不拥有最底层 owner；owner 必须活着，而且不能发生使
-引用失效的扩容或结构修改。**
-
-### 1.9 两种 projection，作用完全不同
-
-假设：
-
-```cpp
-struct item {
-    int key;
-    int payload;
-};
-
-nvector<item> items{{3, 30}, {1, 10}, {2, 20}};
-```
-
-算法 projection 只决定“按什么观察和比较”，交换的仍是完整记录：
-
-```cpp
-nsort(items, nless<>{}, &item::key);
-// (key,payload) 关系保持，顺序变成 (1,10),(2,20),(3,30)
-```
-
-`nproject` 则建立字段引用 view，排序时只交换字段：
-
-```cpp
-auto keys = nproject(items, &item::key);
-nsort(keys); // 只重新排列 key；payload 留在原位置
-```
-
-大多数“按字段排序记录”的题目需要第一种。只有确实想单独操作某一列/字段时才使用
-`nproject`。
-
-### 1.10 一个真正体现 Nitori 的 0/1 背包转移
-
-普通写法用倒序下标保证每件物品只使用一次。Nitori 可以把这个依赖方向直接表达为
-两个倒序 view：
-
-```cpp
-auto relax = [&](auto&& dp, int weight, long long value) {
-    const int width = nlen(dp);
-    auto destination = nreverse(nsub(dp, weight, width));
-    auto source = nreverse(nsub(dp, 0, width - weight));
-
-    nfor(cell, nzip(destination, source)) {
-        auto&& [to, from] = cell;
-        if (from != nninf<long long>)
-            nchmax(to, from + value);
-    }
-};
-```
-
-这里没有 iterator、裸指针或容器特判。只要 `dp` 是可写 indexed range，同一段代码就能
-作用于 `nvector`、矩阵行、切片或 lambda view。倒序不是装饰：它保护“读取旧层状态”
-这个 0/1 背包不变量。
-
-### 1.11 checked 调试，unsafe 提交
-
-训练时默认 checked。常见错误会在离问题最近的位置中止：
-
-- 下标越界；
-- 非法 `[l,r)`；
-- `nassign` 两侧长度不等；
-- 空堆取 top；
-- 非法图顶点；
-- 读入溢出；
-- 违反已编码的结构前提。
-
-推荐最小流程：
+### 1.9 训练阶段的最小闭环
 
 ```text
 checked 编译
-→ 跑样例
-→ 跑空、单点、极值边界
+→ 样例
+→ 空、单点、极值边界
 → 小规模暴力对拍
-→ 再生成 unsafe 提交
+→ 最后才生成 unsafe 提交
 ```
 
-unsafe 不会修复错误，也不是“忽略 assert 继续跑”。其中 `npre(condition)` 会把
-condition 当作优化器可以相信的事实；条件为假时行为未定义。
+checked/unsafe 的完整差异和 `npre` 的含义见第 3 章。unsafe 不会修复错误；它只把调用者
+已经证明的前提交给优化器。
 
-### 1.12 十分钟检查点
+### 1.10 本章检查点
 
-如果你已经能回答下面七个问题，就可以停止阅读教程，直接做题并按需查后文：
+在继续学习前，应该能用自己的话回答：
 
-1. 为什么长度使用 `a.len()` 而不是 `.size()`？
-2. `nrep`、`nrrep`、`nfor` 分别适合什么循环？
-3. 为什么所有区间都写成 `[l,r)`？
-4. `nsub(a,l,r)` 会不会复制元素？
-5. 怎样得到 view 的独立副本？
-6. `nsort(items,cmp,projection)` 与 `nsort(nproject(items,projection))` 有什么区别？
-7. 为什么训练时应使用 checked？
+1. `nvector` 和 `nsub(a,l,r)` 谁拥有元素？
+2. 为什么 `ncollect` 是显式操作，而不是 view 的默认行为？
+3. `nsort(items, ..., &item::key)` 和 `nsort(nproject(items, &item::key))` 哪个会
+   保持 `key/payload` 的配对？
+4. 为什么 `[l,r)` 比闭区间更适合组合？
+5. 一个 checked 程序在什么证据之后才适合切换 unsafe？
 
-如果第 4～6 题仍不确定，重读 1.7～1.9；那是 Nitori 与普通容器模板最关键的区别。
+答不出时不要继续背容器表；回到对应例子手算一次。第 6 章会把这里的直觉正式化，
+第 17 章会展示这些部件如何在真实题型中装配。
 
 ---
 
@@ -505,7 +444,40 @@ condition 当作优化器可以相信的事实；条件为假时行为未定义�
 - 合法空区间满足 `l == r`。
 - 越界不是可恢复查询，而是前置条件错误。
 
+半开区间不是书写偏好，它让三个高频推理直接成立：
+
+```text
+长度              = r - l
+[l,m) 与 [m,r)    无重无漏拼成 [l,r)
+空区间            = [x,x)
+```
+
+因此线段树分裂、前缀和相减、view 切片和 DP 边界可以共享同一套公式。若题面给闭区间
+`[L,R]`，只在输入边界转换一次为 `[L,R+1)`；先检查 `R+1` 的表示范围，不要让两种约定
+在算法内部混用。
+
+长度和位置使用 `int` 是竞赛接口约定，不表示所有数值都应使用 `int`。权值、路径和、
+坐标差和乘积仍要根据范围选择 `long long` 或 `__int128_t`。
+
 ### 2.2 所有权
+
+先把对象分成两类：
+
+| 类型 | 拥有什么 | 复制意味着什么 |
+|---|---|---|
+| owner，如 `nvector/nmatrix` | 元素和存储 | 复制元素或结构 |
+| view，如 `nsub/ncolumn/nproject` | 访问规则 | 复制描述，仍别名 owner |
+
+只要一个算法返回或保存 view，就必须能指出最底层 owner 是谁、会活到什么时候、期间会不
+会扩容或改变索引拓扑。下面的局部使用是稳定的：
+
+```cpp
+nvector<int> a{4,3,2,1};
+auto middle = nsub(a, 1, 3);
+nsort(middle); // a 仍存活，也没有结构修改
+```
+
+若 view 必须跨越 owner 的扩容、销毁或未知调用边界，先 `ncollect` 形成独立 owner。
 
 - `nvector`、`ndeque`、`narray`、`nmatrix`、`nmap`、`nset` 等拥有存储。
 - `nview` 是唯一公共引用视图类型；`nall`、`nsub`、`nstride`、`nproject`、`nzip`、
@@ -518,7 +490,7 @@ condition 当作优化器可以相信的事实；条件为假时行为未定义�
   借用，对安全的右值 range 描述符接管所有权。中间 view 因此可以嵌套，但它仍不延长
   最底层借用 owner 的生命周期。
 - owner 发生扩容、销毁或破坏索引拓扑的修改后，旧 view 可能失效。
-- 会立即悬垂的临时 owning container 被 concept 拒绝，例如 `nall(nvector<int>{...})`；
+- 会立即悬垂的临时 owning container 被能力约束拒绝，例如 `nall(nvector<int>{...})`；
   临时 view 则可以安全进入下一层组合器。
 
 ### 2.3 命名
@@ -530,7 +502,7 @@ condition 当作优化器可以相信的事实；条件为假时行为未定义�
 
 ### 2.4 数学前提
 
-C++ concept 只能验证语法，不能证明结合律、单位元、交换律、可逆性、单调性、
+C++ 的语法约束只能验证接口形状，不能证明结合律、单位元、交换律、可逆性、单调性、
 树结构或非负边权。调用者必须保证真实数学条件成立。
 
 ### 2.5 整数与溢出
@@ -544,6 +516,22 @@ C++ concept 只能验证语法，不能证明结合律、单位元、交换律�
 
 ## 3. checked 与 unsafe
 
+两个 profile 不是“慢版本”和“快版本”两套算法。它们在合法输入上必须有相同语义；区别
+只在于前置条件失败时，checked 给出靠近故障点的诊断，unsafe 允许优化器假设失败永远
+不会发生。
+
+因此切换 unsafe 的证据顺序应当是：
+
+```text
+数学前提已证明
+→ checked 编译和样例通过
+→ 边界/反例通过
+→ 复杂结构完成小规模对拍
+→ 再独立编译 unsafe
+```
+
+如果一份代码只有换成 unsafe 才“能跑”，那通常不是优化成功，而是未定义行为被隐藏。
+
 | 项目 | checked | unsafe |
 |---|---|---|
 | 文件 | `Nitori.h` | `Nitori_unsafe.h` |
@@ -554,6 +542,10 @@ C++ concept 只能验证语法，不能证明结合律、单位元、交换律�
 
 两个头文件由 `src/manifest.txt` 的同一语义源生成。任何手改生成头都会被
 freshness 审计拒绝。
+
+`npre` 只保护已经编码进去的结构前提，例如下标和区间。它无法检查 Dijkstra 边权是否
+非负、predicate 是否单调、操作是否结合、模数下除数是否可逆；这些仍需要证明和针对性
+测试。
 
 ```bash
 cd /home/tnuzy/NitoriSTL
@@ -619,6 +611,19 @@ Nitori 不再维护注册数学定律的 `concept/trait` 系统。模板只保�
 生命周期和存储布局的能力检查；结合、单位、交换、可逆、分配和数值域等性质由调用者
 在使用点负责。这样可以减少“声明通过但证明仍在库外”的双重维护负担。
 
+这不是把数学前提藏起来，而是把它放回真正使用它的地方。阅读任意操作对象时，先问四
+个问题：
+
+```text
+空区间应该返回什么？
+左右区间能否按原顺序合并？
+我是否需要从一个结果中消去另一段？
+连续两次修改的先后是否影响结果？
+```
+
+答案决定接口能否使用；C++ 类型系统通常只能检查“函数存在”，不能检查这些等式对所有
+输入都成立。后文每个结构的契约卡都会把“性质”和“它保护的步骤”放在一起。
+
 ### 5.1 内建操作
 
 | 操作包 | 单位元 | 适用约定 |
@@ -657,13 +662,13 @@ assert(seg.fold(0, 3) == "abcd");
 `nseg` 和 `nfold` 保持顺序，不假设交换。`id()` 必须是真正的空区间值，二元操作必须
 结合；这些是实现无法从 C++ 类型系统恢复的隐形契约。
 
-通用幺半群快速幂：
+通用结合操作快速幂：
 
 ```cpp
 auto x = npow(base, exponent, operation);
 ```
 
-非负指数只要求幺半群；负指数要求 `operation` 另外声明并实现群逆元。复杂度
+非负指数只要求结合操作和正确单位；负指数要求 `operation` 另外实现真正的逆元。复杂度
 `O(log |exponent|)` 次合并，`LLONG_MIN` 也不会因取负溢出。
 
 ### 5.3 自定义 lazy action
@@ -685,9 +690,30 @@ tree 最常见的隐蔽 WA。调用者必须保证 tag 单位、compose 的结�
 
 ---
 
-## 6. 统一 Range/View/Projection 与离散函数
+## 6. 统一 Range/View/Projection：先学轻量位置，再学语义函数
+
+本章分成两条难度不同的路线。6.1～6.7 是基础路线：把“一段元素”从具体容器中
+抽出来，学习如何切片、组合、排序和物化；6.8 是高级路线：当位置不再等于题目中的
+语义 key 时，才使用 `nfunc`。
+
+不要把 `nfunc` 当作更漂亮的 `nview`。二者的选择不是风格问题，而是数据模型问题：
+
+```text
+算法只关心第 i 个位置在哪里？       → nview
+算法还需要 key、support、求值和索引？ → nfunc
+```
+
+本章每个抽象都先回答“它消除了哪一次重复或哪一个错误”，再给出接口。若只是想把
+一个范围排序或复制，读到 6.7 就足够；只有题目真正出现语义 key、有限定义域、分块
+边界或惰性分支时，才继续读 6.8。
 
 ### 6.1 三层协议，不建立 iterator/trait 森林
+
+先看一个需求：算法只想读取“第 `i` 项”，它并不关心元素来自 vector、deque、矩阵列，
+还是 lambda 计算出的间接位置。如果为了每种来源复制一份算法，真正重复的不是代码语法，
+而是同一个不变量。
+
+Nitori 因此先描述算法能做什么，再决定对象叫什么：
 
 ```text
 Range       = 算法能枚举或按位置读取的对象
@@ -737,23 +763,34 @@ auto copy = ncollect(odd);     // nvector<int>，独立物化
 `ncollect<T>(range)` 可显式指定目标值类型；对 `pair/tuple` 递归去掉引用。物化是显式
 边界，库不会因为复制一个 view 而暗中做 `O(n)` 工作。
 
-### 6.3 最小能力概念
+### 6.3 先问算法实际会做什么
 
-| Concept/trait | 含义 |
+不要从 concept 名字反推算法。先逐项检查真实操作：
+
+| 算法行为 | 对输入的实际要求 | 典型算法 |
+|---|---|---|
+| 只按位置读取 | 能取得长度和 `a[i]` | `nfind`、二分、只读 fold |
+| 要原地改值 | `a[i]` 必须是真实可写左值 | `nfill`、`nassign` 目标 |
+| 要交换元素 | 两个位置必须能交换 | `nsort`、原地 reverse |
+| 要走连续快路径 | 另外必须真实提供连续 `data()` | 连续 view 的排序快路径 |
+| 要删除重复尾部 | 除可交换外还必须 resize | `nunique` |
+| 只枚举、不随机访问 | 能产生 `ok/val/idx/next` 游标 | 图邻接、map、生成序列 |
+
+这张表解释了为什么 `ndeque` 虽不连续仍能排序，也解释了为什么一个返回临时值的 lambda
+view 不能原地排序：算法缺少的不是某个容器名，而是“可交换真实位置”。
+
+维护模板或阅读诊断时，对应实现侧名字如下；普通做题无需背诵：
+
+| 实现侧名字 | 表达的能力 |
 |---|---|
 | `nindexed<A>` | `nlen(a)` 与 const/non-const `a[i]` 存在 |
-| `nindex_reference_t<A>` | `a[i]` 的引用类型 |
-| `nindex_value_t<A>` | 去 cv/ref 后的元素类型 |
-| `nreference_indexed<A>` | 索引返回 lvalue reference |
+| `nindex_reference_t<A>` / `nindex_value_t<A>` | 索引引用类型及其值类型 |
+| `nreference_indexed<A>` | 索引得到 lvalue reference |
 | `nswappable_indexed<A>` | 元素是可写且可交换的 lvalue |
-| `ncontiguous_indexed<A>` | 另外提供 contiguous `data()` |
+| `ncontiguous_indexed<A>` | 另外真实提供 contiguous `data()` |
 | `nresizable<A>` | 提供 `resize(int)` |
-| `nrange_object<A>` | 可安全按值接管的 range 描述符 |
-| `nview_object<A>` | 真正的 `nview<T,Accessor>` 描述符 |
-| `nviewable_indexed<A>` | indexed 左值 owner，或可复制/移动进组合器的 range 描述符 |
-
-算法只要求实际需要的能力。例如 `nfind` 只需要索引读取，`nsort` 需要可交换引用，
-`nunique` 还需要 resize。
+| `nrange_object<A>` / `nview_object<A>` | 可安全接管的描述符 / 真正的 `nview` |
+| `nviewable_indexed<A>` | indexed 左值 owner，或可进入组合器的安全描述符 |
 
 ### 6.4 半开切片与组合器
 
@@ -1229,9 +1266,28 @@ for (int v = 0; v < n; ++v) {
 一句话收束：**`nview` 用轻量位置拓扑服务密集计算；`nfunc` 用索引、状态和组合能力
 购买更短、更可靠的高层算法表达。前者通常可以批量造，后者应少量造、命名并复用。**
 
+### 6.9 本章检查点
+
+1. `auto b = nsub(a,l,r)` 与 `auto b = ncollect(nsub(a,l,r))` 的时间、空间和别名语义
+   分别是什么？
+2. 为什么 algorithm projection 会交换完整元素，而 `nproject` 可能只交换字段？
+3. 一个 lambda view 返回 `int` 而不是 `int&` 时，哪些原地算法不再合法？
+4. `f[i]`、`f.key(i)`、`f(x)` 的参数分别处于哪个坐标系？
+5. 什么需求只需要 `nview`，什么需求才值得支付 `nfunc` 的索引和状态成本？
+
+如果第 4～5 题不能直接回答，先手算一个 domain 不是 `nrange(n)` 的例子，再继续使用
+`nredomain/nrestrict/nselect_positions`。
+
 ---
 
 ## 7. 枚举协议与组合视图
+
+如果算法只需要“依次访问所有对象”，就不应要求对象伪造一套 STL iterator。Nitori 的
+枚举协议把真正需要的四步显式化：是否还有元素、当前值、当前位置、前进。这样图邻接、
+哈希映射、窗口序列和生成器可以共享 `nfor`/`ncollect`，而不必先物化成 vector。
+
+本章主要服务两个场景：实现一个新 enumerable，或理解 `nzip`、笛卡尔积、窗口为何能
+被普通算法直接消费。只写普通 `nvector` 题目时，先掌握第 1 章的 `nrep/nfor` 即可。
 
 ### 7.1 游标协议
 
@@ -1304,6 +1360,19 @@ auto w = nwindows(a, 3, 2);   // 宽 3、起点步长 2 的 nsub 视图序列
 ---
 
 ## 8. 拥有型序列与通用算法
+
+本章是查阅台，不是让读者一次背完所有容器。选择顺序建议是：
+
+```text
+需要稳定连续数组       → nvector
+需要两端进出            → ndeque
+需要按优先级取一个      → nheap
+需要固定多维布局        → narray/nmatrix
+需要写入/读取/排序      → 第 8.5 节通用算法
+```
+
+每个算法表后都应回到题目约束：它到底需要只读索引、真实引用、可交换位置、连续存储，
+还是 resize？接口能编译不代表题目的引用关系和复杂度已经正确。
 
 ### 8.1 `nvector<T>`
 
@@ -1433,7 +1502,7 @@ bool same_keys = nsame(records, keys, nequal<>{}, &record::key, nidentity{});
 | `nfind(a,x,proj,fallback)` | 可读 indexed；比较 `proj(a[i]) == x` | `O(n)` |
 | `nlower/nupper(a,x,cmp,proj)` | 已按同一 cmp/proj 排序 | `O(log n)` |
 | `nfind_sorted(a,x,cmp,proj,fallback)` | 已排序；按投影 key 的 cmp 等价查找 | `O(log n)` |
-| `nfold(a,l,r,op,proj)` | 投影值类型上的 op 为幺半群 | `O(r-l)`，保持顺序 |
+| `nfold(a,l,r,op,proj)` | op 有正确单位元且结合 | `O(r-l)`，保持顺序 |
 | `nunique_compact(a,equal,proj)` | 相邻投影 key 等价元素压缩 | `O(n)`，返回保留长度但不 resize |
 | `nunique(a,equal,proj)` | 另需 `resize` | `O(n)`，并缩短容器 |
 | `nsort_unique(a,cmp,equal,proj)` | 可排序且可 resize | `O(n log n)`，排序后去重 |
@@ -1444,6 +1513,21 @@ bool same_keys = nsame(records, keys, nequal<>{}, &record::key, nidentity{});
 
 ## 9. 机制、内存、关联对象与 AST
 
+本章收纳的是“为算法提供结构能力，但通常不是题目最终算法名”的机制。为了避免把它
+当成杂物表，按用途分成四组阅读：
+
+```text
+9.1～9.2   扫描与单调搜索：减少重复求值
+9.3～9.6   回滚、临时内存、arena/pool：控制状态和生命周期
+9.7～9.11  有限集合、映射、关系与坐标压缩：建立对象对应
+9.12       有序树 AST：沿节点信息调度，而不是封死树实现
+9.13       隐式 FHQ：把 FHQ 结构和序列语义彻底分开
+```
+
+做题时按阻碍跳到对应小节，不要求线性读完。尤其不要因为 `narena`、`npool` 看起来更
+底层，就在普通序列题里提前引入手工句柄；只有删除、复用或稳定 handle 真正影响复杂度
+和正确性时才使用。
+
 ### 9.1 扫描
 
 ```cpp
@@ -1451,7 +1535,7 @@ auto prefix = nscan(a, op);          // 长度 n+1，prefix[0] = id
 auto suffix = nsuffix_scan(a, op);   // 长度 n+1，suffix[n] = id
 ```
 
-两者保持操作顺序，因此支持非交换幺半群。
+两者保持操作顺序，因此支持非交换的结合聚合。
 
 ### 9.2 单调二分
 
@@ -1631,6 +1715,42 @@ rank(index);                         // 必须存在的反向值
 
 ### 9.12 可扩展有序树 AST
 
+普通 `set`/`multiset` 只回答“某个值是否存在、排名是多少”。但不少题目还会问：
+
+- 第 `k` 个元素在哪个节点；
+- 第一次使前缀和达到 `target` 的键是什么；
+- 某棵子树的元素数、总和或自定义信息是多少；
+- 找到一个结构节点后，对整棵子树施加合法的 lazy tag。
+
+把这些能力分别封成 `kth_sum_tree`、`prefix_tree`、`tagged_tree` 会产生许多互不兼容的
+树。Nitori 采用另一条路线：owner 维护平衡树和不变量，`nnode<S>` 暴露只读 AST 快照，
+通用调度器只依赖节点的 `left/right/len/info` 等最小能力。
+
+#### 第一层：先用结构，不加聚合
+
+下面的下降只依赖左右子树长度和当前键重数，因此普通 FHQ/splay 都能复用：
+
+```cpp
+int remaining = k; // 0-based
+auto found = tree.walk([&](auto node) {
+    int left = node.left().len();
+    if (remaining < left)
+        return nbranch::left;
+    if (remaining < left + node.count())
+        return nbranch::take;
+    remaining -= left + node.count();
+    return nbranch::right;
+});
+```
+
+每次选择都会丢掉一整侧子树；在树高为 `h` 时只访问 `O(h)` 个节点。这里的正确性来自
+中序顺序：左子树、当前键的全部重数、右子树正好连续覆盖当前排名区间。
+
+`nwalk` 不替你证明下降决策正确。若 `remaining` 的更新少减了 `node.count()`，接口仍然
+成立，但排名不变量已经破坏。
+
+#### 第二层：让节点携带可合并信息
+
 FHQ 和 splay 不是封死的容器。模板参数 `A` 描述子树信息：
 
 ```cpp
@@ -1652,6 +1772,29 @@ root.info(); root.len(); root.left(); root.right();
 和左右子树。`nwalk(tree,decide)` 以 `nbranch::left/take/right` 实现自定义下降；
 `nfirst_prefix`/`nlast_suffix` 依赖 augmentation 做前缀/后缀单调定位。对应成员
 `walk/first_prefix/last_suffix` 只是短桥。
+
+四个接口各自有明确职责：
+
+```text
+id()                 空子树的信息
+one(value,count)     当前键及其重数的信息
+op(left,right)       按中序顺序合并相邻信息
+info_type            节点缓存的信息类型
+```
+
+`op` 必须结合，但不必交换。字符串拼接可以把整棵树的有序键展开成字符串；如果实现把
+右信息放在左信息前面，树仍能编译，却会悄悄颠倒语义。
+
+#### 第三层：用聚合做单调下降
+
+`nfirst_prefix(predicate)` 从左到右累积信息，寻找第一次使 predicate 为真的节点；
+`nlast_suffix` 对称地从右到左寻找。承重前提不是“有 info 就能二分”，而是 predicate
+随前缀或后缀扩展保持正确单调性。
+
+例如键均非负、`info` 是子树和时，`sum >= target` 单调；如果值允许正负交替，前缀和
+达到 target 后可能再次跌落，这时聚合下降不再保证找到真正的第一次。
+
+#### 第四层：只给保持有序性的变换加 tag
 
 FHQ 另有第五个模板参数 `L`，为 AST 节点提供真正的 lazy tag：
 
@@ -1694,9 +1837,218 @@ splay 的 `has/get/rank/...` 也可能旋转，不能把 `nnode` 跨下一次树
 `nwalk`、`nfirst_prefix` 和 `nlast_suffix` 直接按调用点所需接口实例化，不再额外注册 AST
 concept；因此自定义 owner 可以自由调度节点，但必须自己满足上述接口和聚合单调性。
 
+#### FHQ、splay 与节点快照怎样选择
+
+| 需求 | 选择与边界 |
+|---|---|
+| 一般有序集合/多重集、期望 `O(log n)` | FHQ；随机优先级意味着复杂度保证是期望意义 |
+| 希望访问热点节点被旋到上层 | splay；即使逻辑只读查询也可能改变拓扑 |
+| 需要 augmentation | 两者都支持 |
+| 需要有序树 lazy tag | 当前使用 FHQ；splay 还没有该 action |
+| 保存节点供下一次操作继续使用 | 不要这样做；`nnode` 是带 epoch 的即时快照 |
+
+**迁移信号：**当题目不仅要维护有序集合，还要沿子树信息自定义下降时，想到 AST；当
+你只是需要第 `k` 小、前驱后继等已有成员时，优先调用现成接口，不必为了“通用”手写
+`nwalk`。
+
+### 9.13 隐式 FHQ：自由的按位置序列引擎
+
+`nset_fhq` 是 **按 key 排序** 的 FHQ；区间翻转、搬运和按位置切分不应该被硬塞进它。
+隐式 FHQ 的中序顺序就是序列顺序，树只维护四件与语义无关的事情：随机优先级、左右
+孩子、子树长度和父链接。它不要求所有题目都把信息写成 `id/one/op`，也不要求所有 tag
+都能被同一个 `compose/apply_info` 公式解释。
+
+```cpp
+template <class T, class P = nfhq_policy<T>>
+class nimplicit_fhq;
+template <class T, class P = nfhq_policy<T>>
+using nseq_fhq = nimplicit_fhq<T, P>;
+```
+
+#### 先看它解决什么
+
+```text
+按位置插入/删除       split + merge，期望 O(log n)
+区间查询               isolate [l,r)，读取中间 AST 的 info
+区间 tag               isolate [l,r)，调用 P::apply(node, tag)
+区间翻转               一个普通用户 tag：交换两支，并在用户 info 中完成重排
+搬运/循环移位          splice / rotate，仍然只组合 split + merge
+从任意子树继续下降     nwalk(node, decide)，不是只能从 owner root 开始
+```
+
+所有区间都是 `[l,r)`。`fold(l,r)` 为了让任意 `info_type` 都能工作，会临时 split 再
+merge；它保持逻辑序列不变，但属于结构操作，调用后旧 `nnode` 快照不应继续使用。
+`fold()` 全树读取不需要拆树。
+
+#### 核心不是“翻转接口”，而是策略拥有语义
+
+策略 `P` 只需在实际用到的地方提供：
+
+```text
+info_type                    子树信息类型
+state_type                   用户自己的待下推状态，可以很复杂
+id()                         空子树信息
+leaf(value)                  单节点初始信息
+state_id()                   清空待下推状态
+pull(node)                   根据当前左右孩子和值重建 node.info()
+push(node)                   把 node.state() 分派到孩子，并清空自身状态
+apply(node, tag)             处理任意 tag；可改 value/info/state/孩子顺序
+```
+
+`node` 是策略专用的可编辑 AST 句柄，提供：
+
+```text
+val() / info() / state()     对当前节点的可写引用
+left() / right()             子节点句柄（空子树为 false）
+len()                        当前子树长度，只读
+apply(tag)                   递归调用同一策略的 apply
+exchange_children()          唯一内建的顺序拓扑原语
+```
+
+这里没有 `reverse_subtree`，也没有一个库级“反向聚合”协议。翻转只是用户策略的一种
+合法 action：它可以交换孩子、交换括号匹配信息的前后字段、更新滚动哈希的方向，甚至
+同时改变多个自定义状态。树核心不猜这些语义，也不会强迫每个 augmentation 额外存一份
+镜像信息。若某个问题的摘要在反转后确实无法从已有状态得到，策略必须把它需要的状态
+存进去；这是信息论边界，不是模板限制。
+
+#### 一个同时支持 assign/reverse 的 run 统计策略
+
+下面的 `info_type` 维护最长相同值段、前缀段和后缀段。注意翻转并不是调用库里某个专用
+函数，而是策略自己决定如何重排摘要；`push` 还可以按需要把不同 tag 分发给左右孩子。
+
+```cpp
+struct reverse_tag {};
+struct assign_tag { int value; };
+
+struct run_policy {
+    using info_type = run_info;
+    struct state_type {
+        bool assigned = false;
+        int value = 0;
+        bool reversed = false;
+    };
+
+    info_type id() const { return {}; }
+    info_type leaf(int x) const { return {1,x,x,1,1,1}; }
+    state_type state_id() const { return {}; }
+
+    void pull(auto node) const;       // join(left, leaf(node.val()), right)
+    void push(auto node) const;       // 分别下发 reversed / assigned
+
+    void apply(auto node, assign_tag tag) const {
+        node.val() = tag.value;
+        node.info() = uniform_info(node.len(), tag.value);
+        node.state().assigned = true;
+        node.state().value = tag.value;
+    }
+    void apply(auto node, reverse_tag) const {
+        node.exchange_children();
+        swap(node.info().first, node.info().last);
+        swap(node.info().prefix, node.info().suffix);
+        node.state().reversed = !node.state().reversed;
+    }
+};
+
+nimplicit_fhq<int, run_policy> t{0,1,1,0,1,0};
+t.apply(1, 5, reverse_tag{});
+t.apply(2, 5, assign_tag{0});
+t.splice(1, 4, 3);      // 位置 3 是删除该段后的序列坐标
+t.rotate(1, 3, 6);      // [1,3) 与 [3,6) 交换
+```
+
+这个例子故意没有偷偷加入 `reverse_subtree`、双份聚合或额外 concept。策略自己拥有
+“什么状态足以回答题目”的判断；引擎只保证 split/merge 之后每个节点仍恰好属于一棵
+树、长度正确、父链接可追踪、旧快照可诊断。
+
+#### 标准 adapter 与自由策略的关系
+
+`nfhq_policy<T,A,L>` 是方便迁移的轻量 adapter：它复用旧的 `A::id/one/op` 和
+`L::apply_value/apply_info`，适合区间加、赋值等逐元素且不改变顺序的操作。它不是
+`nimplicit_fhq` 的上限。遇到反转、位置相关 tag、多状态 DP 摘要或需要把一个 tag 拆成
+左右两个不同 tag 时，直接写自定义 `P`，不要再给 adapter 堆模板参数。
+
+#### 位置 API 与不变量
+
+```cpp
+t.ins(index, value);             // [0,len] 插入
+t.del(l, r);                     // 删除 [l,r)，返回删除数量
+t.set(index, value);             // 单点替换并重建祖先摘要
+t.get(index);                    // 按位置读取值
+t.fold(l, r);                    // 任意 info_type 的区间摘要
+t.apply(l, r, tag);              // 调用 P::apply
+t.apply(t.root().left(), tag);   // 对选定 AST 子树施加 tag
+t.mutate(l, r, callback);        // 直接编辑隔离后的策略节点
+t.splice(l, r, at);              // 删除后把该段插到 at
+t.rotate(l, m, r);               // [l,m) 与 [m,r) 交换
+```
+
+`mutate` 是最后一道逃生舱：callback 必须让 `value/info/state/孩子顺序` 重新组成合法
+的懒表示，库只负责向上调用 `pull`。它适合一次性构造或实验，不应被用来绕过策略的
+`apply/push` 不变量。所有改变拓扑、删除节点或调用 `fold(l,r)` 的操作都会推进 epoch；
+读取子节点时按需 `push` 不额外推进 epoch，因为它不改变逻辑序列。
+
+#### 证明骨架与迁移信号
+
+1. **split 正确**：按左子树长度递归，左输出恰好含前 `k` 个中序节点，右输出含其余节点。
+2. **merge 正确**：只在左序列全部先于右序列时按 priority 选根，因此中序拼接不变。
+3. **lazy 正确**：`apply` 立即更新当前摘要，`push` 只把尚未解释的 state 分派给孩子；
+   `pull` 只在孩子已解释当前节点 state 后重建摘要。
+4. **epoch 正确**：快照不是稳定指针；任何结构操作后继续使用旧快照都属于错误的时间点。
+
+看到“序列顺序会变化”“区间操作需要按位置切分”“摘要不是简单可交换和”时，想到
+`nimplicit_fhq`。看到“按 key 搜索并维护有序集合”时，仍然使用 `nset_fhq`；不要让两种
+FHQ 互相承担不属于自己的不变量。
+
+### 9.14 AST 检查点
+
+1. `nnode` 为什么是快照而不是稳定节点指针？
+2. `one(value,count)` 和 `info()` 中的长度分别表示键重数还是整棵子树长度？
+3. `first_prefix` 的 predicate 需要什么单调性？允许负数时会怎样失败？
+4. 为什么整树平移通常是合法 tag，而任意局部取负通常不合法？
+5. FHQ 与 splay 的只读查询对 epoch 有什么不同？
+
 ---
 
-## 10. 代数数据结构
+## 10. 可合并区间信息、历史版本与离线算法
+
+这一章不从“哪一个模板参数最复杂”开始，而从一个反复出现的题目阻碍开始：同一段
+区间被查询很多次，或者同一批位置被修改很多次，直接枚举会重复计算。
+
+### 10.0 先找重复计算，再选择结构
+
+假设有数组 `a`，需要回答区间 `[l,r)` 的某个聚合结果。先写出暴力：逐项合并，单次
+`O(r-l)`。当查询数为 `q` 时，总成本可能达到 `O(nq)`。接下来每一种结构都只是在回答
+一个更具体的问题：
+
+| 题目特征 | 首先考虑 | 关键前提 |
+|---|---|---|
+| 没有修改，只查询和/计数 | 前缀和或静态表 | 查询前可以预处理 |
+| 单点修改 + 前缀/区间查询 | `nfenwick` | 区间结果可以用逆操作消去前缀 |
+| 单点修改 + 一般有序合并 | `nseg` | 空区间有单位值，合并保持顺序 |
+| 区间修改 + 区间查询 | `nlazyseg` | tag 能组合，并能作用到聚合信息 |
+| 坐标范围巨大、只写少量点 | `ndynamic_seg` | 未开节点代表单位信息 |
+| 坐标范围巨大、还需要区间 tag | `ndynamic_lazyseg` | 额外满足动态长度和 tag 边界 |
+| 查询必须看到历史版本 | `npersistent_seg` | 旧节点不可变，更新复制路径 |
+| 只读、离线、排序或第 k 小 | wavelet/Mo/sparse 等 | 先确认查询顺序和静态性 |
+
+这张表不是“看到关键词就套模板”。例如 `min` 没有普遍可用的逆操作，因此即使它是
+幂等聚合，也不能直接照搬 Fenwick 的区间消去公式；非交换字符串拼接则可以使用普通
+线段树，但不能随意交换左右子树的合并顺序。
+
+### 10.0.1 本章统一的节点语言
+
+固定、lazy、persistent、dynamic 线段树都可以暴露一个只读 `nseg_node<S>` 视图：
+
+```text
+区间边界 + 区间宽度 + 聚合信息 + 左右子节点 + 当前句柄/epoch
+```
+
+这样“从根向下找第一个满足条件的位置”的算法只写一次，由 `nseg_walk` 调度；后端只
+负责提供节点能力。动态树的缺失子树代表单位元，不应因为读取而分配节点；持久化树的
+旧节点不可变，因此旧版本视图可以继续使用；普通/lazy 树修改拓扑后，旧快照会失效。
+
+先理解这套不变量，再阅读后面的具体类。模板参数只是把这些角色填进去，不是新的学习
+目标。
 
 线段树家族共享结构视图 `nseg_node<S>`。`nseg`、`nlazyseg`、`npersistent_seg`、
 `ndynamic_seg` 与 `ndynamic_lazyseg` 都提供 `root()`；持久化树另有 `root(version)`：
@@ -1721,6 +2073,20 @@ auto old_found = nseg_walk(p.root(version), decide); // 从指定节点调度
 
 ### 10.1 Fenwick：`nfenwick<T,O>`
 
+Fenwick 适合“修改一个位置，并频繁询问前缀”的场景。它把若干相邻位置压进由最低位
+决定的块中；一次更新只触碰覆盖该位置的 `O(log n)` 个块，一次前缀查询也只拆成
+`O(log n)` 个块。
+
+为什么区间 `[l,r)` 额外需要逆操作？因为实现实际得到的是：
+
+```text
+prefix(r) = a[0] op ... op a[r-1]
+prefix(l) = a[0] op ... op a[l-1]
+```
+
+要从前者消去后者，必须存在真正的 `inv`，而且默认 Fenwick 的块组合还依赖交换性。
+加法满足；一般的 `min` 不满足——知道 `min(前缀)` 后无法恢复删掉前缀后的最小值。
+
 `O` 应满足交换结合和单位元；区间查询和单点读取还要求 `O::inv` 存在并实现真正的逆。
 
 ```cpp
@@ -1736,9 +2102,21 @@ f.clear();
 
 `lower` 要求前缀相对比较器单调；默认适用于非负增量的前缀和。更新、查询 `O(log n)`。
 
+**迁移信号：**看到“单点加、前缀统计”先想到 Fenwick；如果合并不可交换、不能消去，
+或者题目需要区间 tag，就继续看线段树，而不是勉强给 Fenwick 补接口。
+
 ### 10.2 迭代线段树：`nseg<T,O>`
 
-要求有序幺半群，不要求交换。
+线段树只要求每个父节点能够由“左区间答案”和“右区间答案”合并出来。核心不变量是：
+
+```text
+node.aggregate = op(left.aggregate, right.aggregate)
+```
+
+区间 `[l,r)` 会被拆成 `O(log n)` 个互不重叠的节点。查询必须按从左到右的顺序合并，
+所以字符串拼接、矩阵乘法等非交换操作也合法；只是不能把左右累加器调换。
+
+要求操作有正确单位元并满足结合；合并保持顺序，不要求交换。
 
 ```cpp
 nseg<string, nconcat> s(source, nconcat{});
@@ -1751,11 +2129,27 @@ s.clear();
 
 单点与区间操作 `O(log n)`；整体 fold `O(1)`。别名 `nseg_iter`。
 
+正确性的承重步骤只有两个：每个节点始终等于自己区间的有序聚合；查询选出的节点恰好
+无重无漏覆盖 `[l,r)`。单点修改后沿祖先重算，因而第一个不变量恢复。
+
 ### 10.3 Lazy 线段树：`nlazyseg<S,F,M,A>`
+
+若一次修改覆盖很长区间，逐个更新叶子会重新退化到线性。lazy tree 把“这一整段还应
+执行什么”存成 tag；只有查询或继续部分更新必须进入孩子时才下推。
+
+这里有两个不同的组合：`M` 合并相邻区间的信息，`A` 合并时间顺序上的修改。若节点先
+积累 `older`，后来又收到 `newer`，约定固定为：
+
+```text
+compose(newer, older) = 先执行 older，再执行 newer
+```
+
+对区间赋值、仿射变换等非交换 tag，写反顺序会产生很小却隐蔽的 WA。`apply` 还必须能
+只凭聚合值、tag 和区间长度更新整段信息；做不到这一点的修改不能只靠 lazy tag 表达。
 
 - `S`：聚合类型。
 - `F`：tag 类型。
-- `M`：`S` 上的有序幺半群。
+- `M`：`S` 上有单位元的有序结合操作。
 - `A`：满足 action 协议。
 
 ```cpp
@@ -1774,9 +2168,12 @@ seg.clear();
 nlazy_addsum<long long> seg(source);
 ```
 
+**最小自检：**用两个不同的 tag 连续覆盖同一区间，再与逐元素暴力比较；只测试交换的
+区间加法，无法发现 `compose` 顺序写反。
+
 ### 10.4 聚合队列：`nqueue_agg<T,O>`
 
-保持队列顺序的双栈幺半群聚合：`push`、`front`、`pop`、`pop(fallback)`、
+保持队列顺序的双栈聚合：`push`、`front`、`pop`、`pop(fallback)`、
 `fold`、`len`、`empty`。`front` 返回 `const T&`；缓存聚合要求已入队元素不可原地改写。
 全部操作摊还 `O(1)`，适合滑动窗口最值或非交换聚合。
 
@@ -1799,6 +2196,9 @@ d.partition();         // 稠密 class labels
 
 ### 10.6 持久化线段树：`npersistent_seg<T,O>`
 
+持久化的机关不是“复制整棵树”，而是旧节点不可变。一次点修改只复制根到叶子的
+`O(log n)` 条路径，其余子树与旧版本共享。因此版本号保存的是根句柄，而不是一份数组。
+
 ```cpp
 npersistent_seg<long long> p(source);
 int v1 = p.set(0, index, value);  // 从版本 0 创建新版本
@@ -1812,10 +2212,20 @@ p.reserve_nodes(count);
 
 点设与查询 `O(log n)`，每次 set 产生 `O(log n)` 新节点。
 
+它适合“询问历史状态”或“不同方案从同一版本分叉”。如果题目只是坐标巨大但不需要
+旧版本，动态开点通常更直接；持久化和动态开点解决的是两个不同维度。
+
 ### 10.7 动态开点线段树
 
+动态开点解决的是**坐标域巨大但实际写入稀疏**。固定线段树会为整个坐标域分配空间；
+动态树只在更新路径上建立节点。缺失节点的数学含义必须稳定：它代表整个区间均为聚合
+单位元，而不是“未知”或“尚未计算”。
+
+先比较另一条常见路线：如果所有坐标能提前读完，而且操作只依赖顺序，坐标压缩通常
+常数更小；若坐标在线产生、必须保留真实区间长度，或不能预先收集，动态开点更自然。
+
 `ndynamic_seg<T,O>` 在 `long long` 坐标域 `[lo,hi)` 上只为写入路径开点；未开节点表示
-幺半群单位元：
+合并操作的单位元：
 
 ```cpp
 ndynamic_seg<long long> seg(-1'000'000'000'000LL, 1'000'000'000'000LL);
@@ -1828,7 +2238,7 @@ seg.nodes(); seg.reserve_nodes(capacity); seg.clear();
 设坐标域宽度为 `W`：点修改和区间查询为 `O(log W)`，每个首次写入的点至多增加
 `O(log W)` 节点；只读查询不分配节点。坐标域宽度必须能装入 `long long`。
 
-`ndynamic_lazyseg<S,F,M,A>` 使用与 `nlazyseg` 相同的 monoid/action 协议，支持动态开点
+`ndynamic_lazyseg<S,F,M,A>` 使用与 `nlazyseg` 相同的合并/作用协议，支持动态开点
 区间 tag：
 
 ```cpp
@@ -1842,6 +2252,9 @@ ndynamic_addsum<long long> sum(lo, hi); // 区间加、区间和
 更新、查询均为 `O(log W)`；查询通过携带未下推 tag 计算，不为缺失子树开点。更新在下推
 已有 tag 时可能建立两个孩子，总空间仍为 `O(q log W)`。由于统一 action 的 length 是
 `int`，lazy 动态树要求 `hi-lo <= INT_MAX`；坐标本身仍可为 `long long`。
+
+**最小反例方向：**记录 `nodes()`，执行大量纯查询后它必须不增长；对 lazy 动态树再
+测试“整域加、局部查询”，确认缺失子树能继承逻辑 tag，而不需要为了读取补开节点。
 
 ### 10.8 Wavelet Matrix：`nwavelet<T>`
 
@@ -1878,7 +2291,7 @@ nrun_mo(queries, universe, add, remove, answer); // 左右操作相同
 ### 10.10 Disjoint Sparse Table：`nsparse<T,O>`
 
 `nsparse` 的名字兼容经典 sparse table，但实现是 disjoint sparse table：只要求有序
-幺半群，不要求幂等，也不要求交换。因此字符串拼接等操作也能 `O(1)` 查询：
+只需有单位元且结合，不要求幂等或交换。因此字符串拼接等操作也能 `O(1)` 查询：
 
 ```cpp
 nsparse<string, nconcat> table(words);
@@ -1904,9 +2317,39 @@ auto x = d.diff(left, right);
 时返回空 `nmaybe`，另有 fallback 重载。类型需支持 `+=`、一元负号和相等比较。
 路径压缩与按大小合并给出摊还逆 Ackermann 复杂度。
 
+### 10.12 区间结构选择检查点
+
+1. 为什么 Fenwick 的区间 fold 需要逆操作，而线段树不需要？
+2. 非交换操作进入 `nseg` 时，查询必须保护什么顺序？
+3. lazy action 的 `compose(newer,older)` 表示哪一个时间顺序？
+4. 动态开点的缺失节点代表什么，为什么只读查询不能开点？
+5. persistent 与 dynamic 分别解决“历史”和“稀疏”哪个维度？
+6. 一个 `nseg_node` 快照在什么修改后失效，持久化旧版本为什么例外？
+
+能回答这六题，才算真正掌握“线段树家族”；只会写构造函数还不足以安全换后端。
+
 ---
 
 ## 11. 图、树、流与匹配
+
+图算法的第一步不是选 BFS 还是 Dijkstra，而是把“邻居”定义清楚：图是否有向、边权
+是否非负、树是否真的连通、邻接对象是否拥有或借用。Nitori 的图算法统一接受可枚举
+邻接对象，因此显式边表和按需生成的网格邻居可以共用同一套遍历逻辑。
+
+建议按下面顺序判断：
+
+```text
+只关心可达性              → BFS/DFS
+无权最短路                → BFS
+非负权最短路              → Dijkstra
+边方向有拓扑顺序          → topo/SCC
+连通代价                  → MST
+树上路径/子树聚合         → LCA/HLD/reroot
+容量与守恒                → flow/matching
+```
+
+每个入口都要把题目条件写在算法名字前面；例如 Dijkstra 的“边权非负”不是库风格，而是
+松弛后已确定距离不会被更短路径推翻的证明前提。
 
 ### 11.1 统一图协议
 
@@ -2004,6 +2447,14 @@ auto d = ndijkstra(light, source);
 `npath_result<D>` 公开 `d`、`p`、`bad`，并提供 `reach(v)`、`dist(v,fallback)`、
 `operator[]` 和 `path(v)`；源点父亲指向自己，不可达点路径为空。
 
+选择这些接口时，证明的核心分别是：
+
+- BFS 出队顺序按距离非降；第一次发现顶点时已经是最短边数。
+- 0-1 BFS 只把新距离放入双端队列的前端或后端，队列中的距离差保持在 1 以内。
+- Dijkstra 每次从堆中取出的最小暂定距离，在非负边权条件下不可能再被未处理路径改小。
+
+负边会破坏最后一条不变量；“图没有负环”仍不够，普通 Dijkstra 也不能直接接受负边。
+
 ### 11.4 DAG、SCC 与 LCA
 
 ```cpp
@@ -2053,6 +2504,10 @@ h.each(a,b, callback, edge_mode);
 建立每个连通块，调用者必须保证输入本来就是森林；与严格 `nlca` 不同，它不审计额外
 环边。新代码需要拓扑诊断时优先 `nlca`，需要带权距离或多棵树时可用
 `nlca_binary<W>` 并显式承担森林前提。
+
+树上路径题的选择信号是：只问祖先关系或距离，LCA 足够；路径上还要反复区间修改/聚合，
+才把树映射到 HLD 的位置区间。`nhld_segment.rev` 不是附加装饰：如果路径聚合非交换，
+反向段必须先翻转，再按原路径方向合并。
 
 ### 11.5 Rerooting
 
@@ -2107,6 +2562,10 @@ forest.connected();
 `nprim` 的 `nmst_result` 也填 `weight/cost/edges/components`，但不保证可还原通用图的
 规范 edge id。
 
+Prim 的安全性来自“当前树割中最轻的跨割边可以加入某棵最小生成树”；Kruskal 的安全性
+来自按权排序后，每条不会形成环的边都能被加入某棵最小生成树。输入若是有向弧，必须
+先确认题目意义确实代表无向边；不能只因为接口接受弧就把有向图当无向图。
+
 ### 11.7 最大流
 
 默认 `nflow<C>` 是可复用 Dinic 后端 `nflow_dinic<C>`：
@@ -2137,6 +2596,10 @@ auto side = reference.mincut(s);
 它是一次性对象：开始 `flow` 后不能再 `add` 或再次求流。顶点数不超过 `INT_MAX/2`，
 基础最坏界 `O(V^3)`。
 
+流算法维护的是残量网络：一条正向边的剩余容量和反向边的可退流量共同表示当前解。
+只有在残量图中源点到汇点不可达时，增广才终止；此时可达点集合给出割，流值等于割容量。
+`cut` 因而必须在完整最大流后解释，限流或尚未结束的中间状态不能直接当最小割。
+
 ### 11.8 二分图最大匹配
 
 图对象只表示左侧邻接，邻接目的点是 `[0,right_vertices)` 的右侧编号。
@@ -2164,9 +2627,17 @@ nbicover cover = matching.mincover(); // cover.l / cover.r
 每次加边会令旧解失效；`pairs/mincover` 要求之后已经 `solve()`。`mincover` 使用
 Kőnig 定理从最大匹配恢复最小点覆盖，额外 `O(V+E)`。
 
+Hopcroft–Karp 的分层 BFS 只保留最短增广路，DFS 在这些层上寻找一批互不冲突的增广路；
+分层长度每轮增长，因而达到 `O(E sqrt(V))`。最小点覆盖的恢复依赖“最大匹配已经完成”，
+并非任意当前匹配都能直接调用 `mincover`。
+
 ---
 
-## 12. 整数、模运算与组合数学
+## 12. 整数、模运算、组合与博弈
+
+数学工具的危险点通常不是公式本身，而是前提被省略。看到除法、逆元、概率期望、SG
+或 NTT 时，先检查对象所在的数值域和状态图，再选择 API。本章将“能调用的接口”和
+“必须由题目保证的性质”并排说明，避免把类型名当成证明。
 
 ### 12.1 整数基础
 
@@ -2191,6 +2662,10 @@ Kőnig 定理从最大匹配恢复最小点覆盖，额外 `O(V+E)`。
 
 `nmod(x,m)` 不再是标量函数，因为 Nitori X 保留模整数类型名 `nmod<M>`；机械迁移
 标量余数时必须改成 `nmodulo(x,m)`，不能让同名承担两个互斥语义。
+
+整数辅助函数的教学重点是“数学定义”和 C++ 截断的区别。`nfloor_div(-5,2)` 应为 `-3`，
+不能直接依赖有符号整数 `/` 的向零截断；`nmodulo(-1,m)` 规范到 `[0,m)`，便于后续
+同余状态直接作为数组下标。所有乘法、lcm 和系数回代仍要先估计表示范围。
 
 ### 12.2 静态与动态模整数
 
@@ -2225,6 +2700,10 @@ ndmod<Tag>::setmod(modulus);
 不应在已有对象仍参与计算时改模。动态模的质数性只能在运行时确认；需要域运算的算法
 必须由调用者先检查模数和可逆性。
 
+模除法的推导只有在 `gcd(x,M)=1` 时成立：存在 `y` 使 `xy ≡ 1 (mod M)`，于是
+`a/x` 才能解释成 `a*y`。素数模下非零元素都可逆；合数模下例如 `2 mod 4` 不可逆。
+`inverse/tryinv/inv(fallback)` 的差别只是结果表达，不会改变这个前提。
+
 ### 12.3 阶乘组合表 `ncomb<Mint>`
 
 ```cpp
@@ -2236,6 +2715,10 @@ c.permute(n, k);  // k 越界返回 0
 
 构造要求 `factorial(max_n)` 可逆。素数模下常见充分条件是 `max_n < modulus`。
 预处理 `O(n)`，查询 `O(1)`。
+
+组合表把 `C(n,k)=n!/(k!(n-k)!)` 的重复阶乘和逆阶乘计算缓存下来。`max_n` 过大或
+模数使某个阶乘不可逆时，表的接口可能仍然能构造，但组合公式已经不再适用；需要 Lucas、
+质因数计数或其他题目特定方法，不能只把数组开大。
 
 ### 12.4 子掩码与集合变换
 
@@ -2262,6 +2745,10 @@ auto c3 = nconv_xor(a,b);
 变换与 OR/AND/XOR 卷积均为 `O(n log n)`。整数 XOR 逆变换依赖每项能被 `n` 精确整除；
 模类型要求 `n` 可逆。
 
+三种 zeta 变换本质上都是“按每一位把子集关系累积到超集/反向恢复”。长度不是二次幂时，
+位分层无法覆盖所有状态；XOR 逆变换则额外需要除以长度。先确认状态空间是完整的
+`[0,2^k)`，再选择变换方向。
+
 ### 12.5 分数、同余与筛表
 
 ```cpp
@@ -2277,6 +2764,9 @@ auto merged = ncrt(c1, c2); // 不相容为空；不要求模数互质
 
 `nfrac<T>` 支持四则、比较、一元负号与 fallback 除法；中间算术仍受 `T` 表示范围约束，
 不是任意精度有理数。`ncrt` 使用 `int64_t` 模数/余数并检查合并后的 lcm 可表示。
+
+CRT 合并不是简单把两个余数相乘：先检查 `a1 ≡ a2 (mod gcd(m1,m2))`，不相容时没有
+解；相容后模数变成 lcm。模数不互质并不会自动失败，但必须走这一步 gcd 条件。
 
 ```cpp
 nprime_table sieve(limit);
@@ -2324,9 +2814,17 @@ auto same = nsg(game_graph);       // 默认同义
 每个顶点的后继必须是合法状态；实现先拓扑排序，再取 mex，总复杂度
 `O(V+E+Σ outdegree)` 及相应临时空间。一般有环博弈不能直接套 SG DAG。
 
+期望的线性性只允许把同一概率模型下的有限权重逐项加权；`nprob` 不会替你归一化，也
+不会把负权解释为概率。Nim 的必胜条件依赖每一步只减少一个堆且没有额外规则；改变移动
+集合后应重新建模状态图，再考虑 SG，而不是继续读取 `nim_sum()`。
+
 ---
 
 ## 13. 矩阵、线性代数与多项式
+
+矩阵章节有两条不同的主线：`nmatrix` 解决拥有、切片和布局；矩阵算法解决维度、运算
+和数值域。先确定“我要操作哪一块存储”，再确认加法、乘法、零元、单位元和可逆性，
+不要把 `nmat` 的短运算符当成自动证明。
 
 ### 13.1 `nmatrix<T>`
 
@@ -2376,6 +2874,10 @@ a.get(row, col, fallback);
 `nmatrix` 负责拥有与 view 拓扑，`nmat` 负责把固定 `Add/Mul` 绑定进运算符；两者不是
 互相替代的重复矩阵。调用者仍必须保证矩阵乘法真正需要的分配律、零吸收等跨操作定律。
 
+矩阵快速幂的触发信号是“固定维度状态做很多次同一个线性转移”。先写一次状态转移，
+确认下一状态能由当前状态的线性组合得到，再把转移写成矩阵；只是看到很大的指数并不
+足够。如果状态维度也很大，`O(k^3 log n)` 可能比原 DP 更慢。
+
 ### 13.3 RREF、行列式与线性方程
 
 ```cpp
@@ -2402,6 +2904,10 @@ auto legacy = ngauss(A, b);        // 总返回 result，以 consistent 标记�
 合数模的非零元素可能不可逆，浮点数还需要 eps 与选主元策略；调用者必须在进入算法前
 确认域性质。整数行列式应另用 Bareiss 等整环算法。复杂度为三次量级。
 
+RREF 的不变量是：每次选择一个可逆 pivot，把该列化成唯一主元并消去其他行；未处理列
+继续表示剩余自由变量。若 pivot 不能除，消元步骤并不在当前数值域中成立，不能把 C++
+整数除法产生的截断结果当作线性代数答案。
+
 ### 13.4 卷积
 
 ```cpp
@@ -2419,6 +2925,11 @@ NTT 前提（由 `nconv_ntt` 在运行时检查）：
 
 `nconv_auto` 仅在两边长度至少 32 且上述条件成立时选择 NTT，否则使用朴素卷积。
 输入为空时结果为空。
+
+卷积的题型信号是“答案下标由两个选择的下标相加”，例如多项式系数、两组和计数。
+朴素算法枚举全部 `(i,j)`，复杂度 `O(nm)`；NTT 把卷积变成点值乘法，但只有模数存在
+足够阶的二次幂单位根时才成立。短序列上 NTT 常数反而更大，因此 `nconv_auto` 保留
+朴素分支。
 
 `nntt_info<Mint>` 是 primitive-root 快速入口。内建为 `998244353`、`1004535809`、
 `469762049` 提供根 3；其他适用 `nmodint<M>` 会在首次使用时自动分解 `M-1` 搜根。
@@ -2476,7 +2987,17 @@ auto value = nrec_nth(initial, recurrence, k);// 空 nmaybe 表示信息不足
 
 ## 14. 字符串、Trie 与 AC 自动机
 
-字符串算法接受任意 `nindexed` 符号序列，不要求 `std::string`。
+字符串算法接受任意 `nindexed` 符号序列，不要求 `std::string`。选择路径通常是：
+
+```text
+单模式匹配/前后缀       → prefix/Z/KMP
+回文半径                → Manacher
+大量后缀比较            → suffix array + LCP
+前缀集合               → Trie
+多模式同时匹配          → AC automaton
+```
+
+先明确算法需要“边界信息”“后缀排序”还是“前缀状态机”，再决定是否需要拥有节点结构。
 
 ### 14.1 线性字符串算法
 
@@ -2487,6 +3008,10 @@ nkmp_find(text, pattern);    // 返回全部起点；空 pattern 匹配 0..n
 ```
 
 兼容短名分别是 `nprefix`、`nzfunc`、`nkmp`。均为线性复杂度。
+
+KMP 的关键不是“记住 next 数组”，而是失配后保留已经知道的最长 border；文本指针不
+回退，因此总扫描是线性的。Z 函数则维护一个已知匹配区间 `[l,r)`，当前位置落在区间内
+时先镜像复制已知结果，再只扩展尚未比较的部分。两者都依赖半开区间和 border 定义的一致性。
 
 ### 14.2 Manacher
 
@@ -2500,6 +3025,10 @@ pal.pal(l, r);               // [l,r) 是否回文，空串为 true
 奇半径包含中心；偶半径中心位于 `right_center-1` 与 `right_center` 之间。
 结果类型名为 `npalindrome_index`，兼容别名 `nmanacher_result`。
 
+Manacher 的半径数组维护一个最右回文中心及其边界；新中心落在边界内时先镜像复制，再
+扩展超出部分。每个字符最多被扩展到最右边界一次，因此为 `O(n)`。奇半径和偶半径的
+中心定义不同，混用会造成只在偶长回文上出现的边界错误。
+
 ### 14.3 后缀数组与 LCP
 
 ```cpp
@@ -2510,6 +3039,9 @@ auto lcp = nlcp_array(sequence, sa);
 `lcp[i]` 是 `sa[i-1]` 与 `sa[i]` 的 LCP，`lcp[0]=0`。当前 suffix array 使用倍增排序，
 复杂度 `O(n log^2 n)`（每轮比较排序 `O(n log n)`，轮数 `O(log n)`）；LCP 为 `O(n)`。
 传给 `nlcp_array` 的 suffix 必须是 `[0,n)` 的排列，范围与重复项都会验证。
+
+后缀数组解决的是“把所有后缀按字典序排列后，许多子串问题能转成相邻后缀的 LCP”。
+因此 `sa` 的排列合法性不是形式检查：若缺失或重复一个后缀，`lcp` 的相邻意义就消失。
 
 ### 14.4 `ntrie<Alphabet>`
 
@@ -2529,7 +3061,16 @@ trie.parent(node);
 trie.symbol(node);
 ```
 
+Trie 把每个字符串的前缀共享成一条根到节点的路径；节点计数必须区分“完整串结束次数”
+和“经过该前缀的次数”。字母表越大，分支存储的常数和内存越重要，因此输入符号应在
+进入索引前检查范围，而不是窄化后碰巧落入 `[0,Alphabet)`。
+
 ### 14.5 `nac<Alphabet>`
+
+AC 自动机是在 Trie 上补失败链接：当前字符边不存在时，沿最长可行后缀跳转，而不是把
+文本指针退回。构造和扫描的正确性依赖失败链接确实指向最长后缀；输出统计还要先决定
+是报告每次匹配、模式总数，还是只判断存在。多模式题若只需存在性，不必为每次输出保存
+全部模式列表。
 
 ```cpp
 nac<26> ac;
@@ -2552,6 +3093,10 @@ int next_state = ac.step(state, symbol);
 ---
 
 ## 15. 几何与优化
+
+几何题先决定谓词精度：整数坐标通常应优先使用叉积和 `__int128_t`，只有输入或输出本身
+是浮点时才引入 epsilon。优化题先确认目标是否单调、单峰或可由直线包络表示；不能因为
+看到了“最小值”就直接三分或套 Li Chao。
 
 ### 15.1 点与精确整数谓词
 
@@ -2579,6 +3124,10 @@ integral 坐标的差、乘积与累加使用 `__int128_t`，并在转换和运�
 输入域的更宽无符号坐标也会被拒绝，而不是先窄化或发生有符号 UB。
 `non_segment` 名字读作“n-on-segment”，不是英文否定词 `non`。
 
+几何证明应尽量建立在符号谓词上：`cross > 0/<0/=0` 分别表示左转、右转和共线。整数
+坐标下先扩宽再做叉积可以避免 epsilon；浮点下则必须统一 epsilon，并接受“接近共线”
+是题目定义的一部分，而不是实现噪声。
+
 ### 15.2 凸包和多边形
 
 ```cpp
@@ -2592,6 +3141,10 @@ int where = npoint_in_poly(polygon, point, eps);
 凸包 `O(n log n)`，面积 `O(n)`，直径包含建 hull 为 `O(n log n)`。
 `npoint_in_poly` 返回 `1` 内部、`0` 边界、`-1` 外部；空多边形返回外部。
 
+单调链凸包的栈不变量是：当前链始终保持所需转向；加入新点造成错误转向时，栈顶不可能
+属于最终外壳，因此反复弹出。是否保留共线点会改变“错误转向”的等号处理，必须和题目
+对边界点的定义一致。
+
 ### 15.3 直线交点
 
 ```cpp
@@ -2604,6 +3157,10 @@ auto same = nline_intersect(x, y, epsilon);
 `nline_intersection(a,b,c,d)` 以两组点表示无限直线，平行或重合返回空；该旧入口当前
 使用 `denominator == 0`。`nline2<T>{p,v}` 明确使用点加方向向量，`nline_intersect`
 接受 epsilon。两者成功时都返回 `npoint<long double>`，浮点输入的误差策略仍由调用者负责。
+
+“线段相交”和“无限直线交点”不是同一个问题：前者还要检查交点是否落在两段范围内，
+并处理共线重叠；后者只在方向不平行时返回唯一点。不要用一个成功的直线交点结果替代
+线段边界判断。
 
 ### 15.4 Li Chao Tree
 
@@ -2634,6 +3191,10 @@ tree(x, fallback);
 `O(log n)`，线段插入 `O(log^2 n)`，空间 `O(n)`。`nline<T>{m,b}` 是压缩后端短线型，
 可转换为动态后端的 `nline_function<T>`。
 
+Li Chao 的机关是：两条直线的优劣最多交换一次。节点只需保留在中点更优的直线，把另
+一条可能获胜的半边递归下去。它适合直线函数和固定比较方向；若候选函数可以多次交叉，
+这个单交点不变量消失，不能继续使用同一结构。
+
 ### 15.5 离散单峰搜索
 
 ```cpp
@@ -2649,9 +3210,17 @@ auto x = nternary_min(left, right, continuous_function, iterations);
 `nternary_min` 用于浮点闭区间上的近似单峰最小值位置，默认 100 轮，返回最终区间中点；
 它不提供误差证明，精度由区间宽度、轮数和函数数值稳定性共同决定。
 
+离散单峰搜索允许最优平台，但必须确认函数先不劣、后不优；存在多个局部谷底时，三分
+缩区间可能直接丢掉全局最优。若“给定答案是否可行”具有单调性，优先二分答案，不要把
+单调判定问题包装成单峰优化。
+
 ---
 
 ## 16. 竞赛 I/O
+
+I/O 章节只处理边界，不改变算法模型。输入失败、整数溢出和输出格式错误应尽早暴露；
+不要为了“更快”把解析写成无法检查的裸指针。正常竞赛中 `nin/nout` 已足够，文件构造和
+fallback 主要服务测试与工具。
 
 ### 16.1 输入
 
@@ -2688,11 +3257,46 @@ nprintln(a, b, c);  // 空格分隔并换行
 `noutput` 支持 char、C string、`string_view`、`string` 和整数含 128-bit。析构自动 flush，
 也可用 `noutput out(file)`。缓冲区大小为 64 KiB。
 
+输出契约仍是题面的一部分：`nprint` 不加换行，`nprintln` 加换行，多个参数之间恰好
+一个空格。不要把调试信息写到 stdout；训练阶段可以使用独立日志或 checked 诊断。
+
 ---
 
-## 17. 典型装配配方
+## 17. 题型装配配方
+
+这一章不按类名排序，而按“题目里先出现了什么信号”组织。配方不是替代证明的模板；
+它负责把已经证明的算法映射到最小 Nitori 能力。阅读时先遮住代码，回答三个问题：
+
+```text
+最直接暴力是什么？
+重复工作或错误风险在哪里？
+题目真正需要的能力是什么？
+```
+
+每个较完整的配方依次给出：题目原型、暴力瓶颈、机关、装配、正确性、复杂度、失败
+边界和迁移信号。短配方只演示一种已经在前文证明过的组合，不重复全部背景。
+
+### 17.0 先选能力，不先选类名
+
+```text
+只重排/选择位置                         → nview
+按字段观察完整记录                     → algorithm projection
+需要 semantic key 和有限 support       → nfunc
+单点改、前缀可消去                     → Fenwick
+一般有序区间聚合                       → segment tree
+区间修改                               → lazy segment tree
+巨大稀疏坐标                           → dynamic segment tree
+历史版本                               → persistent segment tree
+有序集合 + 子树信息/自定义下降         → AST augmentation
+```
+
+如果一行题面同时命中多个信号，先找最强约束。例如“坐标巨大”不自动推出动态开点：坐标
+全部离线可见且只依赖次序时，压缩往往更小更快；只有真实区间长度、在线坐标或无法预读时，
+动态开点才成为主要机关。
 
 ### 17.1 矩阵主对角线排序
+
+**题目特征：**只操作矩阵的一条几何线，但希望复用普通序列算法。
 
 ```cpp
 nmatrix<int> a(rows, cols);
@@ -2709,7 +3313,13 @@ for (int offset = -rows + 1; offset < cols; ++offset) {
 }
 ```
 
+`diagonal(offset)` 返回可写 view，没有复制矩阵元素。`nsort` 看到的是一组可交换位置，
+不需要知道二维布局；每条对角线的排序复杂度为 `O(k log k)`。如果需要保留原矩阵，先
+`ncollect(d)`，不要误以为复制 view 已经复制元素。
+
 ### 17.2 排序 deque 或 lambda 映射位置
+
+**题目特征：**目标位置不连续，但仍然形成确定的 `0..k-1` 序列。
 
 ```cpp
 ndeque<int> q{4,1,3};
@@ -2718,6 +3328,9 @@ nsort(q); // 非连续原地 heapsort
 auto selected = nview(k, [&](int i) -> int& { return storage[index[i]]; });
 nsort(selected);
 ```
+
+lambda 必须返回真实 `T&`；如果 `index` 含重复位置，多个 view 项会别名同一元素，原地
+排序依赖的“不同位置可独立交换”不再成立。先去重位置，或明确 `ncollect` 后排序副本。
 
 ### 17.3 把数组升级为可分块离散函数
 
@@ -2759,6 +3372,9 @@ for (int v = 0; v < n; ++v) {
 
 ### 17.5 滑动窗口最小值
 
+**题目原型：**输出每个长度为 `width` 的窗口最小值。暴力每个窗口扫描一次是
+`O(n * width)`。
+
 ```cpp
 nqueue_agg<int, nmin<int>> q;
 for (int i = 0; i < n; ++i) {
@@ -2767,6 +3383,10 @@ for (int i = 0; i < n; ++i) {
     if (i + 1 >= width) answer.push(q.fold());
 }
 ```
+
+聚合队列用两个带缓存的栈保持队列顺序；每个元素最多进入和搬移常数次，所以全部
+`push/pop/fold` 为摊还 `O(1)`，总复杂度 `O(n)`。入队后的元素不能被原地修改，否则
+缓存聚合与真实队列不再一致。
 
 ### 17.6 隐式网格 BFS
 
@@ -2780,6 +3400,10 @@ auto graph = ngraph_view(rows * cols, [&](int v) {
 });
 auto distance = nbfs(graph, source);
 ```
+
+机关是“BFS 只需要枚举当前顶点的邻居”，不需要提前拥有整张边表。邻接结果的生命周期
+只需覆盖当前一次 neighbors 枚举，但不能返回引用到已经销毁的局部 owner。总复杂度仍是
+`O(V+E)`，其中 `E` 指实际被枚举出的邻接项数量。
 
 ### 17.7 随机对拍台架
 
@@ -2816,6 +3440,205 @@ nassign(weight, items, &item::weight);
 这里的桥梁是“可写 indexed 目标 + enumerable 源 + projection”，不是连续内存。
 因此相同代码可落在 vector、deque、矩阵行/列、步长 view 或 lambda 映射 view 上。
 
+### 17.9 单点加、区间和：先用 Fenwick
+
+**题目原型：**有一个长度为 `n` 的数组，反复执行 `add(i,delta)` 和 `sum(l,r)`。
+
+**暴力瓶颈：**每次 `sum(l,r)` 逐项相加是 `O(r-l)`；当修改和查询都达到 `O(n)` 时，
+总复杂度可能达到 `O(nq)`。
+
+**机关：**加法可以把前缀拆成树状块，区间和用两个前缀相减。于是每次操作只访问
+`O(log n)` 个块。
+
+```cpp
+nfenwick<long long> bit(initial);
+bit.add(i, delta);
+long long answer = bit.fold(l, r); // [l,r)
+```
+
+**正确性不变量：**每个内部块保存固定低位长度区间的和；`prefix(r)` 依次去掉末尾已
+覆盖块，恰好拼成 `[0,r)`。`fold(l,r)` 使用加法逆元消去 `[0,l)`。
+
+**失败边界：**若把 `nmin<T>` 直接替换成操作对象，通常没有“撤销前缀”的逆元；此时
+应该换 `nseg`，而不是假设 Fenwick 能处理任意聚合。
+
+**迁移信号：**“单点变化 + 前缀/区间统计 + 可消去”是 Fenwick 的触发器；只要出现
+非交换顺序、区间 tag 或不可逆信息，就看 17.10～17.11。
+
+### 17.10 单点改、非交换区间聚合：`nseg`
+
+**题目原型：**字符串序列支持单点替换和区间拼接。拼接顺序不能交换。
+
+```cpp
+struct concat {
+    string id() const { return {}; }
+    string operator()(string left, const string& right) const {
+        return left += right;
+    }
+};
+
+nseg<string, concat> seg(initial, concat{});
+seg.set(pos, value);
+string answer = seg.fold(l, r); // 仍按原序拼接 [l,r)
+```
+
+**为什么 Fenwick 不合适：**`right + left` 与 `left + right` 不同，且没有普遍的逆操作。
+线段树把查询区间拆成若干有序片段，左累加器必须在前、右累加器必须在后。
+
+**正确性不变量：**每个节点缓存的字符串等于其区间的中序拼接；单点修改后只重算祖先。
+查询选出的节点不重叠且按从左到右合并，因此得到的正是目标区间。
+
+**最小反例：**数组 `{"a","b"}`，若查询实现把两个结果以右-左顺序合并，输出 `"ba"`
+而不是 `"ab"`；交换性没有被类型系统证明，必须在操作对象附近写出约定。
+
+### 17.11 区间加、区间和：`nlazyseg`
+
+**题目原型：**对 `[l,r)` 中每个元素加 `delta`，并查询任意区间和。
+
+逐点更新会在一次操作中写 `O(r-l)` 个叶子。lazy tag 把整段“以后都要加多少”留在
+节点上：聚合和增加 `delta * length`，只有需要访问部分子树时才下推。
+
+```cpp
+nlazy_addsum<long long> seg(initial);
+seg.apply(l, r, delta);
+long long answer = seg.fold(qleft, qright);
+```
+
+**tag 顺序：**先加 `2`、再加 `5` 的总 tag 是 `7`；对仿射、赋值等非交换 tag，必须遵守
+`compose(newer, older)` 的“先旧后新”。
+
+**验证台架：**随机生成小数组，同时执行暴力逐点更新和 `seg.apply/fold`，特别安排两次
+不同 tag 覆盖同一区间，再检查所有子区间，而不是只检查整段。
+
+**迁移信号：**如果修改覆盖区间而答案也能由“聚合 + tag + 区间长度”直接更新，考虑
+lazy；如果 tag 不能在聚合层闭合，就需要重新设计状态，而不是强行套模板。
+
+### 17.12 巨大稀疏坐标：`ndynamic_seg`
+
+**题目原型：**坐标范围为 `[-10^{12},10^{12})`，只有少量点被写入，查询真实坐标区间。
+
+```cpp
+ndynamic_seg<long long> seg(-1'000'000'000'000LL,
+                             1'000'000'000'000LL);
+seg.combine(x, delta);       // 只在更新路径开点
+auto value = seg.fold(l, r);
+```
+
+未开节点表示单位元 `0`，不是“没有答案”。因此纯查询不应改变 `nodes()`；这既是空间
+复杂度的一部分，也是调试动态树时最有价值的可观察不变量。
+
+**选择对比：**所有坐标可以提前收集时，`ncompress` + 普通线段树通常更节省节点；坐标
+在线出现、必须保留真实区间长度或无法预读时，动态开点避免了不自然的压缩层。
+
+**复杂度：**令 `W = hi-lo`，点修改和区间查询均为 `O(log W)`；`q` 次首次写入最多产生
+`O(q log W)` 个节点。坐标宽度必须能表示，lazy 动态树还受 `int` 区间长度限制。
+
+### 17.13 查询历史状态：`npersistent_seg`
+
+**题目原型：**每次修改都从某个旧版本分叉，查询任意版本的区间结果。
+
+```cpp
+npersistent_seg<long long> tree(initial);
+int v1 = tree.set(0, index, value); // 从版本 0 产生 v1
+int v2 = tree.set(v1, index2, value2);
+long long old_answer = tree.fold(0, l, r);
+long long new_answer = tree.fold(v2, l, r);
+```
+
+一次更新只复制根到叶子的路径，其余节点共享；旧节点永不改写，所以 `root(0)` 的快照
+在产生新版本后仍有效。不要把“动态开点”误认为“自动持久化”：动态树的旧状态会被
+后续修改覆盖，只有 persistent 的版本根提供历史语义。
+
+### 17.14 从聚合节点找到第一个位置
+
+假设所有叶值非负，需要找到最小 `i` 使前缀和至少为 `target`。先确认总和足够，再沿
+`nseg_node` 下降：
+
+```cpp
+long long remaining = target;
+auto node = nseg_walk(seg, [&](auto current) {
+    if (current.leaf())
+        return nbranch::take;
+    long long left_sum = current.left().aggregate();
+    if (remaining <= left_sum)
+        return nbranch::left;
+    remaining -= left_sum;
+    return nbranch::right;
+});
+int answer = node ? int(node.left_bound()) : npos;
+```
+
+**为什么能走一条路径：**非负性使前缀和单调；如果左子树已经达到剩余目标，答案在左
+边，否则整棵左子树都可以安全跳过并扣除其总和。这个下降逻辑可以复用于固定、lazy、
+persistent 和 dynamic 后端，因为它们都提供同一种节点视图。
+
+**失败边界：**允许负数时，左子树总和不足不代表左边没有更早的命中；此时需要不同的
+聚合信息或改用二分答案/其他算法。
+
+### 17.15 有序多重集的子树聚合与合法 tag
+
+当题目要求“维护有序键，同时维护所有键的总和”，使用 augmentation：
+
+```cpp
+using bag = nset_fhq<int, nless<int>, true, sum_augment>;
+bag tree;
+tree.ins(5, 3);
+tree.ins(9, 1);
+auto hit = tree.first_prefix([&](long long sum) { return sum >= target; });
+```
+
+`sum_augment` 的不变量是：
+
+```text
+info(node) = info(left) + value * count + info(right)
+```
+
+如果增加一个整树平移 tag，键的相对顺序不变，tag 可以同时更新当前键和子树总和；如果
+对一个局部子树任意取负，可能让节点跑到比较器顺序的另一侧，从而破坏 BST，不是因为
+`apply` 接口不存在，而是因为题目的结构前提不再成立。
+
+节点只读快照携带 epoch。拓扑修改后旧快照不能继续下降；读取 FHQ 子节点可能下推表示
+tag，但不会单独让 epoch 失效。使用模式应是“拿快照、完成一次下降、立即丢弃”。
+
+### 17.16 view 生命周期：最短的正确写法不一定是最安全的写法
+
+```cpp
+nvector<int> a{5, 4, 3, 2, 1};
+auto middle = nsub(a, 1, 4);
+nsort(middle);       // 合法：a 仍存活且没有扩容
+
+auto snapshot = ncollect(middle); // 如果后续要扩容/销毁 a，先物化
+```
+
+复制 `middle` 只复制访问描述；如果 `a.push(...)` 触发扩容，旧 view 可能悬垂。这个
+反例不是 Nitori 特有的魔法，而是所有借用引用的普通 C++ 生命周期规则；checked 只能
+在能观测的位置帮助你发现，不能让失效引用重新合法。
+
+### 17.17 位置、key、value：决定是否需要 `nfunc`
+
+若 `predecessor[v]` 保存的是源数组位置，用：
+
+```cpp
+auto previous = nselect_positions(state, predecessor[v]);
+```
+
+若它保存的是语义 key，需要按 key 重新枚举，用 `nredomain`；若还要求任意调用也拒绝
+不在 support 中的 key，用 `nrestrict`。当 domain 恰好是 `nrange(n)` 时三者数值看起来
+相同，换成坐标或压缩编号后混用会产生很难察觉的 WA。
+
+### 17.18 模数下的“除法”：先检查可逆性
+
+组合数、期望和矩阵题中看到 `/x`，不要直接把它翻译成 `x * inv(x)`。先确认：
+
+```text
+模数是否为质数或已知可求逆结构？
+gcd(x, mod) 是否为 1？
+使用的 Mint 类型是否真的拥有 inverse 契约？
+```
+
+不可逆时，算法可能需要整数 gcd、扩展欧几里得、CRT 或改写计数方式。类型可以帮你做
+模运算，却不能替你证明逆元存在。
+
 ---
 
 ## 18. 调试、测试与提交工作流
@@ -2827,7 +3650,7 @@ nassign(weight, items, &item::weight);
 → API 前提
 → 区间 [l,r)
 → view 生命周期和引用类别
-→ 代数定律/作用组合顺序
+→ 合并性质/作用组合顺序
 → 下标、初始化、溢出
 → 算法复杂度
 → profile 差异
@@ -2902,7 +3725,7 @@ python3 tools/audit.py
 
 ### 19.1 先找真实泛型维度
 
-只为真实数学差异泛型化：值类型、比较器、代数运算、作用、存储后端、静态容量、
+只为真实数学差异泛型化：值类型、比较器、合并操作、作用、存储后端、静态容量、
 持久化/回滚性质。不要为可能永远不会替换的内部细节制造策略森林。
 
 ### 19.2 算法依赖能力，不依赖容器名
@@ -2944,7 +3767,7 @@ python3 tools/audit.py
 - 对临时 owner 的危险入口显式删除。
 - 测试 owner 修改和非连续访问。
 
-### 19.5 代数结构必须写出定律
+### 19.5 操作和作用必须写出定律
 
 新增操作包必须在注释中写明单位元、结合/交换/逆元和溢出边界，且与运算一致。新增
 lazy action 必须测试非交换 tag 组合；新增 segment 聚合必须用字符串拼接等非交换对象
@@ -2973,7 +3796,7 @@ lazy action 必须测试非交换 tag 组合；新增 segment 聚合必须用字
 ## 20. 旧版到 Nitori X 的迁移桥梁
 
 Nitori X 不以“删掉旧能力换一个小而美的壳”为目标。它复用旧版竞赛经验，但把每个
-能力重新放进统一的所有权、view、枚举、代数和后端层级。迁移原则是：有真实替代就
+能力重新放进统一的所有权、view、枚举、合并操作和后端层级。迁移原则是：有真实替代就
 给出明确路径；没有等价替代就保留名字或单独后端，禁止静默消失。
 
 ### 20.1 已恢复的实现族
@@ -2991,7 +3814,7 @@ Nitori X 不以“删掉旧能力换一个小而美的壳”为目标。它复�
 | rank 双射/压缩 | `nbije_rank` / `ncompress` | STL 输入另用 `ncompress_stl` |
 | 可扩展有序树 AST | `nnode` + augmentation 对象 | FHQ/splay 都实现，带 epoch 快照诊断 |
 | `npool` | `npool` | 1-based 可删除复用 handle；与 `narena` 分离 |
-| `nsparse` | `nsparse` | 升级为任意有序幺半群的 disjoint sparse table |
+| `nsparse` | `nsparse` | 升级为任意有单位元结合操作的 disjoint sparse table |
 | 势能并查集 | `npotential_dsu` | 差值约束与一致性检查 |
 | `ngraph` | `ngraph` | 默认 `ngraph_forward`；另有 `ngraph_csr/ngraph_list` |
 | 图过滤/遍历 | `ngraph_where/nvertices/narcs` | 零复制 capability view |
@@ -3133,6 +3956,7 @@ nscan nsuffix_scan nfirst_true nlast_true nrollback
 nscratch narena npool_dynamic npool
 npartition npart npart_dense nperm
 nbranch nnode nwalk nempty_augment nempty_tag nfirst_prefix nlast_suffix
+nfhq_policy nimplicit_fhq nseq_fhq
 nseg_node nseg_walk
 nset_fhq nset_splay nset_stl nset nbag
 nmap_flat nmap_hash nmap_stl nmap

@@ -1284,6 +1284,12 @@ template <class S> class nnode {
     bool ok() const { return current() && handle_ && owner_->nnode_alive(handle_); }
     explicit operator bool() const { return ok(); }
 
+    const S& owner() const {
+        npre(current());
+        return *owner_;
+    }
+    bool same_owner(const nnode& other) const noexcept { return owner_ == other.owner_; }
+
     const value_type& val() const {
         npre(ok());
         return owner_->nnode_val(handle_);
@@ -1308,7 +1314,20 @@ template <class S> class nnode {
         npre(current());
         return {owner_, owner_->nnode_right(handle_), epoch_};
     }
+    bool leaf() const {
+        npre(current());
+        return handle_ && !owner_->nnode_left(handle_) && !owner_->nnode_right(handle_);
+    }
     int handle() const noexcept { return handle_; }
+
+    template <class Q = S>
+        requires requires(const Q& owner, int handle) {
+            { owner.nnode_parent(handle) } -> convertible_to<int>;
+        }
+    nnode parent() const {
+        npre(current());
+        return {owner_, owner_->nnode_parent(handle_), epoch_};
+    }
 
     template <class Q = S>
         requires requires(const Q& owner, int handle) {
@@ -1319,10 +1338,21 @@ template <class S> class nnode {
         npre(current());
         return owner_->nnode_tag(handle_);
     }
+
+    template <class Q = S>
+        requires requires(const Q& owner, int handle) {
+            typename Q::state_type;
+            { owner.nnode_state(handle) } -> convertible_to<typename Q::state_type>;
+        }
+    typename Q::state_type state() const {
+        npre(ok());
+        return owner_->nnode_state(handle_);
+    }
 };
 
-template <class S, class F> nnode<S> nwalk(const S& tree, F&& decide) {
-    auto node = tree.root();
+// Walk may start at an owner root or at any current subtree snapshot.  The decision
+// must eventually take a node or descend toward an existing child.
+template <class S, class F> nnode<S> nwalk(nnode<S> node, F&& decide) {
     while (node) {
         nbranch branch = invoke(decide, node);
         if (branch == nbranch::left)
@@ -1335,6 +1365,10 @@ template <class S, class F> nnode<S> nwalk(const S& tree, F&& decide) {
         }
     }
     return node;
+}
+
+template <class S, class F> nnode<S> nwalk(const S& tree, F&& decide) {
+    return nwalk(tree.root(), forward<F>(decide));
 }
 
 // Augmentation objects provide `info_type`, id(), one(value,count), and associative
@@ -1360,9 +1394,8 @@ template <class T, class I> struct nempty_tag {
 
 // Prefix/suffix descent assumes the predicate is monotone as the ordered aggregate
 // grows.  Without that semantic property the returned node is not the first/last hit.
-template <class S, class P> nnode<S> nfirst_prefix(const S& tree, P&& predicate) {
-    const auto& augment = tree.augment();
-    auto node = tree.root();
+template <class S, class P> nnode<S> nfirst_prefix(nnode<S> node, P&& predicate) {
+    const auto& augment = node.owner().augment();
     auto prefix = augment.id();
     while (node) {
         auto through_left = augment.op(prefix, node.left().info());
@@ -1379,9 +1412,13 @@ template <class S, class P> nnode<S> nfirst_prefix(const S& tree, P&& predicate)
     return node;
 }
 
-template <class S, class P> nnode<S> nlast_suffix(const S& tree, P&& predicate) {
-    const auto& augment = tree.augment();
-    auto node = tree.root();
+
+template <class S, class P> nnode<S> nfirst_prefix(const S& tree, P&& predicate) {
+    return nfirst_prefix(tree.root(), forward<P>(predicate));
+}
+
+template <class S, class P> nnode<S> nlast_suffix(nnode<S> node, P&& predicate) {
+    const auto& augment = node.owner().augment();
     auto suffix = augment.id();
     while (node) {
         auto through_right = augment.op(node.right().info(), suffix);
@@ -1396,6 +1433,11 @@ template <class S, class P> nnode<S> nlast_suffix(const S& tree, P&& predicate) 
         node = node.left();
     }
     return node;
+}
+
+
+template <class S, class P> nnode<S> nlast_suffix(const S& tree, P&& predicate) {
+    return nlast_suffix(tree.root(), forward<P>(predicate));
 }
 
 /**
@@ -3635,6 +3677,512 @@ template <class S> bool nordered_equal(const S& left, const S& right) {
     return true;
 }
 } // namespace ni
+
+/**
+ * Convenience policy for an implicit FHQ whose subtree information is an ordered
+ * augmentation and whose lazy operation is a uniform element action.  This adapter is
+ * intentionally not the FHQ core: custom policies may use arbitrary state, accept
+ * several tag types, exchange children, and derive different child tags in push().
+ */
+template <class T, class A = nempty_augment<T>,
+          class L = nempty_tag<T, typename A::info_type>>
+struct nfhq_policy {
+    using info_type = typename A::info_type;
+    using tag_type = typename L::tag_type;
+    struct state_type {
+        tag_type lazy;
+        bool pending = false;
+    };
+
+    [[no_unique_address]] A augment{};
+    [[no_unique_address]] L action{};
+
+    nfhq_policy() = default;
+    explicit nfhq_policy(A augment) : augment(move(augment)) {}
+    nfhq_policy(A augment, L action) : augment(move(augment)), action(move(action)) {}
+
+    info_type id() const { return augment.id(); }
+    info_type leaf(const T& value) const { return augment.one(value, 1); }
+    state_type state_id() const { return {action.tag_id(), false}; }
+
+    void pull(auto node) const {
+        auto left = node.left(), right = node.right();
+        info_type left_info = left ? left.info() : augment.id();
+        info_type right_info = right ? right.info() : augment.id();
+        node.info() = augment.op(augment.op(move(left_info), augment.one(node.val(), 1)),
+                                 move(right_info));
+    }
+    void apply(auto node, const tag_type& tag) const {
+        node.val() = action.apply_value(move(node.val()), tag, 1);
+        node.info() = action.apply_info(move(node.info()), tag, node.len());
+        auto& state = node.state();
+        if (state.pending)
+            state.lazy = action.compose(tag, state.lazy);
+        else {
+            state.lazy = tag;
+            state.pending = true;
+        }
+    }
+    void push(auto node) const {
+        auto& state = node.state();
+        if (!state.pending)
+            return;
+        tag_type tag = state.lazy;
+        auto left = node.left(), right = node.right();
+        if (left)
+            left.apply(tag);
+        if (right)
+            right.apply(tag);
+        state = state_id();
+    }
+};
+
+/**
+ * Implicit FHQ sequence engine.  P owns all semantic state: it provides info_type,
+ * state_type, id(), leaf(value), state_id(), pull(node), push(node), and any desired
+ * apply(node,tag) overloads.  The editable node passed to P exposes value/info/state,
+ * child nodes, length, apply(tag), and exchange_children().  Thus lazy composition,
+ * position-dependent child tags and structural actions belong to the policy rather
+ * than a fixed trait protocol.  The engine only protects ownership, subtree sizes,
+ * parent links and randomized split/merge.  Expected structural cost is O(log n).
+ */
+template <class T, class P = nfhq_policy<T>> class nimplicit_fhq {
+    struct node {
+        T value;
+        uint64_t priority;
+        int left = 0, right = 0, parent = 0, size = 1;
+        typename P::info_type info;
+        typename P::state_type state;
+
+        node(T value, uint64_t priority, typename P::info_type info,
+             typename P::state_type state)
+            : value(move(value)), priority(priority), info(move(info)), state(move(state)) {}
+    };
+
+  public:
+    using value_type = T;
+    using policy_type = P;
+    using info_type = typename P::info_type;
+    using state_type = typename P::state_type;
+    using node_view = nnode<nimplicit_fhq>;
+
+    /**
+     * Mutable policy-facing AST handle.  It never owns a node and is only valid during
+     * the callback that received it.  exchange_children() is the primitive for any
+     * order-changing tag; the policy must update info/state consistently in apply().
+     */
+    class node_editor {
+        nimplicit_fhq* owner_ = nullptr;
+        int handle_ = 0;
+
+        node_editor(nimplicit_fhq* owner, int handle) : owner_(owner), handle_(handle) {}
+        friend class nimplicit_fhq;
+
+      public:
+        explicit operator bool() const noexcept { return handle_ != 0; }
+        T& val() const {
+            npre(handle_);
+            return owner_->pool_[handle_].value;
+        }
+        info_type& info() const {
+            npre(handle_);
+            return owner_->pool_[handle_].info;
+        }
+        state_type& state() const {
+            npre(handle_);
+            return owner_->pool_[handle_].state;
+        }
+        int len() const { return owner_->size_of(handle_); }
+        node_editor left() const {
+            npre(handle_);
+            return {owner_, owner_->pool_[handle_].left};
+        }
+        node_editor right() const {
+            npre(handle_);
+            return {owner_, owner_->pool_[handle_].right};
+        }
+        void exchange_children() const {
+            npre(handle_);
+            swap(owner_->pool_[handle_].left, owner_->pool_[handle_].right);
+        }
+        template <class Tag> void apply(Tag&& tag) const {
+            npre(handle_);
+            owner_->put(handle_, forward<Tag>(tag));
+        }
+    };
+
+  private:
+    mutable ni::nslot_pool<node> pool_;
+    int root_ = 0;
+    [[no_unique_address]] P policy_{};
+    mutable uint64_t epoch_ = 1;
+
+    void touch() const noexcept {
+        if (!++epoch_)
+            ++epoch_;
+    }
+    int size_of(int handle) const { return handle ? pool_[handle].size : 0; }
+    void make_root(int handle) {
+        root_ = handle;
+        if (handle)
+            pool_[handle].parent = 0;
+    }
+    void attach_left(int parent, int child) {
+        int old = pool_[parent].left;
+        if (old && pool_[old].parent == parent)
+            pool_[old].parent = 0;
+        pool_[parent].left = child;
+        if (child)
+            pool_[child].parent = parent;
+    }
+    void attach_right(int parent, int child) {
+        int old = pool_[parent].right;
+        if (old && pool_[old].parent == parent)
+            pool_[old].parent = 0;
+        pool_[parent].right = child;
+        if (child)
+            pool_[child].parent = parent;
+    }
+    template <class Tag> void put(int handle, Tag&& tag) const {
+        if (handle)
+            policy_.apply(node_editor(const_cast<nimplicit_fhq*>(this), handle),
+                          forward<Tag>(tag));
+    }
+    void push_down(int handle) const {
+        if (handle)
+            policy_.push(node_editor(const_cast<nimplicit_fhq*>(this), handle));
+    }
+    void pull(int handle) {
+        if (!handle)
+            return;
+        long long size = 1LL + size_of(pool_[handle].left) + size_of(pool_[handle].right);
+        npre(size <= INT_MAX);
+        pool_[handle].size = int(size);
+        policy_.pull(node_editor(this, handle));
+    }
+    int merge(int left, int right) {
+        if (!left) {
+            if (right)
+                pool_[right].parent = 0;
+            return right;
+        }
+        if (!right) {
+            pool_[left].parent = 0;
+            return left;
+        }
+        push_down(left);
+        push_down(right);
+        int result;
+        if (pool_[left].priority >= pool_[right].priority) {
+            int joined = merge(pool_[left].right, right);
+            attach_right(left, joined);
+            pull(left);
+            result = left;
+        } else {
+            int joined = merge(left, pool_[right].left);
+            attach_left(right, joined);
+            pull(right);
+            result = right;
+        }
+        pool_[result].parent = 0;
+        return result;
+    }
+    void split(int handle, int left_size, int& left, int& right) {
+        npre(0 <= left_size && left_size <= size_of(handle));
+        if (!handle) {
+            left = right = 0;
+            return;
+        }
+        push_down(handle);
+        int current_left = size_of(pool_[handle].left);
+        if (left_size <= current_left) {
+            int child;
+            split(pool_[handle].left, left_size, left, child);
+            attach_left(handle, child);
+            pull(handle);
+            right = handle;
+        } else {
+            int child;
+            split(pool_[handle].right, left_size - current_left - 1, child, right);
+            attach_right(handle, child);
+            pull(handle);
+            left = handle;
+        }
+        if (left)
+            pool_[left].parent = 0;
+        if (right)
+            pool_[right].parent = 0;
+    }
+    int find_handle(int index) const {
+        npre(0 <= index && index < size_of(root_));
+        for (int handle = root_; handle;) {
+            push_down(handle);
+            int left_size = size_of(pool_[handle].left);
+            if (index < left_size)
+                handle = pool_[handle].left;
+            else if (index == left_size)
+                return handle;
+            else {
+                index -= left_size + 1;
+                handle = pool_[handle].right;
+            }
+        }
+        npre(false);
+        return 0;
+    }
+    void pull_ancestors(int handle) {
+        for (handle = handle ? pool_[handle].parent : 0; handle; handle = pool_[handle].parent)
+            pull(handle);
+    }
+    void release(int handle) {
+        if (!handle)
+            return;
+        int left = pool_[handle].left, right = pool_[handle].right;
+        release(left);
+        release(right);
+        pool_.erase(handle);
+    }
+
+    friend class nnode<nimplicit_fhq>;
+    uint64_t nnode_epoch() const noexcept { return epoch_; }
+    bool nnode_alive(int handle) const noexcept { return pool_.alive(handle); }
+    const T& nnode_val(int handle) const { return pool_[handle].value; }
+    int nnode_count(int handle) const { return handle ? 1 : 0; }
+    int nnode_len(int handle) const { return size_of(handle); }
+    info_type nnode_info(int handle) const { return handle ? pool_[handle].info : policy_.id(); }
+    int nnode_left(int handle) const {
+        push_down(handle);
+        return handle ? pool_[handle].left : 0;
+    }
+    int nnode_right(int handle) const {
+        push_down(handle);
+        return handle ? pool_[handle].right : 0;
+    }
+    int nnode_parent(int handle) const { return handle ? pool_[handle].parent : 0; }
+    state_type nnode_state(int handle) const {
+        npre(handle);
+        return pool_[handle].state;
+    }
+
+  public:
+    nimplicit_fhq() = default;
+    explicit nimplicit_fhq(P policy) : policy_(move(policy)) {}
+    nimplicit_fhq(initializer_list<T> values, P policy = {}) : policy_(move(policy)) {
+        reserve(int(values.size()));
+        for (const T& value : values)
+            ins(len(), value);
+    }
+    nimplicit_fhq(const nimplicit_fhq& other)
+        : pool_(other.pool_), root_(other.root_), policy_(other.policy_) {}
+    nimplicit_fhq(nimplicit_fhq&& other) noexcept(
+        is_nothrow_move_constructible_v<ni::nslot_pool<node>> &&
+        is_nothrow_move_constructible_v<P>)
+        : pool_(move(other.pool_)), root_(exchange(other.root_, 0)),
+          policy_(move(other.policy_)) {
+        other.touch();
+    }
+    nimplicit_fhq& operator=(const nimplicit_fhq& other) {
+        if (this != addressof(other)) {
+            pool_ = other.pool_;
+            root_ = other.root_;
+            policy_ = other.policy_;
+            touch();
+        }
+        return *this;
+    }
+    nimplicit_fhq& operator=(nimplicit_fhq&& other) noexcept(
+        is_nothrow_move_assignable_v<ni::nslot_pool<node>> &&
+        is_nothrow_move_assignable_v<P>) {
+        if (this != addressof(other)) {
+            pool_ = move(other.pool_);
+            root_ = exchange(other.root_, 0);
+            policy_ = move(other.policy_);
+            touch();
+            other.touch();
+        }
+        return *this;
+    }
+
+    int len() const { return size_of(root_); }
+    bool empty() const noexcept { return root_ == 0; }
+    const P& policy() const noexcept { return policy_; }
+    node_view root() const { return node_view(this, root_, epoch_); }
+    template <class F> node_view walk(F&& decide) const {
+        return nwalk(*this, forward<F>(decide));
+    }
+
+    void reserve(int capacity) { pool_.reserve(capacity); }
+    void clear() {
+        if (root_)
+            touch();
+        pool_.clear();
+        root_ = 0;
+    }
+
+    const T& operator[](int index) const { return pool_[find_handle(index)].value; }
+    T get(int index) const { return (*this)[index]; }
+    void set(int index, T value) {
+        int handle = find_handle(index);
+        push_down(handle);
+        pool_[handle].value = move(value);
+        pool_[handle].info = policy_.leaf(pool_[handle].value);
+        policy_.pull(node_editor(this, handle));
+        pull_ancestors(handle);
+        touch();
+    }
+
+    void ins(int index, const T& value) {
+        T copy = value;
+        ins(index, move(copy));
+    }
+    void ins(int index, T&& value) {
+        npre(0 <= index && index <= len());
+        npre(len() < INT_MAX);
+        int left, right;
+        split(root_, index, left, right);
+        info_type info = policy_.leaf(value);
+        int fresh = pool_.make(move(value), nrng_global(), move(info), policy_.state_id());
+        make_root(merge(merge(left, fresh), right));
+        touch();
+    }
+    void push(const T& value) { ins(len(), value); }
+    void push(T&& value) { ins(len(), move(value)); }
+
+    int del(int left, int right) {
+        npre(0 <= left && left <= right && right <= len());
+        if (left == right)
+            return 0;
+        int prefix_middle, suffix, prefix, middle;
+        split(root_, right, prefix_middle, suffix);
+        split(prefix_middle, left, prefix, middle);
+        int removed = size_of(middle);
+        release(middle);
+        make_root(merge(prefix, suffix));
+        touch();
+        return removed;
+    }
+    void del(int index) {
+        npre(0 <= index && index < len());
+        del(index, index + 1);
+    }
+
+    info_type fold() const { return root_ ? pool_[root_].info : policy_.id(); }
+    info_type fold(int left, int right) {
+        npre(0 <= left && left <= right && right <= len());
+        if (left == right)
+            return policy_.id();
+        if (left == 0 && right == len())
+            return pool_[root_].info;
+        int prefix_middle, suffix, prefix, middle;
+        split(root_, right, prefix_middle, suffix);
+        split(prefix_middle, left, prefix, middle);
+        info_type result = pool_[middle].info;
+        make_root(merge(merge(prefix, middle), suffix));
+        touch();
+        return result;
+    }
+
+    template <class Tag> void apply(int left, int right, Tag&& tag) {
+        npre(0 <= left && left <= right && right <= len());
+        if (left == right)
+            return;
+        int prefix_middle, suffix, prefix, middle;
+        split(root_, right, prefix_middle, suffix);
+        split(prefix_middle, left, prefix, middle);
+        put(middle, forward<Tag>(tag));
+        make_root(merge(merge(prefix, middle), suffix));
+        touch();
+    }
+    template <class Tag> void apply(Tag&& tag) {
+        if (root_) {
+            put(root_, forward<Tag>(tag));
+            touch();
+        }
+    }
+    template <class Tag> void apply(const node_view& selected, Tag&& tag) {
+        npre(selected.current() && selected.ok() && addressof(selected.owner()) == this);
+        int handle = selected.handle();
+        put(handle, forward<Tag>(tag));
+        pull_ancestors(handle);
+        touch();
+    }
+
+    // Low-level escape hatch: callback must leave value/info/state and child order as a
+    // valid lazy representation of the same node set.  Ancestor information is rebuilt.
+    template <class F> void mutate(const node_view& selected, F&& mutation) {
+        npre(selected.current() && selected.ok() && addressof(selected.owner()) == this);
+        int handle = selected.handle();
+        invoke(forward<F>(mutation), node_editor(this, handle));
+        pull_ancestors(handle);
+        touch();
+    }
+    template <class F> void mutate(int left, int right, F&& mutation) {
+        npre(0 <= left && left < right && right <= len());
+        int prefix_middle, suffix, prefix, middle;
+        split(root_, right, prefix_middle, suffix);
+        split(prefix_middle, left, prefix, middle);
+        invoke(forward<F>(mutation), node_editor(this, middle));
+        make_root(merge(merge(prefix, middle), suffix));
+        touch();
+    }
+
+    // Move [left,right) to position `at` in the sequence after that interval is removed.
+    void splice(int left, int right, int at) {
+        npre(0 <= left && left <= right && right <= len());
+        int width = right - left;
+        npre(0 <= at && at <= len() - width);
+        if (!width || at == left)
+            return;
+        int prefix_middle, suffix, prefix, middle;
+        split(root_, right, prefix_middle, suffix);
+        split(prefix_middle, left, prefix, middle);
+        int rest = merge(prefix, suffix), before, after;
+        split(rest, at, before, after);
+        make_root(merge(merge(before, middle), after));
+        touch();
+    }
+    void rotate(int left, int middle, int right) {
+        npre(0 <= left && left <= middle && middle <= right && right <= len());
+        if (left == middle || middle == right)
+            return;
+        int abc, d, ab, c, a, b;
+        split(root_, right, abc, d);
+        split(abc, middle, ab, c);
+        split(ab, left, a, b);
+        make_root(merge(merge(merge(a, c), b), d));
+        touch();
+    }
+
+    struct cursor {
+        const nimplicit_fhq* owner;
+        vector<int> stack;
+        int index = 0;
+
+        explicit cursor(const nimplicit_fhq* owner) : owner(owner) { descend(owner->root_); }
+        void descend(int handle) {
+            while (handle) {
+                owner->push_down(handle);
+                stack.push_back(handle);
+                handle = owner->pool_[handle].left;
+            }
+        }
+        bool ok() const { return !stack.empty(); }
+        const T& val() const { return owner->pool_[stack.back()].value; }
+        int idx() const { return index; }
+        void next() {
+            int handle = stack.back();
+            stack.pop_back();
+            ++index;
+            owner->push_down(handle);
+            descend(owner->pool_[handle].right);
+        }
+    };
+    cursor enumerate() const& { return cursor(this); }
+    cursor enumerate() && = delete;
+};
+
+template <class T, class P = nfhq_policy<T>>
+using nseq_fhq = nimplicit_fhq<T, P>;
 
 /**
  * Randomized ordered multiset/set with pluggable augmentation and lazy node action.

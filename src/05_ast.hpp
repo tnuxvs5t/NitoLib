@@ -27,6 +27,12 @@ template <class S> class nnode {
     bool ok() const { return current() && handle_ && owner_->nnode_alive(handle_); }
     explicit operator bool() const { return ok(); }
 
+    const S& owner() const {
+        npre(current());
+        return *owner_;
+    }
+    bool same_owner(const nnode& other) const noexcept { return owner_ == other.owner_; }
+
     const value_type& val() const {
         npre(ok());
         return owner_->nnode_val(handle_);
@@ -51,7 +57,20 @@ template <class S> class nnode {
         npre(current());
         return {owner_, owner_->nnode_right(handle_), epoch_};
     }
+    bool leaf() const {
+        npre(current());
+        return handle_ && !owner_->nnode_left(handle_) && !owner_->nnode_right(handle_);
+    }
     int handle() const noexcept { return handle_; }
+
+    template <class Q = S>
+        requires requires(const Q& owner, int handle) {
+            { owner.nnode_parent(handle) } -> convertible_to<int>;
+        }
+    nnode parent() const {
+        npre(current());
+        return {owner_, owner_->nnode_parent(handle_), epoch_};
+    }
 
     template <class Q = S>
         requires requires(const Q& owner, int handle) {
@@ -62,10 +81,21 @@ template <class S> class nnode {
         npre(current());
         return owner_->nnode_tag(handle_);
     }
+
+    template <class Q = S>
+        requires requires(const Q& owner, int handle) {
+            typename Q::state_type;
+            { owner.nnode_state(handle) } -> convertible_to<typename Q::state_type>;
+        }
+    typename Q::state_type state() const {
+        npre(ok());
+        return owner_->nnode_state(handle_);
+    }
 };
 
-template <class S, class F> nnode<S> nwalk(const S& tree, F&& decide) {
-    auto node = tree.root();
+// Walk may start at an owner root or at any current subtree snapshot.  The decision
+// must eventually take a node or descend toward an existing child.
+template <class S, class F> nnode<S> nwalk(nnode<S> node, F&& decide) {
     while (node) {
         nbranch branch = invoke(decide, node);
         if (branch == nbranch::left)
@@ -78,6 +108,10 @@ template <class S, class F> nnode<S> nwalk(const S& tree, F&& decide) {
         }
     }
     return node;
+}
+
+template <class S, class F> nnode<S> nwalk(const S& tree, F&& decide) {
+    return nwalk(tree.root(), forward<F>(decide));
 }
 
 // Augmentation objects provide `info_type`, id(), one(value,count), and associative
@@ -103,9 +137,8 @@ template <class T, class I> struct nempty_tag {
 
 // Prefix/suffix descent assumes the predicate is monotone as the ordered aggregate
 // grows.  Without that semantic property the returned node is not the first/last hit.
-template <class S, class P> nnode<S> nfirst_prefix(const S& tree, P&& predicate) {
-    const auto& augment = tree.augment();
-    auto node = tree.root();
+template <class S, class P> nnode<S> nfirst_prefix(nnode<S> node, P&& predicate) {
+    const auto& augment = node.owner().augment();
     auto prefix = augment.id();
     while (node) {
         auto through_left = augment.op(prefix, node.left().info());
@@ -122,9 +155,13 @@ template <class S, class P> nnode<S> nfirst_prefix(const S& tree, P&& predicate)
     return node;
 }
 
-template <class S, class P> nnode<S> nlast_suffix(const S& tree, P&& predicate) {
-    const auto& augment = tree.augment();
-    auto node = tree.root();
+
+template <class S, class P> nnode<S> nfirst_prefix(const S& tree, P&& predicate) {
+    return nfirst_prefix(tree.root(), forward<P>(predicate));
+}
+
+template <class S, class P> nnode<S> nlast_suffix(nnode<S> node, P&& predicate) {
+    const auto& augment = node.owner().augment();
     auto suffix = augment.id();
     while (node) {
         auto through_right = augment.op(node.right().info(), suffix);
@@ -139,6 +176,11 @@ template <class S, class P> nnode<S> nlast_suffix(const S& tree, P&& predicate) 
         node = node.left();
     }
     return node;
+}
+
+
+template <class S, class P> nnode<S> nlast_suffix(const S& tree, P&& predicate) {
+    return nlast_suffix(tree.root(), forward<P>(predicate));
 }
 
 /**
