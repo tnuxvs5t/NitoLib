@@ -56,7 +56,7 @@ Nitori X 是面向算法竞赛的 GNU C++20 单头文件系统。它允许同一
 | 坐标范围巨大且只改少数位置 | 第 10.7 节 |
 | 需要访问旧答案 | 第 10.6 节 |
 | 有序集合还要维护子树信息 | 第 9.12 节的 AST 树 |
-| 序列需要按位置切分、区间 tag、翻转或搬运 | 第 9.13 节的隐式 FHQ |
+| 序列需要按位置切分、区间 tag、翻转或搬运 | 第 9.13 节的契约与第 17.19 节的完整配方 |
 | BFS、最短路、树、流、匹配 | 第 11 章 |
 | gcd、模运算、组合、博弈 | 第 12 章 |
 | 矩阵、线性方程、卷积、多项式 | 第 13 章 |
@@ -2006,6 +2006,10 @@ FHQ 互相承担不属于自己的不变量。
 3. `first_prefix` 的 predicate 需要什么单调性？允许负数时会怎样失败？
 4. 为什么整树平移通常是合法 tag，而任意局部取负通常不合法？
 5. FHQ 与 splay 的只读查询对 epoch 有什么不同？
+6. 隐式 FHQ 的 `apply` 为什么必须立即更新当前 info，不能只把 tag 留进 state？
+7. `exchange_children()` 为什么不能自动替策略更新首尾、哈希或括号摘要？
+8. `splice(l,r,at)` 的 `at` 属于删除前还是删除后的坐标系？
+9. 什么时候 `nfhq_policy<T,A,L>` 已经够用，什么时候应直接写自由策略？
 
 ---
 
@@ -2272,6 +2276,20 @@ w.successor(l, r, bound);          // 最小 >= bound
 
 时间 `O(bit-width(T))`，可选结果使用 `nmaybe<T>`。
 
+不要把它想成“神秘的第 k 小模板”。构建时从最高位到最低位，对当前序列做稳定的
+`0-bit | 1-bit` 分组，并记录每个前缀中有多少个 0。稳定分组保护了一个关键事实：原区间
+`[l,r)` 中落到 0 组或 1 组的元素，在下一层仍各自形成连续区间。于是查询只需用前缀计数
+把 `[l,r)` 映射到下一层，不必保存每个查询的一份子序列。
+
+求第 `rank` 小时，若区间内 0 的数量大于 `rank`，答案当前位为 0 并进入 0 组；否则答案
+当前位为 1、扣掉全部 0 后进入 1 组。`count_less` 做的是同一棵决策树：当 bound 当前位
+为 1，当前区间所有 0 都可以立刻计入答案。有符号整数会先翻转符号位，使编码的无符号
+字典序等于原数值顺序；直接按二进制解释负数会把它们错误地排到正数之后。
+
+构建时间和空间都是 `O(n * bit-width(T))`。它只描述构造时的静态序列；出现在线修改时，
+应重新判断能否离线、改用树套结构，或换成题目特定的统计方法，而不是期待 `kth` 暗中
+维护修改。最小自检应同时包含负数、重复值、空值域计数以及不存在的前驱/后继。
+
 ### 10.9 Mo 调度
 
 ```cpp
@@ -2288,10 +2306,29 @@ nrun_mo(queries, universe, add, remove, answer); // 左右操作相同
 调度器按引用转发回调，不复制回调状态；简化重载的左右移动会调用同一个 `add/remove`
 对象，也支持不可复制 functor。
 
+Mo 不是一种区间答案公式，而是一种**移动窗口的离线顺序**。处理某个查询前必须始终
+维护：当前状态恰好等于半开区间 `[left,right)` 的答案。四个方向的回调与边界变化顺序是：
+
+```text
+--left  后 add_left(left)       把新左端加入
+add_right(right) 后 ++right     把旧 right 位置加入
+remove_left(left) 后 ++left     删除旧 left 位置
+--right 后 remove_right(right)  删除旧 right-1 位置
+```
+
+若答案依赖顺序，左右回调不能合并；例如维护字符串、方向边或端点贡献时，左侧加入与右侧
+加入不是同一运算。只有状态是无序 multiset 统计时，三回调简化重载才自然。
+
+令 `U=universe`。当前块宽约为 `sqrt(U)`，蛇形排序使左端总移动量至多约 `O(q sqrt U)`，
+右端至多约 `O(U sqrt U)`；再乘以一次 add/remove 的真实成本。若一次回调本身是
+`O(log U)`，总复杂度也要带上这项。Mo 要求查询全部预先可见、更新可逆且单次移动便宜；
+在线回答、难以删除
+元素或只有很少查询时，预处理/树结构往往更合适。
+
 ### 10.10 Disjoint Sparse Table：`nsparse<T,O>`
 
-`nsparse` 的名字兼容经典 sparse table，但实现是 disjoint sparse table：只要求有序
-只需有单位元且结合，不要求幂等或交换。因此字符串拼接等操作也能 `O(1)` 查询：
+`nsparse` 的名字兼容经典 sparse table，但实现是 disjoint sparse table：只要求操作有
+单位元且结合，不要求幂等或交换。因此字符串拼接等操作也能 `O(1)` 查询：
 
 ```cpp
 nsparse<string, nconcat> table(words);
@@ -2319,14 +2356,29 @@ auto x = d.diff(left, right);
 
 ### 10.12 区间结构选择检查点
 
+三种经常混淆的“树”可以先按坐标、时间和顺序三个维度拆开：
+
+| 结构 | 元素怎样定位 | 是否保留历史 | 顺序能否变化 | 主要空间来源 |
+|---|---|---|---|---|
+| `npersistent_seg` | 固定下标 | 是，版本根分叉 | 否 | 每次点改复制 `O(log n)` 路径 |
+| `ndynamic_seg` | 巨大真实坐标 | 否 | 否 | 实际写入路径 `O(q log W)` |
+| `nimplicit_fhq` | 当前序列位置 | 否 | 是，split/merge 重排 | 每个当前元素一个节点 |
+
+“dynamic”说的是坐标节点按需分配，不等于保留旧状态；“persistent”说的是旧节点不可变，
+不等于位置顺序可搬运；“implicit”说的是 key 被子树长度替代，不等于坐标域巨大。先确定
+题目变化的是哪一维，再选结构，通常比背类名稳定。
+
 1. 为什么 Fenwick 的区间 fold 需要逆操作，而线段树不需要？
 2. 非交换操作进入 `nseg` 时，查询必须保护什么顺序？
 3. lazy action 的 `compose(newer,older)` 表示哪一个时间顺序？
 4. 动态开点的缺失节点代表什么，为什么只读查询不能开点？
 5. persistent 与 dynamic 分别解决“历史”和“稀疏”哪个维度？
 6. 一个 `nseg_node` 快照在什么修改后失效，持久化旧版本为什么例外？
+7. Wavelet 每一层稳定分组后，原查询区间为什么还能映射成连续区间？
+8. Mo 的四个回调分别在边界变化前还是变化后接收哪个位置？
+9. 为什么位置会被搬运的序列不能用普通动态开点线段树自然表达？
 
-能回答这六题，才算真正掌握“线段树家族”；只会写构造函数还不足以安全换后端。
+能回答这些问题，才算真正掌握本章的选择路径；只会写构造函数还不足以安全换后端。
 
 ---
 
@@ -2468,6 +2520,17 @@ auto c3 = nscc_tarjan(g);           // 递归 Tarjan
 拓扑排序和 SCC 均为 `O(V+E)`。`nscc_tarjan` 的递归深度可能达到 `V`；极深图优先默认
 迭代 Kosaraju。
 
+SCC 的证明目标不是“DFS 恰好染成几种颜色”，而是把互相可达关系压成等价类。压缩后，
+任意跨分量边 `u -> v` 变成 `component[u] -> component[v]`；若缩点图仍有有向环，环上
+分量本应互相可达，和“已经是最大强连通分量”矛盾，所以 condensation 一定是 DAG。
+`npartition` 的数字类号只是表示标签，不承诺拓扑先后；需要在缩点图上做 DP 时，显式
+建边后再 `ntoposort`，不要把类号大小当拓扑序。平行缩点边是否去重由后续算法决定：
+求可达性可以保留，统计不同关系时通常要去重。
+
+Kosaraju 用原图完成顺序和反图遍历换取迭代稳定性；Tarjan 在一次 DFS 中用 discovery/
+low-link 和栈识别“尚未离开当前搜索区域”的分量，内存路线更直接但递归深度是实际风险。
+二者得到的数字标签可以不同，只应比较 `same(a,b)` 代表的分区是否相同。
+
 `nlca tree(g, root)` 要求图严格描述一棵以 root 为根的树，接受两种且仅两种存储：
 
 - 每个父到子恰好一条弧，共 `V-1` 条；
@@ -2509,6 +2572,26 @@ h.each(a,b, callback, edge_mode);
 才把树映射到 HLD 的位置区间。`nhld_segment.rev` 不是附加装饰：如果路径聚合非交换，
 反向段必须先翻转，再按原路径方向合并。
 
+先用最朴素的顶点序列看懂 `rev`：
+
+```cpp
+nvector<int> path_vertices;
+nfor(segment, h.path(a, b)) {
+    if (segment.rev) {
+        for (int p = segment.r; p-- > segment.l; )
+            path_vertices.push(h.vertex(p));
+    } else {
+        for (int p = segment.l; p < segment.r; ++p)
+            path_vertices.push(h.vertex(p));
+    }
+}
+```
+
+`h.path(a,b)` 已经按从 `a` 到 `b` 的段顺序返回；`rev` 只说明某一段在 base array 中需要
+倒读。要把上面逐点版本升级为 `O(log^2 V)` 的非交换 fold，每段摘要必须存在题目定义的
+`O(1)` 方向重排，或使用其他足以重排的状态；若仅凭一个前向摘要无法恢复倒序答案，那是
+信息不足，不能无视 `rev`，也不应让 HLD 核心臆造统一的“双份聚合”。
+
 ### 11.5 Rerooting
 
 ```cpp
@@ -2531,6 +2614,20 @@ auto answer = nreroot(
 输入必须是双向存储的树：每条无向边必须恰好提供一对反向弧，弧数严格为
 `2(V-1)`，连通、无自环且无额外环。checked profile 会验证这套树拓扑契约；仅满足
 弧数而方向或重数错误也会失败。复杂度 `O(V+E)` 次回调，prefix/suffix 保持 merge 顺序。
+
+为什么第二遍需要 prefix/suffix？设顶点 `v` 按邻接顺序收到贡献
+`c[0],c[1],...,c[d-1]`。给第 `i` 个孩子的父侧状态必须排除 `c[i]`，暴力为每个孩子重算
+会在星形树退化成 `O(d^2)`。预处理：
+
+```text
+prefix[i]   = c[0] merge ... merge c[i-1]
+suffix[i]   = c[i] merge ... merge c[d-1]
+without(i)  = merge(prefix[i], suffix[i+1])
+```
+
+于是每条边只做常数次合并，总复杂度线性。即使 `merge` 不交换，这个公式也保持原邻接
+顺序；把 suffix 的合并方向写反，会在加法测试中被交换性掩盖，因此至少再用字符串或
+顺序敏感状态做一次小测试。
 
 ### 11.6 MST：Prim 与 Kruskal
 
@@ -2631,6 +2728,18 @@ Hopcroft–Karp 的分层 BFS 只保留最短增广路，DFS 在这些层上寻�
 分层长度每轮增长，因而达到 `O(E sqrt(V))`。最小点覆盖的恢复依赖“最大匹配已经完成”，
 并非任意当前匹配都能直接调用 `mincover`。
 
+### 11.9 图与树检查点
+
+1. 一个按值生成的 `neighbors(v)` 临时对象为什么能在一次遍历中安全使用，又为什么不能
+   把其中引用保存到下一轮？
+2. Dijkstra 的非负边前提具体保护了“哪个已确定量不会再变小”？
+3. SCC 类号为什么不能直接当缩点 DAG 的拓扑序？Kosaraju 与 Tarjan 应比较什么结果？
+4. HLD 的 `rev` 描述的是段返回顺序，还是 base array 内的读取方向？
+5. reroot 排除一个孩子时，为什么 `prefix[i] merge suffix[i+1]` 不会改变非交换顺序？
+6. Dinic 限流返回以后，`cut(source)` 为什么还不能自动解释成最小割？
+7. `mincover()` 为什么要求当前匹配已经达到最大，而不是仅仅合法？
+8. 输入有 `2(V-1)` 条弧为什么仍不足以证明它是一棵正确的双向树？
+
 ---
 
 ## 12. 整数、模运算、组合与博弈
@@ -2717,8 +2826,9 @@ c.permute(n, k);  // k 越界返回 0
 预处理 `O(n)`，查询 `O(1)`。
 
 组合表把 `C(n,k)=n!/(k!(n-k)!)` 的重复阶乘和逆阶乘计算缓存下来。`max_n` 过大或
-模数使某个阶乘不可逆时，表的接口可能仍然能构造，但组合公式已经不再适用；需要 Lucas、
-质因数计数或其他题目特定方法，不能只把数组开大。
+模数使 `factorial(max_n)` 不可逆时，checked 构造会拒绝，unsafe 中则不属于有效输入；
+此时组合公式本身也不再适用，需要 Lucas、质因数计数或其他题目特定方法，不能只把数组
+开大。
 
 ### 12.4 子掩码与集合变换
 
@@ -2745,9 +2855,22 @@ auto c3 = nconv_xor(a,b);
 变换与 OR/AND/XOR 卷积均为 `O(n log n)`。整数 XOR 逆变换依赖每项能被 `n` 精确整除；
 模类型要求 `n` 可逆。
 
-三种 zeta 变换本质上都是“按每一位把子集关系累积到超集/反向恢复”。长度不是二次幂时，
+两种 zeta 与 XOR 变换本质上都是“按每一位组合两个子空间，再按相反步骤恢复”。长度不是二次幂时，
 位分层无法覆盖所有状态；XOR 逆变换则额外需要除以长度。先确认状态空间是完整的
 `[0,2^k)`，再选择变换方向。
+
+方向可以用一个两元素关系表记住，而不是背函数名：
+
+| 目标 | 每个状态从哪里收集 | 更新形状 |
+|---|---|---|
+| subset zeta | `sub ⊆ mask` 的子集 | `a[mask] += a[mask ^ bit]`（有 bit 才更新） |
+| superset zeta | `mask ⊆ super` 的超集 | `a[mask] += a[mask | bit]`（无 bit 才更新） |
+| subset/superset Möbius | 对应 zeta 的逆 | 把 `+=` 换成 `-=`，位循环相同 |
+| XOR/FWHT | 两个半块 | `(x,y) -> (x+y,x-y)`，逆变换最后除以 `n` |
+
+例如 OR 卷积的系数是 `c[mask] = Σ_{i|j=mask} a[i]b[j]`，它先做 subset zeta；AND 卷积
+则对应交集关系，使用 superset zeta。把两者方向对调，在全 0/全 1 的对称样例上可能看不
+出错，最好用只有一个 bit 的不对称小数组手算。
 
 ### 12.5 分数、同余与筛表
 
@@ -2767,6 +2890,19 @@ auto merged = ncrt(c1, c2); // 不相容为空；不要求模数互质
 
 CRT 合并不是简单把两个余数相乘：先检查 `a1 ≡ a2 (mod gcd(m1,m2))`，不相容时没有
 解；相容后模数变成 lcm。模数不互质并不会自动失败，但必须走这一步 gcd 条件。
+
+手算一个非互质例子最能固定公式：
+
+```text
+x ≡ 2 (mod 6),  x ≡ 5 (mod 9)
+gcd(6,9)=3，且 2 ≡ 5 (mod 3)，所以可能相容。
+x = 2 + 6k，代入第二式得 6k ≡ 3 (mod 9)
+除以 gcd 后：2k ≡ 1 (mod 3)，故 k ≡ 2 (mod 3)
+x ≡ 14 (mod lcm(6,9)=18)
+```
+
+若把右式改成 `x ≡ 1 (mod 9)`，模 3 的余数变成 `2` 与 `1`，第一步就判定无解。这个
+检查必须先于求逆；“模数不互质”本身不是失败条件，“余数不相容”才是。
 
 ```cpp
 nprime_table sieve(limit);
@@ -2817,6 +2953,17 @@ auto same = nsg(game_graph);       // 默认同义
 期望的线性性只允许把同一概率模型下的有限权重逐项加权；`nprob` 不会替你归一化，也
 不会把负权解释为概率。Nim 的必胜条件依赖每一步只减少一个堆且没有额外规则；改变移动
 集合后应重新建模状态图，再考虑 SG，而不是继续读取 `nim_sum()`。
+
+### 12.7 数学工具检查点
+
+1. `nfloor_div(-7,3)` 为什么不是 C++ `/` 的结果？余数规范化后能直接当数组下标需要
+   哪个区间契约？
+2. 合数模下非零元素为什么可能不可逆？`inverse()` 为空时，算法层应如何改写？
+3. `ncomb` 的阶乘表为什么需要可逆性，而不是只需要模数非零？
+4. subset zeta 与 superset zeta 各自累积哪一种包含关系？如何用一个单 bit 反例区分？
+5. CRT 合并的第一步 gcd 检查是什么；合并后的模数为什么是 lcm 而不是乘积？
+6. `nprob` 的权重何时才是概率？期望的线性性隐含了哪些有限性条件？
+7. Nim 改变允许操作后，为什么原来的异或和结论不能继续使用？SG 的状态图需要满足什么？
 
 ---
 
@@ -2908,6 +3055,18 @@ RREF 的不变量是：每次选择一个可逆 pivot，把该列化成唯一主
 继续表示剩余自由变量。若 pivot 不能除，消元步骤并不在当前数值域中成立，不能把 C++
 整数除法产生的截断结果当作线性代数答案。
 
+读 `nlinear_solve` 的返回值时，先按秩分类，而不是只看“有没有一个向量”：
+
+| 条件 | 结论 | 参数化形状 |
+|---|---|---|
+| 增广列出现 `0 ... 0 | nonzero` | 无解 | 空 `nmaybe` |
+| 一致且 `rank = 变量数` | 唯一解 | `particular`，`basis` 为空 |
+| 一致且 `rank < 变量数` | 多解（在当前域上） | `particular + Σ c_i basis[i]` |
+
+最小反例是方程 `x+y=1, 2x+2y=2`：第二行没有提供新 pivot，因此 rank 为 1，不能把一
+个随意特解误报成唯一答案。相反 `x+y=1, x+y=2` 在消元时产生矛盾行，应该报告无解。
+这也是为什么 `basis` 不是“额外输出装饰”，它描述了所有自由变量方向。
+
 ### 13.4 卷积
 
 ```cpp
@@ -2933,7 +3092,7 @@ NTT 前提（由 `nconv_ntt` 在运行时检查）：
 
 `nntt_info<Mint>` 是 primitive-root 快速入口。内建为 `998244353`、`1004535809`、
 `469762049` 提供根 3；其他适用 `nmodint<M>` 会在首次使用时自动分解 `M-1` 搜根。
-若为另一个常用 `nmodint<M>` 补 trait，必须保证：
+若为另一个常用 `nmodint<M>` 显式提供快速根入口，必须保证：
 
 ```cpp
 template<> struct nntt_info<nmodint<M>> {
@@ -2943,6 +3102,10 @@ template<> struct nntt_info<nmodint<M>> {
 ```
 
 错误 root 会静默产生错误卷积，测试必须与 `nconv_naive` 随机对拍。
+
+`nntt_info` 只回答“这个类型可以从哪里开始找根”的实现入口，不证明给定模数真的是质数，
+也不证明当前长度满足 `length | (M-1)`。把它当成证明会把一个错误 root 变成静默 WA；
+正确做法是保留运行时前提检查，并用朴素卷积做独立 oracle。
 
 ### 13.5 多项式/FPS 工具
 
@@ -2982,6 +3145,21 @@ auto value = nrec_nth(initial, recurrence, k);// 空 nmaybe 表示信息不足
 返回的递推满足 `a[n] = Σ recurrence[i] * a[n-i-1]`。BM 要求系数具备域除法，当前由
 表达式实例化约束，调用者必须选精确域；`nrec_nth` 使用多项式模快速幂，阶数 `d` 时
 为 `O(d^2 log k)`，另有 fallback 重载。
+
+FPS 的前置条件来自系数递推本身：若 `f[0]` 不可逆，就连第一步 `g[0]=1/f[0]` 都没有
+定义；若做积分，第 `i` 次项要除以 `i+1`；`log` 与 `exp` 还额外固定常数项，使形式幂
+级数中的递推从零阶开始。预先列出这些除法，再决定 Mint/有理数/浮点类型，通常比等到
+模板实例化错误时更快定位问题。
+
+### 13.6 线性代数与多项式检查点
+
+1. `nmatmul` 的三个维度分别代表什么？为什么交换两个非方阵仍可能不合法？
+2. RREF 中矛盾行、唯一解和自由变量分别如何反映在 `nlinear_solution` 字段上？
+3. 为什么整数类型的 `/` 不能自动充当消元中的域除法？
+4. NTT 长度、模数质数性和本原根各自承担哪一条证明前提？
+5. `nconv_auto` 为什么对短序列保留朴素分支？
+6. FPS `inv/log/exp/integral` 的常数项或可逆性要求分别是什么？
+7. Berlekamp–Massey 找到的递推方向如何与 `nrec_nth` 的下标约定对应？
 
 ---
 
@@ -3043,6 +3221,29 @@ auto lcp = nlcp_array(sequence, sa);
 后缀数组解决的是“把所有后缀按字典序排列后，许多子串问题能转成相邻后缀的 LCP”。
 因此 `sa` 的排列合法性不是形式检查：若缺失或重复一个后缀，`lcp` 的相邻意义就消失。
 
+任意两个后缀 `x,y` 的 LCP，可以转成它们 rank 之间所有相邻 LCP 的最小值。原因是：
+字典序区间中的每一条相邻边都至少共享长度 `k`，等价于整个区间所有后缀都共享该长度；
+第一条小于 `k` 的边正是公共前缀不能再延长的位置。因此静态大量查询可以装配：
+
+```cpp
+auto sa = nsuffix_array(text);
+auto lcp = nlcp_array(text, sa);
+int n = nlen(text);
+nvector<int> rank(n);
+for (int i = 0; i < sa.len(); ++i) rank[sa[i]] = i;
+nsparse<int, nmin<int>> rmq(lcp);
+
+auto suffix_lcp = [&](int x, int y) {
+    if (x == y) return n - x;
+    int a = rank[x], b = rank[y];
+    if (a > b) swap(a, b);
+    return rmq.fold(a + 1, b + 1);
+};
+```
+
+这个桥梁常用于重复子串、后缀比较和二分长度。注意这里只把**构建后的 LCP 数组**交给
+静态 RMQ；原字符串若会修改，suffix array、rank、LCP 和 RMQ 都同时失效。
+
 ### 14.4 `ntrie<Alphabet>`
 
 输入元素类型必须是 integral，符号值必须位于 `[0,Alphabet)`；范围判断发生在转成
@@ -3089,6 +3290,21 @@ int next_state = ac.step(state, symbol);
 
 构建/扫描线性于节点与文本，另加实际报告匹配数。`match` 按引用转发 callback，
 不会复制其内部状态，也支持不可复制 functor。
+
+AC 的失败链接只解决“下一状态去哪儿”，不自动解决“输出哪些模式”。如果一个节点沿
+失败链还继承多个终止模式，逐条回调的总成本应写成 `O(text + reported_matches)`；题目只
+问是否出现时，可在第一次命中后停止，或为节点缓存布尔汇报结果。不要把“构建线性”误读
+成“所有匹配输出也线性”。`build()` 之后禁止 `add`，因为新增模式会改变整棵失败树；若题目
+在线增删模式，需要另一种动态字典方案。
+
+### 14.6 字符串检查点
+
+1. KMP 失配时保留的 border 为什么不会让文本指针回退？
+2. Z 函数的 `[l,r)` 窗口和镜像位置分别保证了什么？
+3. 后缀数组的 `lcp[i]` 为什么只比较相邻后缀，任意两后缀查询如何迁移到 RMQ？
+4. Trie 的“经过前缀次数”和“完整串结束次数”为什么必须分开？
+5. AC 失败链接指向最长后缀的哪个性质让扫描保持线性？
+6. `reported_matches` 很大时，为什么 AC 的总复杂度不能只写 `O(text + patterns)`？
 
 ---
 
@@ -3162,6 +3378,22 @@ auto same = nline_intersect(x, y, epsilon);
 并处理共线重叠；后者只在方向不平行时返回唯一点。不要用一个成功的直线交点结果替代
 线段边界判断。
 
+几何代码至少应手造下面这些退化输入；它们比随机均匀点更容易暴露等号错误：
+
+| 退化情形 | 必须先决定的语义 |
+|---|---|
+| 重复点、零长度线段 | 是否视为一个合法点/闭线段 |
+| 三点共线 | 中间点算边界还是应从 hull 删除 |
+| 两线段只在端点相触 | “相交”是否包含端点 |
+| 两线段共线且部分重叠 | 返回 bool、交集段还是唯一点 |
+| 无限直线平行或重合 | 都没有唯一交点，不能强造坐标 |
+| 全部点共线、只有 0/1/2 个点 | hull/diameter 的返回形状 |
+| 点落在多边形边或顶点 | `0` 边界与内外必须分离 |
+| 64-bit 极端坐标或近共线浮点 | 扩宽是否足够、epsilon 是否统一 |
+
+先把题面需要的等号语义写在纸上，再选择 `keep_collinear`、闭区间相交或 epsilon。几何 WA
+常常不是公式不会，而是两个函数对“边界算不算”的答案不同。
+
 ### 15.4 Li Chao Tree
 
 ```cpp
@@ -3195,6 +3427,11 @@ Li Chao 的机关是：两条直线的优劣最多交换一次。节点只需保
 一条可能获胜的半边递归下去。它适合直线函数和固定比较方向；若候选函数可以多次交叉，
 这个单交点不变量消失，不能继续使用同一结构。
 
+选择动态或离散后端首先看查询坐标是否预知：在线出现任意整数 `x` 用 `nlichao(left,right)`；
+全部查询点可以先收集时，`nlichao_static(coordinates)` 只在真实会问的位置比较，坐标跨度
+再大也不增加树高。二者都要求每对候选在有序域上至多一次优劣交换；把一般折线、多次
+交叉的二次函数或不固定比较方向硬塞进去，会破坏“失败线只可能在一侧翻盘”的证明。
+
 ### 15.5 离散单峰搜索
 
 ```cpp
@@ -3213,6 +3450,16 @@ auto x = nternary_min(left, right, continuous_function, iterations);
 离散单峰搜索允许最优平台，但必须确认函数先不劣、后不优；存在多个局部谷底时，三分
 缩区间可能直接丢掉全局最优。若“给定答案是否可行”具有单调性，优先二分答案，不要把
 单调判定问题包装成单峰优化。
+
+### 15.6 几何与优化检查点
+
+1. 整数叉积为什么要在相减和相乘之前扩宽，而不是计算后再转成 `__int128_t`？
+2. 凸包的 `keep_collinear` 改变了哪一个等号分支？全共线输入希望返回什么？
+3. 线段相交与无限直线唯一交点分别需要哪些退化判断？
+4. Li Chao 中“另一条线只需递归一侧”的单交点证明是什么？哪些函数会破坏它？
+5. 预知全部查询坐标时，离散 Li Chao 相比巨大动态整数域省掉了什么？
+6. 单峰搜索允许平台，但为什么不允许两个分离的局部谷底？
+7. 如果存在单调可行性判定，为什么二分答案通常比三分目标值更容易证明？
 
 ---
 
@@ -3260,6 +3507,43 @@ nprintln(a, b, c);  // 空格分隔并换行
 输出契约仍是题面的一部分：`nprint` 不加换行，`nprintln` 加换行，多个参数之间恰好
 一个空格。不要把调试信息写到 stdout；训练阶段可以使用独立日志或 checked 诊断。
 
+### 16.3 最小可提交程序与边界
+
+下面的程序同时展示 EOF 分支、普通整数输入和 128-bit 累加输出：
+
+```cpp
+#include "Nitori.h"
+
+int main() {
+    int n;
+    if (!nread(n)) return 0;
+
+    __int128_t sum = 0;
+    nrep(i, n) {
+        long long x;
+        nin >> x;
+        sum += x;
+    }
+    nprintln(sum);
+}
+```
+
+若题目保证输入完整，后续使用 `nin >> x` 可以让截断输入立即失败；只有“EOF 本来就是
+正常终止条件”时才用 `read/nread` 的 bool 返回。`__int128_t` 不需要自己写十进制输出器，
+但乘法前仍要把操作数提升到目标宽度，`__int128_t(a*b)` 无法挽救已经在 `long long`
+中溢出的乘积。
+
+交互题必须在每次询问后显式 `nout.flush()`；析构 flush 只发生在程序结束，不能让评测机
+在中途收到问题。自定义 `ninput/noutput(FILE*)` 时，`FILE*` 的生命周期必须覆盖包装对象。
+
+**I/O 检查点：**
+
+1. `read` 返回 false 与 `operator>>` 触发前置条件分别适合哪种 EOF 语义？
+2. 负数字面量读入无符号类型为什么必须拒绝，而不是按 C++ 转换回绕？
+3. 128-bit 累加怎样避免“转换发生得太晚”的中间溢出？
+4. `nprint` 与 `nprintln` 的空格和换行差别是什么？
+5. 交互题为什么不能依赖全局 `nout` 的析构 flush？
+
 ---
 
 ## 17. 题型装配配方
@@ -3288,6 +3572,7 @@ nprintln(a, b, c);  // 空格分隔并换行
 巨大稀疏坐标                           → dynamic segment tree
 历史版本                               → persistent segment tree
 有序集合 + 子树信息/自定义下降         → AST augmentation
+按位置动态序列 + 重排/自定义 tag        → nimplicit_fhq
 ```
 
 如果一行题面同时命中多个信号，先找最强约束。例如“坐标巨大”不自动推出动态开点：坐标
@@ -3639,6 +3924,157 @@ gcd(x, mod) 是否为 1？
 不可逆时，算法可能需要整数 gcd、扩展欧几里得、CRT 或改写计数方式。类型可以帮你做
 模运算，却不能替你证明逆元存在。
 
+### 17.19 动态序列：翻转、赋值、连续段查询与搬运
+
+**题目原型：**维护一个可插入、删除和搬运的整数序列，支持：
+
+```text
+reverse(l,r)        翻转 [l,r)
+assign(l,r,x)       把 [l,r) 全部赋成 x
+query(l,r)          查询 [l,r) 内最长相同值连续段
+splice(l,r,at)      剪下 [l,r)，插到删除后的坐标 at
+```
+
+先装暴力台架：用 `vector<int>` 保存序列，翻转和赋值直接操作迭代区间，查询逐项扫描，
+搬运则“复制区间、erase、在删除后的 `at` insert”。这份暴力每次最坏 `O(n)`，不适合大量
+操作，却给出了最可靠的语义 oracle，尤其能钉死 `splice` 的坐标含义。
+
+**为什么不是有序 FHQ：**`nset_fhq` 的中序顺序必须始终符合 key 比较器；这里中序顺序
+就是题目的位置顺序，翻转后相邻关系会变化，但根本没有“仍按 key 排序”的要求。真正的
+机关是：隐式 FHQ 可以按子树长度把序列切成 `A | B | C`，只修改代表 `B` 的一棵 AST，
+再把三段合回去。随机优先级只负责让 split/merge 的期望高度为 `O(log n)`。
+
+下面给出完整策略。`run_info` 没有保存一份“反向答案”；它只保存本题证明所需的六个量。
+翻转时首尾、前后缀的角色互换，最长段 `best` 不变，这些字段已经足以原地变换摘要。
+
+```cpp
+struct run_info {
+    int len = 0;
+    int first = 0, last = 0;
+    int prefix = 0, suffix = 0, best = 0;
+};
+
+run_info join_runs(run_info a, run_info b) {
+    if (!a.len) return b;
+    if (!b.len) return a;
+
+    run_info c;
+    c.len = a.len + b.len;
+    c.first = a.first;
+    c.last = b.last;
+    c.prefix = a.prefix;
+    c.suffix = b.suffix;
+    c.best = max(a.best, b.best);
+
+    if (a.last == b.first) {
+        if (a.prefix == a.len) c.prefix = a.len + b.prefix;
+        if (b.suffix == b.len) c.suffix = b.len + a.suffix;
+        c.best = max(c.best, a.suffix + b.prefix);
+    }
+    return c;
+}
+
+struct reverse_tag {};
+struct assign_tag { int value; };
+
+struct run_policy {
+    using info_type = run_info;
+    struct state_type {
+        bool assigned = false;
+        int value = 0;
+        bool reversed = false;
+    };
+
+    info_type id() const { return {}; }
+    info_type leaf(int x) const { return {1, x, x, 1, 1, 1}; }
+    state_type state_id() const { return {}; }
+
+    void pull(auto node) const {
+        run_info left = node.left() ? node.left().info() : id();
+        run_info self = leaf(node.val());
+        run_info right = node.right() ? node.right().info() : id();
+        node.info() = join_runs(join_runs(left, self), right);
+    }
+
+    void apply(auto node, assign_tag tag) const {
+        node.val() = tag.value;
+        int n = node.len();
+        node.info() = {n, tag.value, tag.value, n, n, n};
+        node.state().assigned = true;
+        node.state().value = tag.value;
+    }
+
+    void apply(auto node, reverse_tag) const {
+        node.exchange_children();
+        swap(node.info().first, node.info().last);
+        swap(node.info().prefix, node.info().suffix);
+        node.state().reversed = !node.state().reversed;
+    }
+
+    void push(auto node) const {
+        state_type pending = node.state();
+        if (pending.reversed) {
+            if (node.left()) node.left().apply(reverse_tag{});
+            if (node.right()) node.right().apply(reverse_tag{});
+        }
+        if (pending.assigned) {
+            if (node.left()) node.left().apply(assign_tag{pending.value});
+            if (node.right()) node.right().apply(assign_tag{pending.value});
+        }
+        node.state() = state_id();
+    }
+};
+```
+
+`pull` 的合并顺序严格是“左子序列、当前值、右子序列”。`apply` 必须在不进入孩子的
+情况下，立刻让当前 `value/info` 表示操作后的逻辑序列；`state` 只记录以后进入孩子时
+仍需传播的工作。`push` 取得一份 pending 快照、给孩子调用同一策略的 `apply`，最后清空
+当前状态。
+
+这个例子中 assign 与 reverse 对元素值的效果可交换：整段赋值后翻转仍是同一均匀段；
+孩子拓扑的翻转已经在 `apply(reverse_tag)` 当场完成。因此 `push` 固定先传播 reverse、
+再传播 assign 是正确表示。换成仿射、截断、位置加权或左右孩子收到不同参数的 tag 时，
+不能照抄这个顺序；应把“旧操作后接新操作”的组合逐项写成状态转移并造两次覆盖反例。
+
+```cpp
+nimplicit_fhq<int, run_policy> seq{0, 1, 1, 0, 1, 0};
+
+seq.apply(1, 5, reverse_tag{});       // 0 1 0 1 1 0
+seq.apply(2, 5, assign_tag{0});       // 0 1 0 0 0 0
+int longest = seq.fold().best;        // 4
+
+seq.splice(1, 4, 3);                  // at 属于删除后的长度 3 序列
+seq.rotate(1, 4, 6);                  // 交换 [1,4) 与 [4,6)
+seq.ins(2, 1);
+seq.del(3);
+```
+
+**正确性闭环：**
+
+1. `join_runs(a,b)` 保存总长、首尾值、同值前后缀和最长段。跨边界的新连续段只可能在
+   `a.last == b.first` 时出现，长度为 `a.suffix + b.prefix`，所以没有漏掉候选。
+2. `split(root,k)` 按左子树长度递归，恰好分出中序前 `k` 项；`merge(a,b)` 的调用前提是
+   `a` 的全部项先于 `b`，随机 priority 只选根，不改变拼接次序。
+3. assign 直接把整个摘要变成长度为 `n` 的均匀段；reverse 交换孩子及方向相关字段，
+   所以二者施加后无需下推，当前根摘要已经正确。
+4. split/merge 在沿路径递归前先 `push`，随后由孩子信息 `pull`，因此结构操作不会把尚未
+   传播的逻辑状态遗失。
+
+插入、单点删除/读写、fold/apply、splice 和 rotate 的结构成本期望 `O(log n)`；删除长度
+为 `k` 的区间还要释放其中节点，总成本 `O(log n+k)`。枚举整个序列为 `O(n)`。pool 会
+复用删除槽位，存储量是 `O(历史最大同时存活节点数)`，而不是累计插入次数。随机树高给的
+是期望保证，不是对恶意或极端随机序列的确定最坏保证。
+
+**河童式对拍：**固定种子生成小序列，随机执行插入、删除、reverse、assign 和 splice；
+每一步都枚举 `seq` 与 `vector` 全量比较，再枚举所有短区间比较 `fold(l,r).best`。只检查
+最后一次整树答案会漏掉 tag 组合、删除后坐标和局部摘要错误。持有的 `nnode` 快照还必须
+在一次操作内用完；split/merge、`fold(l,r)` 或修改之后重新从 `root()` 取得。
+
+**迁移信号：**当题目同时出现“位置顺序会改变、需要按段施加自定义语义、摘要不能被
+统一 lazy action 描述”时，使用自由 `nimplicit_fhq`。如果顺序固定，普通/lazy 线段树
+通常常数更小；如果对象按 key 排序，使用 ordered FHQ；如果只需块搬运而没有摘要，先
+确认 `vector/deque` 的线性操作是否已经能过，不为模板感支付随机树常数。
+
 ---
 
 ## 18. 调试、测试与提交工作流
@@ -3667,6 +4103,12 @@ gcd(x, mod) 是否为 1？
 - Fenwick 区间 fold 使用了没有 inverse 的操作。
 - 对非交换 operation 改变左右合并顺序。
 - lazy `compose` 把 newer/older 写反。
+- 把按 key 的 `nset_fhq` 当作按位置序列，翻转后仍期待 BST 顺序成立。
+- 自由 FHQ 的 `apply` 只记录 state，却没有立即把当前 `value/info` 更新到逻辑结果。
+- 自由 FHQ 的 `push` 按错误时间顺序传播多个 tag，或传播后忘记清空当前 state。
+- 调用 `exchange_children()` 后，没有同步方向相关摘要或策略状态。
+- 持有旧 `nnode` 跨过 split/merge、`fold(l,r)` 或修改，再继续下降。
+- 把 `splice(l,r,at)` 的 `at` 当成删除前坐标；它属于删去 `[l,r)` 后的序列。
 - Dijkstra 输入负边。
 - reroot 输入不是双向树。
 - 模合数下直接除以不可逆元素。
@@ -3699,6 +4141,20 @@ python3 tools/bench.py
 ```
 
 测试编译到 Linux `memfd`，不会在仓库留下二进制。
+
+本地开发不要把全量门禁当成每次改一个字符的第一步。先按失败面选择最窄证据：
+
+```text
+隐式 FHQ 策略/API       → python3 tools/test.py implicit_fhq
+动态线段树              → python3 tools/test.py property_dynamic
+Wavelet/Mo              → python3 tools/test.py property_wavelet offline
+树与 reroot             → python3 tools/test.py tree_compat property_reroot
+字符串/自动机           → python3 tools/test.py string automata
+```
+
+一个复杂 lazy/AST 错误的高价值诊断顺序是：固定最小样例，逐操作枚举整棵序列与暴力比较；
+再检查所有小区间摘要；最后才扩大随机步数。记录随机种子和第一份失败输入，修复后把它
+固化成 regression。只比较最终答案会让错误 tag 在后续操作中被偶然覆盖。
 
 ### 18.3 生成规则
 
@@ -3778,7 +4234,35 @@ lazy action 必须测试非交换 tag 组合；新增 segment 聚合必须用字
 简单结构可用连续 `//`，承重结构使用 `/** ... */`；不为仅能检查语法的包装 concept
 重复维护一份“证明登记表”。
 
-### 19.6 每个新算法的证据包
+### 19.6 自由隐式 FHQ 策略的维护规则
+
+`nimplicit_fhq` 是确有位置序列需求时的低层逃生舱，不是让全库每个结构都变成 policy
+forest 的理由。引擎只拥有 split/merge、priority、size、parent、pool 与 epoch；题目语义
+必须完整留在一个局部策略中。禁止为了某个单题向核心添加 `reverse_subtree`、固定双向
+聚合或 tag 名单。
+
+自定义策略逐条保护下面的不变量：
+
+1. `apply(node,tag)` 返回时，当前节点的 `val/info` 已经表示 tag 施加后的**逻辑子序列**；
+   state 只是未向孩子解释的剩余工作，不能让根查询依赖先 push 才正确。
+2. `push(node)` 只把 state 派生并发送给现有孩子，再把当前 state 还原到 `state_id()`；
+   tag 有时间顺序时，先把 `older -> newer` 的实际效果手算清楚。
+3. `pull(node)` 按“左子序列、当前值、右子序列”重建 info。引擎调用它时当前节点的 pending
+   state 已经下推；策略不得在 pull 中猜测或重复施加旧 tag。
+4. `exchange_children()` 只交换拓扑。首尾、前后缀、方向哈希、括号状态等摘要怎样变化，
+   以及 reverse 标记怎样组合，都由同一个 `apply` 同步完成。
+5. 位置相关 tag 可以在 `push` 中根据 `left.len()/right.len()` 派生两个不同 tag；核心不要求
+   uniform action。若派生还依赖全局 offset，策略 state 必须保存足够坐标信息。
+6. `mutate` 返回时必须留下同一节点集合的一份合法 lazy 表示；它不是绕过 `apply/push`
+   约束的后门。优先把可复用变换写成普通 tag。
+7. `nnode` 与 `node_editor` 都不是可长期保存的稳定指针：前者受 epoch 约束，后者只在收到
+   它的策略/回调期间有效。
+
+证据至少包含一个固定的 tag 组合反例，以及与 `vector` 的固定种子随机对拍：每步检查
+枚举序列、整树 info 和随机/全部短区间 info。涉及 splice 时 oracle 也必须使用删除后的
+`at` 坐标。只用交换性区间和无法证明顺序、组合和反转字段正确。
+
+### 19.7 每个新算法的证据包
 
 至少包含：
 
@@ -3813,6 +4297,7 @@ Nitori X 不以“删掉旧能力换一个小而美的壳”为目标。它复�
 | `nbije` / `ninj` | 同名 | 双向哈希实现 `nbije_hash` |
 | rank 双射/压缩 | `nbije_rank` / `ncompress` | STL 输入另用 `ncompress_stl` |
 | 可扩展有序树 AST | `nnode` + augmentation 对象 | FHQ/splay 都实现，带 epoch 快照诊断 |
+| 隐式 FHQ / rope | `nimplicit_fhq` / `nseq_fhq` | 中序即位置；自由策略拥有 info/state/tag/push/pull |
 | `npool` | `npool` | 1-based 可删除复用 handle；与 `narena` 分离 |
 | `nsparse` | `nsparse` | 升级为任意有单位元结合操作的 disjoint sparse table |
 | 势能并查集 | `npotential_dsu` | 差值约束与一致性检查 |
@@ -3833,7 +4318,7 @@ Nitori X 不以“删掉旧能力换一个小而美的壳”为目标。它复�
 | 字符串短名 | `nprefix/nzfunc/nkmp` | 严格核心名仍保留 |
 | 几何短名 | `nonseg/nline2/nline_intersect` | epsilon 与精确入口并存 |
 
-### 20.2 六个有意的语义拆分
+### 20.2 七个有意的语义拆分
 
 1. **`nspan` / `nview`**：Nitori X 只保留 `nview<T,Accessor>`。连续性由 accessor 是否暴露
    `data()` 静态决定；`nview<T>` 就是原连续借用的零开销入口，不再维护两套切片体系。
@@ -3850,6 +4335,9 @@ Nitori X 不以“删掉旧能力换一个小而美的壳”为目标。它复�
    槽位复用。不能再用同一名字掩盖两种互斥生命周期。
 6. **`nlichao` / `nlichao_static`**：前者在线整数域动态开点，后者预知坐标、排序去重并
    只允许查询离散点。
+7. **ordered FHQ / implicit FHQ**：`nset_fhq` 维护比较器定义的 key 顺序，tag 必须保持
+   BST 有序；`nimplicit_fhq/nseq_fhq` 以子树长度定义位置，允许策略交换孩子、派生不同
+   子 tag 和重排自定义摘要。二者共享随机 split/merge 思想，不共享排序不变量。
 
 ### 20.3 循环宏迁移
 
