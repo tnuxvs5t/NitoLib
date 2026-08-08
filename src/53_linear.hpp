@@ -1,3 +1,7 @@
+/**
+ * Row-major owning matrix with int dimensions.  Views/rows/columns/diagonals borrow
+ * this owner and cannot survive move, destruction, or storage replacement.
+ */
 template <class T> class nmatrix {
     int rows_ = 0, columns_ = 0;
     nvector<T> storage_;
@@ -83,6 +87,9 @@ concept nmatrix_like = requires(const A& matrix, int row, int column) {
     matrix(row, column);
 };
 
+// Matrix identity/multiplication/power require Add/Mul identities plus the semiring
+// laws used by matrix algebra: associativity, distributivity and additive zero absorb.
+// These properties are local contracts, not named traits.
 template <class T, class Add = nadd<T>, class Mul = nmul<T>>
 nmatrix<T> nmatrix_identity(int n, Add add = {}, Mul multiply = {}) {
     npre(n >= 0);
@@ -121,6 +128,11 @@ nmatrix<T> nmatpow(nmatrix<T> base, uint64_t exponent, Add add = {}, Mul multipl
     return result;
 }
 
+/**
+ * Matrix facade binding Add/Mul to operators.  It shares nmatrix ownership rules and
+ * assumes the same semiring laws; integer overflow or floating reassociation may break
+ * mathematical equivalence even when the expressions compile.
+ */
 template <class T, class Add = nadd<T>, class Mul = nmul<T>> class nmat : public nmatrix<T> {
     using base = nmatrix<T>;
 
@@ -191,6 +203,12 @@ template <class T, class Add = nadd<T>, class Mul = nmul<T>> class nmat : public
     }
 };
 
+/**
+ * Exact Gaussian-elimination family below.  T must behave as a field: T{} and T{1}
+ * are zero/one and every selected nonzero pivot has exact division.  Plain integers,
+ * composite-modulus residues and approximate floats violate this contract unless the
+ * caller supplies the missing semantics.  Complexity is cubic in matrix dimensions.
+ */
 template <class T> int nrref(nmatrix<T>& matrix, nvector<int>* pivot_columns = nullptr) {
     if (pivot_columns)
         pivot_columns->clear();
@@ -310,6 +328,8 @@ nmat<T, Add, Mul> ninverse(nmat<T, Add, Mul> matrix, nmat<T, Add, Mul> fallback)
     return result ? move(result.val()) : move(fallback);
 }
 
+// Affine solution set: particular + span(basis).  `consistent` is used by ngauss;
+// nlinear_solve instead reports inconsistency with an empty nmaybe.
 template <class T> struct nlinear_solution {
     bool consistent = true;
     int rank = 0;

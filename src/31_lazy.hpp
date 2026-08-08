@@ -1,9 +1,18 @@
+// Range-add/range-sum action.  Arithmetic must distribute over the stored sum and
+// `delta * length` must stay representable.  compose(newer,older) applies older first.
 template <class T> struct naddsum_action {
     constexpr T tag_id() const { return T{}; }
     constexpr T compose(const T& newer, const T& older) const { return older + newer; }
     constexpr T apply(T sum, const T& delta, int length) const { return sum + delta * T(length); }
 };
 
+/**
+ * Lazy segment tree over [0,n).
+ * M is an ordered associative merge with identity.  A provides tag_id(),
+ * compose(newer,older), and apply(aggregate,tag,length); composition is associative
+ * and apply must respect interval concatenation.  Mutations invalidate node views.
+ * Build is O(n); set/apply/fold are O(log n); storage O(bit_ceil(n)).
+ */
 template <class S, class F, class M, class A>
 class nlazyseg {
     [[no_unique_address]] M operation_;

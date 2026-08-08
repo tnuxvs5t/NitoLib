@@ -1,4 +1,6 @@
 namespace ni {
+// Internal reusable-handle pool.  Erased handles may be recycled, so node snapshots
+// rely on the owning tree epoch as well as handle liveness to reject stale identity.
 template <class T> class nslot_pool {
     vector<optional<T>> slots_;
     vector<int> free_;
@@ -68,6 +70,14 @@ template <class S> bool nordered_equal(const S& left, const S& right) {
 }
 } // namespace ni
 
+/**
+ * Randomized ordered multiset/set with pluggable augmentation and lazy node action.
+ * C is a strict weak ordering; A has id/one/ordered op; L follows the nempty_tag
+ * protocol and compose(newer,older) order.  Every applied tag must preserve C-order
+ * and equivalence classes in the affected subtree.  Node views expire after topology
+ * changes.  Expected operations are O(log n); adversarial/random-priority failure is
+ * probabilistic rather than impossible.
+ */
 template <class T, class C = nless<T>, bool Multi = false, class A = nempty_augment<T>,
           class L = nempty_tag<T, typename A::info_type>>
 class nset_fhq {
@@ -580,6 +590,11 @@ class nset_fhq {
     }
 };
 
+/**
+ * Splay ordered multiset/set with the same comparator and augmentation contracts as
+ * nset_fhq, but no lazy action.  Even logically read-only searches may rotate the
+ * tree and invalidate node snapshots.  Amortized operations are O(log n).
+ */
 template <class T, class C = nless<T>, bool Multi = false, class A = nempty_augment<T>>
 class nset_splay {
     struct node {
@@ -1006,6 +1021,8 @@ class nset_splay {
     }
 };
 
+// Reference ordered-set backend.  C is a strict weak ordering; iterator/reference
+// invalidation follows std::set/multiset and no AST node/augmentation API is provided.
 template <class T, class C = nless<T>> class nset_stl {
     set<T, C> values_;
 

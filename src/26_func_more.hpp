@@ -4,6 +4,11 @@ concept ndirect_domain_locator = requires(const D& domain, const K& key) {
     { domain.position(key) } -> convertible_to<int>;
 };
 
+/**
+ * Finite key/value binding over equally sized borrowed-or-owned sequences.  Keys must
+ * be unique under the locator/equality policy; otherwise lookup position is ambiguous.
+ * Both holders must remain valid for the function lifetime.
+ */
 template <class DH, class VH> class nbound_function {
     using domain_type = remove_reference_t<decltype(declval<DH&>().get())>;
     using key_type = nindex_value_t<domain_type>;
@@ -159,6 +164,8 @@ concept nbranch_ref_compatible =
     same_as<decltype(declval<G&>()[0]),
             invoke_result_t<G&, nbranch_key_reference_t<G>>>;
 
+// Branch adapter evaluates exactly one branch.  Predicate truth and alternative/base
+// domains must cover every queried key; all holders follow nobject_holder lifetimes.
 template <class GH, class PH, class AH> class nbranch_value_function {
     GH base_;
     [[no_unique_address]] PH predicate_;
@@ -246,6 +253,8 @@ template <class GH, class PH, class AH> class nbranch_value_function {
     }
 };
 
+// Reference-preserving branch adapter.  Both branches return compatible stable lvalue
+// references; returning a temporary would make the selected result dangle.
 template <class GH, class PH, class AH> class nbranch_ref_function {
     GH base_;
     [[no_unique_address]] PH predicate_;
@@ -395,6 +404,8 @@ auto nbranch(G&& function, P&& predicate, A&& alternative) {
 }
 
 namespace ni {
+// Run segmentation groups adjacent equal projected values.  Equality must be stable and
+// state is single-pass: mutating the source while enumerating invalidates boundaries.
 template <class H> struct nrun_state {
     H source;
     nvector<int> starts;

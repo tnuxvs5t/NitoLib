@@ -1,3 +1,7 @@
+/**
+ * Owning contiguous sequence with signed int indexing.  References and borrowed views
+ * remain valid only until storage is reallocated/destroyed; all subranges are [l,r).
+ */
 template <class T> class nvector {
     vector<T> storage_;
 
@@ -156,6 +160,8 @@ auto ntabulate(G&& function) {
     return ncollect(forward<G>(function));
 }
 
+// Owning deque facade.  Borrowed references/views cannot outlive the owner and may be
+// invalidated by either-end insertion or erase according to deque relocation rules.
 template <class T> class ndeque_stl {
     deque<T> storage_;
 
@@ -236,6 +242,10 @@ template <class T> class ndeque_stl {
     }
 };
 
+/**
+ * Ring-buffer deque.  Logical indices are stable only between structural mutations;
+ * reserve or growth may move every element.  End operations are amortized O(1).
+ */
 template <class T> class ndeque_ring {
     vector<optional<T>> storage_;
     int first_ = 0, size_ = 0;
@@ -389,6 +399,10 @@ template <class T> class ndeque_ring {
 
 template <class T> using ndeque = ndeque_ring<T>;
 
+/**
+ * Binary heap.  C must be a strict weak ordering; top is the C-minimum.  References
+ * into storage may be invalidated by push/pop or reallocation.
+ */
 template <class T, class C = nless<T>> class nheap_binary {
     nvector<T> values_;
     [[no_unique_address]] C compare_{};
@@ -474,6 +488,8 @@ template <class T, class C = nless<T>> class nheap_binary {
 
 template <class T, class C = nless<T>> using nheap = nheap_binary<T, C>;
 
+// Fixed-rank owning array.  Rank is positive, extents are nonnegative, the total volume
+// must fit int, and every multi-index must lie inside its corresponding extent.
 template <class T, int Rank>
     requires(Rank > 0)
 class narray {
@@ -836,6 +852,8 @@ int nfind_sorted(const A& a, const X& value, C compare, int fallback) {
     return nfind_sorted(a, value, move(compare), nidentity{}, fallback);
 }
 
+// nfold is intentionally unconstrained by a named algebra trait: op must expose id()
+// and op(acc,value), with identity/associativity supplied as a local semantic contract.
 template <class A, class P = nidentity,
           class O = nadd<ni::nprojected_value_t<const A, P>>>
     requires nindexed<A>

@@ -16,6 +16,8 @@ template <> struct nio_unsigned_type<__uint128_t> {
 template <class T> using nio_unsigned_t = typename nio_unsigned_type<T>::type;
 } // namespace ni
 
+// Buffered token input.  Integer parsing requires a syntactically valid in-range token;
+// EOF/failure is reported by read(), and the buffer is tied to the FILE* lifetime.
 class ninput {
     static constexpr int capacity_ = 1 << 16;
     FILE* file_ = nullptr;
@@ -109,6 +111,8 @@ class ninput {
     }
 };
 
+// Buffered output tied to a live FILE*.  Destruction/flush commits pending bytes; callers
+// must flush explicitly before interactive reads.
 class noutput {
     static constexpr int capacity_ = 1 << 16;
     FILE* file_ = nullptr;

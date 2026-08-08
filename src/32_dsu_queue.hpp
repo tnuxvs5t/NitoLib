@@ -1,3 +1,8 @@
+/**
+ * Two-stack queue with an aggregate in queue order.  O must have a true identity and
+ * associative ordered combine; it need not be commutative.  fold is O(1), push/pop
+ * are amortized O(1).
+ */
 template <class T, class O = nadd<T>> class nqueue_agg {
     struct node {
         T value;
@@ -61,6 +66,8 @@ template <class T, class O = nadd<T>> class nqueue_agg {
     }
 };
 
+// Union-find assumes vertex ids remain in [0,len()); parent_ stores negative set size
+// at roots.  Path compression and union-by-size give inverse-Ackermann amortized cost.
 class ndsu {
     vector<int> parent_;
 
@@ -114,6 +121,8 @@ class ndsu {
     }
 };
 
+// Rollback DSU intentionally omits path compression.  Every parent/size write is logged
+// and rollback order is LIFO; a checkpoint cannot outlive the DSU mutation history.
 class nrollback_dsu {
     struct change {
         int large, large_parent, small, small_parent;

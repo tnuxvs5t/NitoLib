@@ -1,8 +1,12 @@
+// Matching arrays use dense left/right universes and npos for unmatched vertices.
+// Every matched pair must be mutual across the two arrays.
 struct nbipartite_matching {
     int size = 0;
     nvector<int> left, right;
 };
 
+// Graph vertices form the left part and every edge destination belongs to the separate
+// [0,right_vertices) part; edges within one side violate the bipartite model.
 template <ngraph_like G> nbipartite_matching nhopcroft_karp(const G& graph, int right_vertices) {
     int left_vertices = ni::ngraph_vertices(graph);
     npre(right_vertices >= 0);
@@ -95,6 +99,8 @@ struct nbicover {
     nvector<int> l, r;
 };
 
+// Stateful Hopcroft-Karp owner.  add() uses distinct dense left/right id spaces;
+// solve() invalidates earlier matching/cover snapshots after graph mutation.
 class nbimatch_hopcroft {
     int left_vertices_ = 0, right_vertices_ = 0;
     nvector<nvector<int>> adjacency_;

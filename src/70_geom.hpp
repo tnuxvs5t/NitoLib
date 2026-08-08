@@ -8,6 +8,10 @@ template <class T> constexpr nwide_t<T> ngeom_widen(const T& value) {
 }
 } // namespace ni
 
+/**
+ * Exact/approximate 2D point primitive.  Integral predicates widen to nwide_t but still
+ * require products to fit that type; floating predicates need an application-chosen eps.
+ */
 template <class T> struct npoint {
     T x{}, y{};
 
@@ -156,6 +160,8 @@ constexpr bool nsegment_intersect(const npoint<T>& a, const npoint<T>& b, const 
                      (!cd_b && nonseg(c, d, b, epsilon));
 }
 
+// Infinite line through two distinct points.  Degenerate equal endpoints have no
+// unique direction and are invalid for intersection/orientation routines.
 template <class T> struct nline2 {
     npoint<T> p, v;
     template <class U> auto operator()(const U& scale) const { return p + v * scale; }
@@ -176,6 +182,8 @@ nmaybe<npoint<long double>> nline_intersect(const nline2<T>& a, const nline2<T>&
                                static_cast<long double>(a.p.y) + av.y * scale};
 }
 
+// Convex hull assumes the point comparator is a strict total order.  Floating input
+// without a consistent epsilon policy can make sorting and orientation disagree.
 template <nindexed A> auto nconvex_hull(const A& source, bool keep_collinear = false) {
     using P = nindex_value_t<const A>;
     nvector<P> points;

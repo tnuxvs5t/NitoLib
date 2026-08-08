@@ -1,3 +1,8 @@
+/**
+ * Binary exponentiation for an associative operation with id().  Negative exponents
+ * are accepted only when O has a usable inv(value); otherwise the checked profile
+ * rejects the call.  The operation must not change meaning between steps.
+ */
 template <class T, class O = nmul<T>>
 constexpr T npow(T base, long long exponent, O operation = {}) {
     uint64_t remaining;
@@ -25,6 +30,8 @@ constexpr T npow(T base, long long exponent, O operation = {}) {
     return result;
 }
 
+// Prefix/suffix scans require an identity and associative ordered combine.  Non-
+// commutative operations are supported because each direction is explicit.
 template <class A, class O = nadd<nindex_value_t<const A>>>
 auto nscan(const A& a, O op = {}) {
     using T = nindex_value_t<const A>;
@@ -50,6 +57,8 @@ auto nsuffix_scan(const A& a, O op = {}) {
     return reversed;
 }
 
+// The predicate must be false-then-true on [first,last); otherwise binary search has
+// no correctness guarantee.  nlast_true uses the dual true-then-false convention.
 template <signed_integral I, class P> constexpr I nfirst_true(I first, I last, P predicate) {
     npre(first <= last);
     while (first < last) {
@@ -71,6 +80,11 @@ template <signed_integral I, class P> constexpr I nlast_true(I first, I last, P 
     return first - 1;
 }
 
+/**
+ * Address-based rollback log.  Every saved target must outlive the log until rollback;
+ * moving/reallocating the target behind the log is a dangling-pointer bug.  Checkpoints
+ * are stack times and rollback restores in strict reverse order.
+ */
 template <class T> class nrollback {
     struct change {
         T* target;

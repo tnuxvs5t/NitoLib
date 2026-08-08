@@ -1,3 +1,9 @@
+/**
+ * Path-copying persistent ordered segment tree.
+ * O provides a two-sided identity and associative op(left,right); T and O must be
+ * copyable for version sharing.  Each set appends O(log n) immutable nodes, so old
+ * version views remain current until the whole owner is assigned/moved/destroyed.
+ */
 template <class T, class O = nadd<T>> class npersistent_seg {
     struct node {
         T aggregate;

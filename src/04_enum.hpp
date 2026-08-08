@@ -1,3 +1,7 @@
+/**
+ * Half-open arithmetic range [first,last) with nonzero step.  The caller must choose
+ * a step whose sign reaches the bound; constructor arithmetic is checked for overflow.
+ */
 template <signed_integral T> class nrange_t {
     T first_ = 0, last_ = 0, step_ = 1;
 
@@ -77,6 +81,8 @@ template <integral I> constexpr int ni_nloop_count(I count) {
 }
 
 namespace ni {
+// Single-pass cursor borrowing indexed storage.  The source must outlive enumeration
+// and retain length/index validity until the cursor reaches the end.
 template <class A> struct nborrowed_index_cursor {
     A* owner;
     int index = 0;
@@ -250,6 +256,8 @@ constexpr auto nproject(A&& a, F projection) {
 }
 
 namespace ni {
+// Zip/product/window accessors preserve holder lifetime rules.  Zip exposes the common
+// supported prefix; windows borrow overlapping elements rather than copying them.
 template <class L, class R> class nzip_access {
     L left_;
     R right_;

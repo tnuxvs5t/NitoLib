@@ -949,8 +949,8 @@ square(4);          // 16：按语义自变量
 `nkeyed_indexed<F>` 检查 indexed value 与 `key(i)` 两层接口；
 `ndiscrete_function<F>` 进一步检查 `f(key)`。因此纯 key/value 枚举可以进入
 `nselect_positions`，却不必伪装成完整 callable。evaluator 构造的有限枚举域不要求
-唯一、有序或可哈希；旧 `ndiscrete` 暂时保留为 `nkeyed_indexed` 的兼容别名，新代码
-必须写出准确能力。需要运行时绑定/解绑键值时使用 `nfunc_hash`/`npartial`。
+唯一、有序或可哈希；新代码直接写准确能力。需要运行时绑定/解绑键值时使用
+`nfunc_hash`/`npartial`。
 
 这一形式通常构造为 `O(1)`，但 evaluator 可以捕获任意状态，库不承诺它必然是
 view 大小、无分配或适合海量复制。若只需 `a[index[i]]` 这样的密集位置访问，仍应写成
@@ -2950,6 +2950,11 @@ python3 tools/audit.py
 lazy action 必须测试非交换 tag 组合；新增 segment 聚合必须用字符串拼接等非交换对象
 测试顺序。
 
+所有带隐形约束的 class/struct/算法都在定义附近保留本地契约注释，不依赖读者跳到另一章
+才能知道它做什么。按适用项说明：功能、所需接口、数学/生命周期性质、失效边界与复杂度。
+简单结构可用连续 `//`，承重结构使用 `/** ... */`；不为仅能检查语法的包装 concept
+重复维护一份“证明登记表”。
+
 ### 19.6 每个新算法的证据包
 
 至少包含：
@@ -3101,7 +3106,7 @@ ncollect ntabulate
 ### 离散函数
 
 ```text
-nkeyed_indexed ndiscrete_function ndiscrete nstable_function_result
+nkeyed_indexed ndiscrete_function
 nfunction_key_reference_t nfunction_key_t nevaluated_function
 nfunc_value nfunc_ref nfunc_eval nfunc_bind nfunc
 nkeys nvalues nentries nredomain_function nredomain nrestrict nanchors

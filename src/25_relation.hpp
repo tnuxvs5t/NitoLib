@@ -1,3 +1,7 @@
+/**
+ * Finite relation with scan backend.  EL/ER define equivalence classes consistently;
+ * binding/removing a pair updates both projections.  Lookups are linear in stored pairs.
+ */
 template <class L, class R, class EL = nequal<>, class ER = nequal<>> class nrel_scan {
     struct edge {
         L left;
@@ -142,6 +146,8 @@ using nrel = nrel_scan<L, R, EL, ER>;
 
 template <class A, class B, class HA = nhash<A>, class HB = nhash<B>,
           class EA = equal_to<A>, class EB = equal_to<B>>
+// Partial bijection backed by hash tables.  HA/HB must agree with the equality objects;
+// each side has at most one partner and unbound keys are represented explicitly.
 class npartial_hash {
     nmap_flat<A, B, HA, EA> forward_;
     [[no_unique_address]] EB equal_value_{};
@@ -188,6 +194,8 @@ using npartial = npartial_hash<A, B, HA, HB, EA, EB>;
 
 template <class A, class B, class HA = nhash<A>, class HB = nhash<B>,
           class EA = equal_to<A>, class EB = equal_to<B>>
+// Total bijection facade over two synchronized hash maps.  Every bind preserves one-to-
+// one correspondence; stale references/iterators are invalidated by rehash.
 class nbije_hash {
     template <class, class, class, class, class, class> friend class nbije_hash;
 
@@ -275,6 +283,10 @@ class nbije_hash {
     }
 };
 
+/**
+ * Rank compression owns sorted unique values.  C must be a strict weak ordering; `to`
+ * is O(log n) and `from` returns only values in the built immutable rank universe.
+ */
 template <class T, class C = nless<T>> class nbije_rank {
     nvector<T> values_;
     [[no_unique_address]] C compare_{};

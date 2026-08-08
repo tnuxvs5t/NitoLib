@@ -1,3 +1,8 @@
+/**
+ * Static modular integer with canonical values in [0,Modulus).  Modulus is positive;
+ * division/inverse succeeds only when gcd(value,Modulus)==1.  Field algorithms require
+ * the caller to know that Modulus is prime, not merely that this type compiles.
+ */
 template <uint64_t Modulus>
     requires(Modulus > 0)
 class nmodint {
@@ -112,6 +117,11 @@ class nmodint {
     }
 };
 
+/**
+ * Dynamic-modulus integer.  All objects with the same Tag share one process-global
+ * modulus; changing it while old values are still used changes their interpretation.
+ * Inversion requires coprimality and field algorithms must check primality at runtime.
+ */
 template <int Tag = 0> class nmod_dynamic {
     static inline uint64_t modulus_ = 1;
     uint64_t value_ = 0;
@@ -220,6 +230,10 @@ template <uint64_t Modulus> using nmod_static = nmodint<Modulus>;
 template <uint64_t Modulus> using nmod = nmodint<Modulus>;
 template <int Tag = 0> using ndmod = nmod_dynamic<Tag>;
 
+/**
+ * Factorial/inverse-factorial table.  factorial(n) must be invertible in Mint; for a
+ * prime modulus, n < modulus is the common sufficient condition.  Build O(n), query O(1).
+ */
 template <class Mint> class ncomb {
     nvector<Mint> factorial_, inverse_factorial_;
 

@@ -1,3 +1,5 @@
+// Affine function evaluated in nwide_t<T>; callers still ensure slope*x+intercept fits
+// that widened representation and choose Better consistently for min/max queries.
 template <class T> struct nline_function {
     T slope{}, intercept{};
     using value_type = nwide_t<T>;
@@ -7,6 +9,11 @@ template <class T> struct nline_function {
     }
 };
 
+/**
+ * Dynamic Li Chao tree on a fixed integer domain.  Inserted functions must be lines so
+ * any pair crosses at most once; Better is a strict ordering.  Each add/query is
+ * O(log domain_width), and domain endpoints never change after construction.
+ */
 template <signed_integral T, class Better = nless<nwide_t<T>>> class nlichao {
   public:
     using line_type = nline_function<T>;
@@ -107,6 +114,8 @@ template <signed_integral T, class Better = nless<nwide_t<T>>> class nlichao {
     }
 };
 
+// Compatibility affine line with the same overflow and single-crossing contract as
+// nline_function when inserted into a Li Chao structure.
 template <class T> struct nline {
     T m{}, b{};
     using value_type = nwide_t<T>;
@@ -118,6 +127,8 @@ template <class T> struct nline {
     friend bool operator==(const nline&, const nline&) = default;
 };
 
+// Static-coordinate Li Chao tree has the same single-crossing contract; every queried
+// x must belong to the sorted coordinate set supplied at construction.
 template <class T, class Better = nless<nwide_t<T>>>
     requires is_arithmetic_v<T> && (!same_as<remove_cv_t<T>, bool>)
 class nlichao_static {
@@ -228,6 +239,8 @@ class nlichao_static {
     }
 };
 
+// Discrete ternary/unimodal search requires one optimum with monotone improvement then
+// worsening over the integer interval; arbitrary functions invalidate the elimination.
 template <signed_integral I, class F, class Better = nless<>>
 I nunimodal_arg(I first, I last, F function, Better better = {}) {
     npre(first < last);

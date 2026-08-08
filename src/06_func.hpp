@@ -1,10 +1,9 @@
-template <class R>
-concept nstable_function_result = !is_rvalue_reference_v<R>;
-
 namespace ni {
 // A zero-allocation lifetime bridge used by discrete-function adaptors:
 // lvalues are borrowed, rvalues are owned. Const always propagates through the
 // bridge; shallow const must be represented by a different, explicit type.
+// Holder either borrows an lvalue or owns a decayed value.  Any adapter storing it must
+// preserve that lifetime distinction; a view cannot outlive a borrowed domain/function.
 template <class A> class nobject_holder {
     using value_type = remove_cvref_t<A>;
     static constexpr bool owns = !is_lvalue_reference_v<A>;
@@ -157,6 +156,11 @@ template <class H> class nfunction_value_access {
 // A finite discrete function is a keyed view, not an associative container.
 // key(i) moves from enumeration position to semantic argument; operator[](i)
 // evaluates at that position; operator()(x) evaluates an arbitrary argument.
+/**
+ * Finite-domain function adapter.  The domain key/index protocol and evaluator result
+ * category are part of the type contract; reference policy must never return a dangling
+ * temporary.  A borrowed domain/function owner must outlive this adapter.
+ */
 template <class DH, class FH, class Policy = ni::nauto_function_result>
 class nevaluated_function {
     DH domain_;
@@ -277,10 +281,6 @@ concept nmutable_discrete_function =
     nmutable_keyed_indexed<A> &&
     requires(A& function, nfunction_key_t<A> key) { function(key); };
 } // namespace ni
-
-// Compatibility concept. New generic code should name the exact capability.
-template <class A>
-concept ndiscrete = nkeyed_indexed<A>;
 
 template <class D, class F>
     requires nindexed<remove_reference_t<D>> &&
@@ -424,6 +424,8 @@ constexpr bool ndomain_contains(const D& domain, const X& value) {
 }
 } // namespace ni
 
+// Re-domain adapter changes only the visible support.  If CheckMembership is true the
+// domain membership predicate must be exact; all borrowed owners must outlive the view.
 template <class GH, class DH, bool CheckMembership> class nredomain_function {
     GH function_;
     DH domain_;
@@ -516,6 +518,8 @@ constexpr auto nrestrict(G&& function, D&& domain) {
         move(function_holder), move(domain_holder));
 }
 
+// Composition owns/borrows two function holders and is valid only where inner output
+// belongs to the outer domain.  Result reference policy follows the outer evaluator.
 template <class OH, class IH> class ncomposed_function {
     [[no_unique_address]] OH outer_;
     IH inner_;

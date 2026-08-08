@@ -1,3 +1,10 @@
+/**
+ * Fenwick tree for point-combine and prefix folds.
+ * O provides id() and an associative, commutative combine; arbitrary point updates
+ * are not valid for a merely noncommutative operation.  fold/get additionally call
+ * inv() and require a true inverse.  lower() requires prefix values to be monotone
+ * under the supplied comparator.  Operations are O(log n), storage O(n).
+ */
 template <class T, class O = nadd<T>> class nfenwick {
     [[no_unique_address]] O operation_;
     int size_ = 0;
@@ -78,6 +85,12 @@ template <class T, class O = nadd<T>> class nfenwick {
     }
 };
 
+/**
+ * Iterative ordered segment tree over [0,n).
+ * O provides a two-sided id() and associative op(left,right); commutativity is not
+ * required.  Structural node views cover [0,bit_ceil(n)) and expire after mutation.
+ * Build is O(n), point set and range fold are O(log n), storage O(bit_ceil(n)).
+ */
 template <class T, class O = nadd<T>> class nseg {
     [[no_unique_address]] O operation_;
     int size_ = 0, base_ = 1;

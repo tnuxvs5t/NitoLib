@@ -1,6 +1,12 @@
 // Dynamic (open-point) segment trees.  Nodes are allocated only on paths that
 // are written; absent children represent the operation identity.
 
+/**
+ * Sparse point-update segment tree on the fixed half-open long-long domain [lo,hi).
+ * O has a two-sided identity and associative ordered merge.  Domain width must fit
+ * signed long long; each write allocates O(log(width)) nodes, reads allocate none.
+ * Any mutation invalidates structural node views.
+ */
 template <class T, class O = nadd<T>> class ndynamic_seg {
     struct node {
         T aggregate;
@@ -189,6 +195,13 @@ template <class T, class O = nadd<T>> class ndynamic_seg {
     int nseg_right(int handle) const noexcept { return handle ? nodes_[size_t(handle)].right : 0; }
 };
 
+/**
+ * Sparse lazy segment tree on [lo,hi).
+ * M/A obey the same merge/action contracts as nlazyseg, including
+ * compose(newer,older).  Width is limited to INT_MAX because action lengths are int.
+ * Updates and queries are O(log(width)); pushing a pending tag may allocate both
+ * children, while read-only queries and nseg_node descent never allocate.
+ */
 template <class S, class F, class M, class A> class ndynamic_lazyseg {
     struct node {
         S aggregate;

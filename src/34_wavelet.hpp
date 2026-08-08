@@ -1,3 +1,7 @@
+/**
+ * Static wavelet matrix over an immutable integral sequence.  Bit width and signed
+ * ordering are fixed at construction; queries use [l,r) and never mutate the owner.
+ */
 template <integral T>
     requires(!same_as<remove_cv_t<T>, bool>)
 class nwavelet {

@@ -1,3 +1,5 @@
+// Submask enumeration is finite over the set bits of mask.  It uses unsigned wrap-safe
+// bit arithmetic; bool is excluded because it has no useful bit universe.
 template <unsigned_integral T>
     requires(!same_as<remove_cv_t<T>, bool>)
 class nsubmask_range {
@@ -115,6 +117,8 @@ void nfwht_xor(A&& a, bool inverse = false) {
             a[i] /= nlen(a);
 }
 
+// OR/AND/XOR subset convolutions require equal power-of-two lengths.  Scalar operations
+// must support the transform's exact additions/subtractions; XOR inverse also divides.
 template <nindexed A, nindexed B> auto nconv_or(const A& a, const B& b) {
     npre(nlen(a) == nlen(b));
     auto left = ncollect(a), right = ncollect(b);

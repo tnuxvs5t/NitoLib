@@ -1,3 +1,8 @@
+/**
+ * Disjoint sparse table for immutable ordered range folds.
+ * O provides id() and an associative op(left,right); idempotence and commutativity
+ * are not required.  Build is O(n log n), nonempty fold O(1), storage O(n log n).
+ */
 template <class T, class O = nmin<T>> class nsparse {
     nvector<T> values_;
     nvector<nvector<T>> table_;
@@ -55,6 +60,12 @@ template <class T>
         { -a } -> convertible_to<T>;
         { a == b } -> convertible_to<bool>;
     }
+/**
+ * Weighted DSU storing potential(v)-potential(parent(v)).
+ * T must form an exact additive group under += and unary minus; equality decides
+ * constraint consistency.  Overflow or approximate equality breaks the invariant.
+ * Operations have inverse-Ackermann amortized complexity.
+ */
 class npotential_dsu {
     vector<int> parent_;
     nvector<T> delta_; // potential(vertex) - potential(parent(vertex))

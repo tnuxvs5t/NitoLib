@@ -1,3 +1,8 @@
+/**
+ * Owning hash map with separate chaining.  H and E must agree on key identity
+ * (equal keys have equal hashes); mutating operations may invalidate references and
+ * enumeration cursors.  nseed must be called before construction for reproducibility.
+ */
 template <class K, class V, class H = nhash<K>, class E = equal_to<K>> class nmap_hash {
     using storage_type = unordered_map<K, V, H, E>;
     storage_type values_;
@@ -96,6 +101,10 @@ template <class K, class V, class H = nhash<K>, class E = equal_to<K>> class nma
     }
 };
 
+/**
+ * Open-addressing owning map.  H/E obey the same equivalence contract, and load factor
+ * is bounded by the implementation.  Rehashing invalidates all borrowed references.
+ */
 template <class K, class V, class H = nhash<K>, class E = equal_to<K>> class nmap_flat {
     struct node {
         K key;

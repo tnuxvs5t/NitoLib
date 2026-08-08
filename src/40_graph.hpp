@@ -1,3 +1,5 @@
+// Directed weighted edge record.  `to` must be a vertex id in the owning graph; W is
+// interpreted by the selected algorithm (Dijkstra additionally requires W >= 0).
 template <class W = int> struct narc {
     int to;
     W weight;
@@ -26,6 +28,8 @@ constexpr decltype(auto) nedge_weight(const E& edge) {
     return edge.w;
 }
 
+// Undirected edge record used by MST/flow helpers.  Endpoints must belong to the graph;
+// parallel edges are allowed and self-loops are algorithm-specific.
 template <class W = int> struct nedge {
     int from, to, id;
     W w;
@@ -46,6 +50,11 @@ template <class T> constexpr T ncapadd(T left, T right, T infinity = ninf<T>) {
     }
 }
 
+/**
+ * Borrowed graph capability view.  F(vertex) returns an enumerable neighbor range whose
+ * edge objects expose a checked integer destination and optional weight.  The source
+ * owner and captured adjacency must outlive this view; it never owns vertices.
+ */
 template <class F> class ngraph_view {
     int vertices_ = 0;
     [[no_unique_address]] F adjacency_;
@@ -96,6 +105,8 @@ using ngraph_weight_t = remove_cvref_t<decltype(nedge_weight(declval<ngraph_neig
 template <class G> using ngraph_edge_t = ngraph_neighbor_t<G>;
 } // namespace ni
 
+// Owning adjacency-list graph.  Algorithms assume every neighbor destination is in
+// [0,vertices()); insertion may invalidate borrowed neighbor views.
 template <class W = int> class ngraph_list {
     vector<vector<narc<W>>> adjacency_;
     int arcs_ = 0;
@@ -131,6 +142,8 @@ template <class W = int> class ngraph_list {
     }
 };
 
+// Owning forward-star graph.  Edge handles are representation details and may change
+// on rebuild; neighbor iteration is directed and permits parallel arcs.
 template <class W = int> class ngraph_forward {
     int vertices_ = 0;
     vector<int> head_, to_, next_;
@@ -314,6 +327,10 @@ template <class W = int> class ngraph_forward {
     }
 };
 
+/**
+ * Immutable CSR graph built from a graph-like source.  Source destinations must be in
+ * range; the CSR owner copies topology and iteration order is preserved from input.
+ */
 template <class W = int> class ngraph_csr {
     int vertices_ = 0;
     vector<int> offset_{0}, to_;
@@ -488,6 +505,8 @@ template <ngraph_like G> auto nvertices(const G& graph) {
     return nrange(ni::ngraph_vertices(graph));
 }
 
+// Flattened borrowed arc view.  The graph owner must outlive enumeration and must not
+// mutate adjacency while a cursor is active; arc order is backend iteration order.
 template <class G> class ngraph_arcs_view {
     G* graph_;
     using adjacency_type = decltype(declval<G&>().neighbors(0));
@@ -563,6 +582,8 @@ template <ngraph_like G> auto narcs(G& graph) { return ngraph_arcs_view<G>(graph
 template <ngraph_like G> auto narcs(const G& graph) { return ngraph_arcs_view<const G>(graph); }
 template <ngraph_like G> auto narcs(G&&) = delete;
 
+// Borrowed filtered graph view.  P must be stable and side-effect-safe across repeated
+// neighbor enumeration; the source graph must outlive the view and stay structurally valid.
 template <class G, class P> class ngraph_where_view {
     const G* graph_;
     [[no_unique_address]] P predicate_;
@@ -651,6 +672,8 @@ template <ngraph_like G, class P> auto ngraph_where(const G& graph, P predicate)
 }
 template <ngraph_like G, class P> auto ngraph_where(const G&&, P) = delete;
 
+// Path result uses parent pointers over one fixed vertex universe.  `reachable` is the
+// only authority for path validity; a missing parent is valid at the source.
 template <class D> struct npath_result {
     nvector<D> d;
     nvector<int> p;
@@ -702,6 +725,8 @@ template <ngraph_like G> npath_result<int> nbfs_path(const G& graph, int source)
     return result;
 }
 
+// Dijkstra requires every traversed edge weight to be nonnegative and all additions to
+// stay below the chosen infinity sentinel.  Negative edges invalidate the greedy proof.
 template <class D = long long, ngraph_like G>
     requires is_arithmetic_v<D> && (!same_as<remove_cv_t<D>, bool>)
 npath_result<D> ndijkstra_path(const G& graph, int source, D infinity = nmin<D>{}.id()) {

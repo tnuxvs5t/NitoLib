@@ -55,6 +55,10 @@ template <nindexed Text, nindexed Pattern> nvector<int> nkmp_find(const Text& te
     return result;
 }
 
+/**
+ * Manacher radius index for an immutable sequence.  Equality must be stable for the
+ * sequence lifetime; intervals are half-open and queries are O(1) after O(n) build.
+ */
 class npalindrome_index {
     nvector<int> odd_, even_;
 
@@ -123,6 +127,8 @@ nvector<int> nkmp(const Text& text, const Pattern& pattern) {
 
 using nmanacher_result = npalindrome_index;
 
+// Suffix-array construction requires a strict weak ordering on symbols and compares
+// suffixes lexicographically.  The source sequence is copied; queries use [l,r).
 template <nindexed A, class C = nless<>> nvector<int> nsuffix_array(const A& sequence, C compare = {}) {
     int n = nlen(sequence);
     nvector<int> suffix(n), rank(n), next_rank(n);

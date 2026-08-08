@@ -1,3 +1,8 @@
+/**
+ * Reroot/tree-path aggregation helper.  The graph must be a connected undirected tree;
+ * Merge/Lift must preserve path direction and any noncommutative order chosen by the
+ * caller.  All vertex ids are dense [0,V).
+ */
 template <ngraph_like G, class T, class Merge, class Vertex, class Lift>
     requires copyable<T>
 nvector<T> nreroot(const G& graph, T identity, Merge merge, Vertex vertex, Lift lift, int root = 0) {
@@ -50,6 +55,10 @@ struct nhld_segment {
     bool rev;
 };
 
+/**
+ * Heavy-light decomposition of a connected undirected tree.  path() emits half-open
+ * base-array segments with a direction bit; noncommutative folds must honor that bit.
+ */
 class nhld {
     int vertices_ = 0;
     nvector<int> parent_, depth_, heavy_, head_, position_, inverse_, subtree_;
@@ -174,6 +183,8 @@ class nhld {
     }
 };
 
+// Binary-lifting LCA over a validated rooted tree.  Ancestor tables are immutable after
+// construction; every query vertex belongs to the original [0,V) universe.
 template <class W = int> class nlca_binary {
     int vertices_ = 0, levels_ = 0;
     vector<vector<int>> ancestor_;

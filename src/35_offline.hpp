@@ -1,3 +1,5 @@
+// Offline interval queries use half-open [l,r) endpoints and a stable query id.  The
+// add/remove callbacks must maintain a reversible current-window invariant.
 struct ninterval_query {
     int left, right, id;
 };

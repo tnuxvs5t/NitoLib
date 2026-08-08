@@ -1,5 +1,11 @@
 enum class nbranch : unsigned char { left, take, right };
 
+/**
+ * Non-owning AST node snapshot supplied by a tree owner `S`.
+ * `S` provides the private nnode_* accessors and an epoch; topology-changing owner
+ * operations invalidate old snapshots.  A zero handle is a valid empty subtree and
+ * still supports count/len/info, but not val().
+ */
 template <class S> class nnode {
   public:
     using value_type = typename S::value_type;
@@ -74,6 +80,8 @@ template <class S, class F> nnode<S> nwalk(const S& tree, F&& decide) {
     return node;
 }
 
+// Augmentation objects provide `info_type`, id(), one(value,count), and associative
+// ordered op(left,right).  nempty_augment is the no-information implementation.
 template <class T> struct nempty_augment {
     using info_type = monostate;
     constexpr info_type id() const { return {}; }
@@ -81,8 +89,10 @@ template <class T> struct nempty_augment {
     constexpr info_type op(info_type, info_type) const { return {}; }
 };
 
-// Default no-op action used by AST containers.  A tree can opt into lazy tags
-// by supplying an action with the same four operations and a `tag_type` alias.
+// Node actions provide tag_type/tag_id/compose/apply_value/apply_info.
+// compose(newer, older) means "older, then newer"; it must be associative and
+// compatible with both per-key multiplicity and subtree aggregate length.
+// nempty_tag is the default no-op implementation.
 template <class T, class I> struct nempty_tag {
     using tag_type = monostate;
     constexpr tag_type tag_id() const { return {}; }
@@ -91,6 +101,8 @@ template <class T, class I> struct nempty_tag {
     constexpr I apply_info(I info, const tag_type&, int) const { return info; }
 };
 
+// Prefix/suffix descent assumes the predicate is monotone as the ordered aggregate
+// grows.  Without that semantic property the returned node is not the first/last hit.
 template <class S, class P> nnode<S> nfirst_prefix(const S& tree, P&& predicate) {
     const auto& augment = tree.augment();
     auto node = tree.root();
@@ -129,10 +141,13 @@ template <class S, class P> nnode<S> nlast_suffix(const S& tree, P&& predicate) 
     return node;
 }
 
-// Interval-tree node view.  The view stores the interval bounds because an
-// open/dynamic tree does not have to allocate absent children.  An absent child
-// contributes the operation identity; a lazy view additionally applies any
-// carried ancestor tag without materializing that child.
+/**
+ * Non-owning interval-tree snapshot shared by fixed, persistent and dynamic trees.
+ * The owner supplies nseg_* accessors plus `nseg_state_type`; monostate means no
+ * lazy carry, optional<tag_type> carries ancestor tags.  Missing children contribute
+ * the merge identity.  Mutating nonpersistent owners invalidates the epoch; read-only
+ * descent never materializes dynamic children.
+ */
 template <class S> class nseg_node {
   public:
     using aggregate_type = typename S::aggregate_type;
@@ -234,6 +249,8 @@ template <class S> class nseg_node {
     }
 };
 
+// `decide` must eventually take a node or descend toward a nonempty child.  Returning
+// left/right at a leaf violates the walk contract and is rejected by the node view.
 template <class S, class F> nseg_node<S> nseg_walk(nseg_node<S> node, F&& decide) {
     while (node) {
         nbranch branch = invoke(decide, node);

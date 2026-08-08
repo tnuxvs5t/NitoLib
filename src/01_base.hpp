@@ -140,28 +140,16 @@ template <class T, class U> constexpr bool nchmax(T& a, U&& b) {
     return false;
 }
 
-namespace ni {
 template <class A>
-concept nhas_len_member = requires(const A& a) { a.len(); };
-
-template <class A>
-concept nhas_integral_len = requires(const A& a) {
-    a.len();
-    requires integral<remove_cvref_t<decltype(a.len())>>;
-};
-
-template <class A>
-concept nhas_integral_size = requires(const A& a) {
-    a.size();
-    requires integral<remove_cvref_t<decltype(a.size())>>;
-};
-} // namespace ni
-
-template <class A>
-    requires ni::nhas_integral_len<A> ||
-             ((!ni::nhas_len_member<A>) && ni::nhas_integral_size<A>)
+    requires requires(const A& value) {
+        { value.len() } -> integral;
+    } || ((!requires(const A& value) { value.len(); }) && requires(const A& value) {
+        { value.size() } -> integral;
+    })
 constexpr int nlen(const A& a) {
-    if constexpr (ni::nhas_integral_len<A>) {
+    if constexpr (requires(const A& value) {
+                      { value.len() } -> integral;
+                  }) {
         auto n = a.len();
         if constexpr (signed_integral<remove_cvref_t<decltype(n)>>)
             npre(n >= 0);
@@ -197,6 +185,10 @@ struct nidentity {
     }
 };
 
+// Operation objects are deliberately syntax-light: users must ensure `id()` is a
+// two-sided identity and `operator()` is associative on the values actually used.
+// `inv()` is meaningful only where every queried value has a true inverse; signed
+// arithmetic additionally requires that no operation overflows.
 template <class T> struct nadd {
     constexpr T id() const { return T{}; }
     constexpr T operator()(T left, const T& right) const { return left += right; }
@@ -238,6 +230,8 @@ template <class T> struct nmax {
     }
 };
 
+// SplitMix-style deterministic generator.  It is not cryptographic; reproducibility
+// requires explicit seeding and must not depend on unspecified call ordering.
 class nrng {
     uint64_t state_;
 
@@ -285,6 +279,8 @@ inline void nseed(uint64_t seed) {
     nhash_seed = nrng::mix(seed);
 }
 
+// Salted contest hash.  Equal keys must hash equally; the process salt intentionally
+// changes bucket behavior unless nseed is called before container construction.
 template <class T> struct nhash {
     uint64_t salt = nhash_seed;
 

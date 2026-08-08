@@ -1,3 +1,5 @@
+// Topological sort requires a directed graph; a cycle yields an empty nmaybe rather
+// than a partial order.  Vertex ids must be dense [0,V).
 template <ngraph_like G> nmaybe<nvector<int>> ntoposort(const G& graph) {
     int vertices = ni::ngraph_vertices(graph);
     nvector<int> indegree(vertices, 0);
@@ -142,6 +144,8 @@ template <ngraph_like G> npartition nscc_tarjan(const G& graph) {
 }
 
 namespace ni {
+// Rooted-tree layout is only meaningful for a connected acyclic undirected graph.
+// `require_symmetric` additionally checks that every adjacency arc has a reverse.
 struct ntree_layout {
     vector<vector<int>> adjacency;
     nvector<int> parent, order;
@@ -195,6 +199,10 @@ ntree_layout nbuild_tree_layout(const G& graph, int root, bool require_symmetric
 }
 } // namespace ni
 
+/**
+ * Binary-lifting LCA index.  Input must be a connected undirected tree with symmetric
+ * adjacency and a valid root.  Preprocessing is O(V log V), each query O(log V).
+ */
 class nlca {
     int vertices_ = 0;
     vector<vector<int>> ancestor_;

@@ -1,3 +1,5 @@
+// Scratch views borrow storage and are invalidated by the next resize/reallocation or
+// by destruction of the owner; never retain them across another space()/filled() call.
 template <class T> class nscratch {
     nvector<T> storage_;
 
@@ -18,6 +20,8 @@ template <class T> class nscratch {
     }
 };
 
+// Integer-handle arena.  Handles index owned storage and remain meaningful until
+// rewind/clear/move destroys their slot; they are not pointers and have no generation.
 template <class T> class narena {
     nvector<T> storage_;
 
@@ -46,6 +50,11 @@ template <class T> class narena {
     void clear() noexcept { storage_.clear(); }
 };
 
+/**
+ * Reusable 1-based handles over optional slots.  A handle is valid only while alive();
+ * erase invalidates it and a later make may reuse the number for a different object.
+ * The pool owns all slots and is not a stable-address arena.
+ */
 template <class T> class npool_dynamic {
     vector<optional<T>> storage_;
     vector<int> free_;

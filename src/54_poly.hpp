@@ -1,3 +1,8 @@
+/**
+ * Optional primitive-root cache for a static modular type.  Setting ok=true asserts
+ * that root is a genuine primitive root of the prime modulus; a false assertion causes
+ * silent wrong convolution, so specializations require naive differential evidence.
+ */
 template <class T> struct nntt_info {
     static constexpr bool ok = false;
 };
@@ -15,6 +20,8 @@ template <> struct nntt_info<nmodint<469762049>> {
 };
 
 namespace ni {
+// Dispatch marker only: this does not assert primality, invertibility or ring laws.
+// nconv_auto checks those runtime preconditions before selecting NTT.
 template <class T> inline constexpr bool nstatic_modular = false;
 template <uint64_t Modulus> inline constexpr bool nstatic_modular<nmodint<Modulus>> = true;
 
@@ -102,6 +109,11 @@ template <nindexed A, nindexed B> auto nconv_naive(const A& a, const B& b) {
     return result;
 }
 
+/**
+ * NTT convolution for equal static nmodint coefficient types.  The modulus is prime,
+ * fits uint32, and the power-of-two transform length divides mod-1.  These preconditions
+ * are checked at runtime because the deleted algebra trait system no longer certifies a field.
+ */
 template <nindexed A, nindexed B>
     requires ni::nstatic_modular<nindex_value_t<const A>> &&
              same_as<nindex_value_t<const A>, nindex_value_t<const B>>
@@ -155,6 +167,8 @@ template <nindexed A> auto npoly_derivative(const A& polynomial) {
     return result;
 }
 
+// Formal integral and FPS inverse require every performed scalar division to be exact
+// and invertible.  Ordinary integer truncation and nonunits under composite moduli are invalid.
 template <nindexed A> auto npoly_integral(const A& polynomial) {
     using T = nindex_value_t<const A>;
     npre(nlen(polynomial) < INT_MAX);
@@ -195,6 +209,11 @@ template <nindexed A> auto nfps_inverse(const A& series, int terms) {
     return result;
 }
 
+/**
+ * Owning low-to-high coefficient polynomial normalized by removing trailing zeros.
+ * Division-based FPS operations require a field-like T; inv/log/exp additionally need
+ * constant terms nonzero/one/zero respectively.  Multiplication follows nconv's backend.
+ */
 template <class T> class npoly {
   public:
     using value_type = T;
@@ -308,6 +327,8 @@ template <class T> class npoly {
     }
 };
 
+// Berlekamp-Massey and recurrence recovery require field arithmetic so every nonzero
+// discrepancy divisor is invertible; equality to T{} must be exact.
 template <nindexed A> auto nberlekamp(const A& sequence) {
     using T = nindex_value_t<const A>;
     nvector<T> current{T{1}}, previous{T{1}};

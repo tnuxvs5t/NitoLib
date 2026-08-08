@@ -1,3 +1,7 @@
+/**
+ * Linear basis over GF(2).  Values are unsigned bit vectors; insertion and max-xor
+ * preserve the pivot invariant, and rank counts independent vectors.
+ */
 template <unsigned_integral T = uint64_t> class nxorbasis {
     static constexpr int bits = numeric_limits<T>::digits;
     array<T, bits> basis_{};
@@ -39,6 +43,10 @@ template <unsigned_integral T = uint64_t> class nxorbasis {
     }
 };
 
+/**
+ * Finite probability distribution.  Weights must be nonnegative with positive total;
+ * normalization is floating-point and carries the usual precision/rounding boundary.
+ */
 template <class P = long double> class nprob {
     nvector<P> weights_;
 
@@ -144,6 +152,8 @@ template <class P, class F> auto nexpect(const nprob<P>& distribution, F evaluat
     return distribution.expect(move(evaluate));
 }
 
+// Nim helper assumes nonnegative unsigned heap sizes and normal-play rules; xor is the
+// SG invariant and does not describe misere play.
 template <unsigned_integral T = uint64_t> class nnim {
   public:
     nvector<T> h;
@@ -185,6 +195,8 @@ template <unsigned_integral T = uint64_t> class nnim {
     }
 };
 
+// SG evaluation requires a finite directed acyclic graph.  Cycles have no recursive
+// mex order and are reported as an unavailable result.
 template <ngraph_like G> nmaybe<nvector<int>> nsg_dag(const G& graph) {
     auto order = ntoposort(graph);
     if (!order)

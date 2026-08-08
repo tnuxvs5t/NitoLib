@@ -1,3 +1,5 @@
+// Dense partition of [0,n).  Every element has exactly one class; numeric class ids
+// are representation labels and should not be treated as stable semantic names.
 class npartition {
     nvector<int> classes_;
     int count_ = 0;
@@ -44,6 +46,7 @@ class npartition {
 using npart = npartition;
 using npart_dense = npartition;
 
+// Permutation owner over [0,n); constructors and mutators preserve bijectivity.
 class nperm {
     nvector<int> image_;
 

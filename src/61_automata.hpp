@@ -15,6 +15,10 @@ struct nmatch {
     friend bool operator==(const nmatch&, const nmatch&) = default;
 };
 
+/**
+ * Trie nodes index symbols in [0,Alphabet).  Alphabet mapping is external; invalid
+ * symbols are precondition failures and node handles are owner-local.
+ */
 template <int Alphabet>
     requires(Alphabet > 0)
 class ntrie {
@@ -78,6 +82,8 @@ class ntrie {
     }
 };
 
+// Aho-Corasick links require a completed trie and preserve the same dense alphabet
+// contract.  After build, output links are immutable until rebuild.
 template <int Alphabet>
     requires(Alphabet > 0)
 class nac {

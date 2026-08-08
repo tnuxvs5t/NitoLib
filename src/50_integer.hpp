@@ -266,6 +266,11 @@ inline nvector<uint64_t> nfactor(uint64_t value) {
 
 inline nvector<uint64_t> nfactor_rho(uint64_t value) { return nfactor(value); }
 
+/**
+ * Normalized exact fraction over signed T.  Denominator is positive and gcd-reduced;
+ * intermediate arithmetic must fit T/__int128 as used by each operator.  Zero
+ * denominator is invalid.
+ */
 template <signed_integral T = long long> class nfrac {
     using W = nwide_t<T>;
     using U = make_unsigned_t<W>;
@@ -366,6 +371,8 @@ template <signed_integral T = long long> class nfrac {
     }
 };
 
+// Congruence x == residue (mod modulus), with positive modulus and canonical residue.
+// CRT merge may fail when residues disagree modulo gcd or the lcm overflows.
 struct ncongruence {
     long long a = 0, m = 1;
 
@@ -415,6 +422,8 @@ inline ncongruence ncrt(ncongruence left, ncongruence right, ncongruence fallbac
     return result ? result.val() : move(fallback);
 }
 
+// Sieve table is immutable after construction; queries outside its built limit must use
+// the separate primality/factorization routines rather than indexing this table.
 class nprime_table {
     static int checked_limit(int limit) {
         npre(0 <= limit && limit < INT_MAX);

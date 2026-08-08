@@ -187,28 +187,16 @@ template <class T, class U> constexpr bool nchmax(T& a, U&& b) {
     return false;
 }
 
-namespace ni {
 template <class A>
-concept nhas_len_member = requires(const A& a) { a.len(); };
-
-template <class A>
-concept nhas_integral_len = requires(const A& a) {
-    a.len();
-    requires integral<remove_cvref_t<decltype(a.len())>>;
-};
-
-template <class A>
-concept nhas_integral_size = requires(const A& a) {
-    a.size();
-    requires integral<remove_cvref_t<decltype(a.size())>>;
-};
-} // namespace ni
-
-template <class A>
-    requires ni::nhas_integral_len<A> ||
-             ((!ni::nhas_len_member<A>) && ni::nhas_integral_size<A>)
+    requires requires(const A& value) {
+        { value.len() } -> integral;
+    } || ((!requires(const A& value) { value.len(); }) && requires(const A& value) {
+        { value.size() } -> integral;
+    })
 constexpr int nlen(const A& a) {
-    if constexpr (ni::nhas_integral_len<A>) {
+    if constexpr (requires(const A& value) {
+                      { value.len() } -> integral;
+                  }) {
         auto n = a.len();
         if constexpr (signed_integral<remove_cvref_t<decltype(n)>>)
             npre(n >= 0);
@@ -244,6 +232,10 @@ struct nidentity {
     }
 };
 
+// Operation objects are deliberately syntax-light: users must ensure `id()` is a
+// two-sided identity and `operator()` is associative on the values actually used.
+// `inv()` is meaningful only where every queried value has a true inverse; signed
+// arithmetic additionally requires that no operation overflows.
 template <class T> struct nadd {
     constexpr T id() const { return T{}; }
     constexpr T operator()(T left, const T& right) const { return left += right; }
@@ -285,6 +277,8 @@ template <class T> struct nmax {
     }
 };
 
+// SplitMix-style deterministic generator.  It is not cryptographic; reproducibility
+// requires explicit seeding and must not depend on unspecified call ordering.
 class nrng {
     uint64_t state_;
 
@@ -332,6 +326,8 @@ inline void nseed(uint64_t seed) {
     nhash_seed = nrng::mix(seed);
 }
 
+// Salted contest hash.  Equal keys must hash equally; the process salt intentionally
+// changes bucket behavior unless nseed is called before container construction.
 template <class T> struct nhash {
     uint64_t salt = nhash_seed;
 
@@ -451,6 +447,11 @@ template <class F> class nindexed2_access {
 // One public view family. The model/accessor determines capabilities: the default
 // model is contiguous, while lambda and composed models may expose only indexing.
 // Copying an nview copies the access description and never materializes elements.
+/**
+ * Zero-owning indexed view.  F maps positions to references or stable values; any
+ * referenced owner must outlive the view and must not be structurally invalidated.
+ * Shape/stride accessors describe layout only and never extend pointee lifetime.
+ */
 template <class T, class F = ni::ncontiguous_access<T>> class nview {
     int size_ = 0;
     [[no_unique_address]] F access_;
@@ -641,6 +642,8 @@ concept nviewable_indexed = nindexed<remove_reference_t<A>> &&
                              constructible_from<remove_cvref_t<A>, A>);
 
 namespace ni {
+// Indexed holder owns safe rvalues/views and borrows ordinary lvalues.  A borrowed
+// source must outlive every derived view and remain structurally unmodified.
 template <class A> class nindexed_holder {
     using value_type = remove_cvref_t<A>;
     static constexpr bool stores_value =
@@ -876,6 +879,10 @@ constexpr auto ndiagonal(A&& matrix, int offset = 0) {
 }
 
 // ---- 04_enum.hpp ----
+/**
+ * Half-open arithmetic range [first,last) with nonzero step.  The caller must choose
+ * a step whose sign reaches the bound; constructor arithmetic is checked for overflow.
+ */
 template <signed_integral T> class nrange_t {
     T first_ = 0, last_ = 0, step_ = 1;
 
@@ -955,6 +962,8 @@ template <integral I> constexpr int ni_nloop_count(I count) {
 }
 
 namespace ni {
+// Single-pass cursor borrowing indexed storage.  The source must outlive enumeration
+// and retain length/index validity until the cursor reaches the end.
 template <class A> struct nborrowed_index_cursor {
     A* owner;
     int index = 0;
@@ -1128,6 +1137,8 @@ constexpr auto nproject(A&& a, F projection) {
 }
 
 namespace ni {
+// Zip/product/window accessors preserve holder lifetime rules.  Zip exposes the common
+// supported prefix; windows borrow overlapping elements rather than copying them.
 template <class L, class R> class nzip_access {
     L left_;
     R right_;
@@ -1246,6 +1257,12 @@ constexpr auto nwindows(A&& owner, int width, int step = 1) {
 // ---- 05_ast.hpp ----
 enum class nbranch : unsigned char { left, take, right };
 
+/**
+ * Non-owning AST node snapshot supplied by a tree owner `S`.
+ * `S` provides the private nnode_* accessors and an epoch; topology-changing owner
+ * operations invalidate old snapshots.  A zero handle is a valid empty subtree and
+ * still supports count/len/info, but not val().
+ */
 template <class S> class nnode {
   public:
     using value_type = typename S::value_type;
@@ -1320,6 +1337,8 @@ template <class S, class F> nnode<S> nwalk(const S& tree, F&& decide) {
     return node;
 }
 
+// Augmentation objects provide `info_type`, id(), one(value,count), and associative
+// ordered op(left,right).  nempty_augment is the no-information implementation.
 template <class T> struct nempty_augment {
     using info_type = monostate;
     constexpr info_type id() const { return {}; }
@@ -1327,8 +1346,10 @@ template <class T> struct nempty_augment {
     constexpr info_type op(info_type, info_type) const { return {}; }
 };
 
-// Default no-op action used by AST containers.  A tree can opt into lazy tags
-// by supplying an action with the same four operations and a `tag_type` alias.
+// Node actions provide tag_type/tag_id/compose/apply_value/apply_info.
+// compose(newer, older) means "older, then newer"; it must be associative and
+// compatible with both per-key multiplicity and subtree aggregate length.
+// nempty_tag is the default no-op implementation.
 template <class T, class I> struct nempty_tag {
     using tag_type = monostate;
     constexpr tag_type tag_id() const { return {}; }
@@ -1337,6 +1358,8 @@ template <class T, class I> struct nempty_tag {
     constexpr I apply_info(I info, const tag_type&, int) const { return info; }
 };
 
+// Prefix/suffix descent assumes the predicate is monotone as the ordered aggregate
+// grows.  Without that semantic property the returned node is not the first/last hit.
 template <class S, class P> nnode<S> nfirst_prefix(const S& tree, P&& predicate) {
     const auto& augment = tree.augment();
     auto node = tree.root();
@@ -1375,10 +1398,13 @@ template <class S, class P> nnode<S> nlast_suffix(const S& tree, P&& predicate) 
     return node;
 }
 
-// Interval-tree node view.  The view stores the interval bounds because an
-// open/dynamic tree does not have to allocate absent children.  An absent child
-// contributes the operation identity; a lazy view additionally applies any
-// carried ancestor tag without materializing that child.
+/**
+ * Non-owning interval-tree snapshot shared by fixed, persistent and dynamic trees.
+ * The owner supplies nseg_* accessors plus `nseg_state_type`; monostate means no
+ * lazy carry, optional<tag_type> carries ancestor tags.  Missing children contribute
+ * the merge identity.  Mutating nonpersistent owners invalidates the epoch; read-only
+ * descent never materializes dynamic children.
+ */
 template <class S> class nseg_node {
   public:
     using aggregate_type = typename S::aggregate_type;
@@ -1480,6 +1506,8 @@ template <class S> class nseg_node {
     }
 };
 
+// `decide` must eventually take a node or descend toward a nonempty child.  Returning
+// left/right at a leaf violates the walk contract and is rejected by the node view.
 template <class S, class F> nseg_node<S> nseg_walk(nseg_node<S> node, F&& decide) {
     while (node) {
         nbranch branch = invoke(decide, node);
@@ -1500,13 +1528,12 @@ template <class S, class F> nseg_node<S> nseg_walk(const S& tree, F&& decide) {
 }
 
 // ---- 06_func.hpp ----
-template <class R>
-concept nstable_function_result = !is_rvalue_reference_v<R>;
-
 namespace ni {
 // A zero-allocation lifetime bridge used by discrete-function adaptors:
 // lvalues are borrowed, rvalues are owned. Const always propagates through the
 // bridge; shallow const must be represented by a different, explicit type.
+// Holder either borrows an lvalue or owns a decayed value.  Any adapter storing it must
+// preserve that lifetime distinction; a view cannot outlive a borrowed domain/function.
 template <class A> class nobject_holder {
     using value_type = remove_cvref_t<A>;
     static constexpr bool owns = !is_lvalue_reference_v<A>;
@@ -1659,6 +1686,11 @@ template <class H> class nfunction_value_access {
 // A finite discrete function is a keyed view, not an associative container.
 // key(i) moves from enumeration position to semantic argument; operator[](i)
 // evaluates at that position; operator()(x) evaluates an arbitrary argument.
+/**
+ * Finite-domain function adapter.  The domain key/index protocol and evaluator result
+ * category are part of the type contract; reference policy must never return a dangling
+ * temporary.  A borrowed domain/function owner must outlive this adapter.
+ */
 template <class DH, class FH, class Policy = ni::nauto_function_result>
 class nevaluated_function {
     DH domain_;
@@ -1779,10 +1811,6 @@ concept nmutable_discrete_function =
     nmutable_keyed_indexed<A> &&
     requires(A& function, nfunction_key_t<A> key) { function(key); };
 } // namespace ni
-
-// Compatibility concept. New generic code should name the exact capability.
-template <class A>
-concept ndiscrete = nkeyed_indexed<A>;
 
 template <class D, class F>
     requires nindexed<remove_reference_t<D>> &&
@@ -1926,6 +1954,8 @@ constexpr bool ndomain_contains(const D& domain, const X& value) {
 }
 } // namespace ni
 
+// Re-domain adapter changes only the visible support.  If CheckMembership is true the
+// domain membership predicate must be exact; all borrowed owners must outlive the view.
 template <class GH, class DH, bool CheckMembership> class nredomain_function {
     GH function_;
     DH domain_;
@@ -2018,6 +2048,8 @@ constexpr auto nrestrict(G&& function, D&& domain) {
         move(function_holder), move(domain_holder));
 }
 
+// Composition owns/borrows two function holders and is valid only where inner output
+// belongs to the outer domain.  Result reference policy follows the outer evaluator.
 template <class OH, class IH> class ncomposed_function {
     [[no_unique_address]] OH outer_;
     IH inner_;
@@ -2223,6 +2255,10 @@ constexpr auto nblocks(G&& function, int width) {
 }
 
 // ---- 10_seq.hpp ----
+/**
+ * Owning contiguous sequence with signed int indexing.  References and borrowed views
+ * remain valid only until storage is reallocated/destroyed; all subranges are [l,r).
+ */
 template <class T> class nvector {
     vector<T> storage_;
 
@@ -2381,6 +2417,8 @@ auto ntabulate(G&& function) {
     return ncollect(forward<G>(function));
 }
 
+// Owning deque facade.  Borrowed references/views cannot outlive the owner and may be
+// invalidated by either-end insertion or erase according to deque relocation rules.
 template <class T> class ndeque_stl {
     deque<T> storage_;
 
@@ -2461,6 +2499,10 @@ template <class T> class ndeque_stl {
     }
 };
 
+/**
+ * Ring-buffer deque.  Logical indices are stable only between structural mutations;
+ * reserve or growth may move every element.  End operations are amortized O(1).
+ */
 template <class T> class ndeque_ring {
     vector<optional<T>> storage_;
     int first_ = 0, size_ = 0;
@@ -2614,6 +2656,10 @@ template <class T> class ndeque_ring {
 
 template <class T> using ndeque = ndeque_ring<T>;
 
+/**
+ * Binary heap.  C must be a strict weak ordering; top is the C-minimum.  References
+ * into storage may be invalidated by push/pop or reallocation.
+ */
 template <class T, class C = nless<T>> class nheap_binary {
     nvector<T> values_;
     [[no_unique_address]] C compare_{};
@@ -2699,6 +2745,8 @@ template <class T, class C = nless<T>> class nheap_binary {
 
 template <class T, class C = nless<T>> using nheap = nheap_binary<T, C>;
 
+// Fixed-rank owning array.  Rank is positive, extents are nonnegative, the total volume
+// must fit int, and every multi-index must lie inside its corresponding extent.
 template <class T, int Rank>
     requires(Rank > 0)
 class narray {
@@ -3061,6 +3109,8 @@ int nfind_sorted(const A& a, const X& value, C compare, int fallback) {
     return nfind_sorted(a, value, move(compare), nidentity{}, fallback);
 }
 
+// nfold is intentionally unconstrained by a named algebra trait: op must expose id()
+// and op(acc,value), with identity/associativity supplied as a local semantic contract.
 template <class A, class P = nidentity,
           class O = nadd<ni::nprojected_value_t<const A, P>>>
     requires nindexed<A>
@@ -3115,6 +3165,11 @@ int nsort_unique(A&& a, C compare = {}, E equal = {}, P projection = {}) {
 }
 
 // ---- 20_mechanism.hpp ----
+/**
+ * Binary exponentiation for an associative operation with id().  Negative exponents
+ * are accepted only when O has a usable inv(value); otherwise the checked profile
+ * rejects the call.  The operation must not change meaning between steps.
+ */
 template <class T, class O = nmul<T>>
 constexpr T npow(T base, long long exponent, O operation = {}) {
     uint64_t remaining;
@@ -3142,6 +3197,8 @@ constexpr T npow(T base, long long exponent, O operation = {}) {
     return result;
 }
 
+// Prefix/suffix scans require an identity and associative ordered combine.  Non-
+// commutative operations are supported because each direction is explicit.
 template <class A, class O = nadd<nindex_value_t<const A>>>
 auto nscan(const A& a, O op = {}) {
     using T = nindex_value_t<const A>;
@@ -3167,6 +3224,8 @@ auto nsuffix_scan(const A& a, O op = {}) {
     return reversed;
 }
 
+// The predicate must be false-then-true on [first,last); otherwise binary search has
+// no correctness guarantee.  nlast_true uses the dual true-then-false convention.
 template <signed_integral I, class P> constexpr I nfirst_true(I first, I last, P predicate) {
     npre(first <= last);
     while (first < last) {
@@ -3188,6 +3247,11 @@ template <signed_integral I, class P> constexpr I nlast_true(I first, I last, P 
     return first - 1;
 }
 
+/**
+ * Address-based rollback log.  Every saved target must outlive the log until rollback;
+ * moving/reallocating the target behind the log is a dangling-pointer bug.  Checkpoints
+ * are stack times and rollback restores in strict reverse order.
+ */
 template <class T> class nrollback {
     struct change {
         T* target;
@@ -3233,6 +3297,8 @@ template <class T> class nrollback {
 };
 
 // ---- 21_memory.hpp ----
+// Scratch views borrow storage and are invalidated by the next resize/reallocation or
+// by destruction of the owner; never retain them across another space()/filled() call.
 template <class T> class nscratch {
     nvector<T> storage_;
 
@@ -3253,6 +3319,8 @@ template <class T> class nscratch {
     }
 };
 
+// Integer-handle arena.  Handles index owned storage and remain meaningful until
+// rewind/clear/move destroys their slot; they are not pointers and have no generation.
 template <class T> class narena {
     nvector<T> storage_;
 
@@ -3281,6 +3349,11 @@ template <class T> class narena {
     void clear() noexcept { storage_.clear(); }
 };
 
+/**
+ * Reusable 1-based handles over optional slots.  A handle is valid only while alive();
+ * erase invalidates it and a later make may reuse the number for a different object.
+ * The pool owns all slots and is not a stable-address arena.
+ */
 template <class T> class npool_dynamic {
     vector<optional<T>> storage_;
     vector<int> free_;
@@ -3349,6 +3422,8 @@ template <class T> class npool_dynamic {
 template <class T> using npool = npool_dynamic<T>;
 
 // ---- 22_finite.hpp ----
+// Dense partition of [0,n).  Every element has exactly one class; numeric class ids
+// are representation labels and should not be treated as stable semantic names.
 class npartition {
     nvector<int> classes_;
     int count_ = 0;
@@ -3395,6 +3470,7 @@ class npartition {
 using npart = npartition;
 using npart_dense = npartition;
 
+// Permutation owner over [0,n); constructors and mutators preserve bijectivity.
 class nperm {
     nvector<int> image_;
 
@@ -3489,6 +3565,8 @@ class nperm {
 
 // ---- 23_ordered.hpp ----
 namespace ni {
+// Internal reusable-handle pool.  Erased handles may be recycled, so node snapshots
+// rely on the owning tree epoch as well as handle liveness to reject stale identity.
 template <class T> class nslot_pool {
     vector<optional<T>> slots_;
     vector<int> free_;
@@ -3558,6 +3636,14 @@ template <class S> bool nordered_equal(const S& left, const S& right) {
 }
 } // namespace ni
 
+/**
+ * Randomized ordered multiset/set with pluggable augmentation and lazy node action.
+ * C is a strict weak ordering; A has id/one/ordered op; L follows the nempty_tag
+ * protocol and compose(newer,older) order.  Every applied tag must preserve C-order
+ * and equivalence classes in the affected subtree.  Node views expire after topology
+ * changes.  Expected operations are O(log n); adversarial/random-priority failure is
+ * probabilistic rather than impossible.
+ */
 template <class T, class C = nless<T>, bool Multi = false, class A = nempty_augment<T>,
           class L = nempty_tag<T, typename A::info_type>>
 class nset_fhq {
@@ -4070,6 +4156,11 @@ class nset_fhq {
     }
 };
 
+/**
+ * Splay ordered multiset/set with the same comparator and augmentation contracts as
+ * nset_fhq, but no lazy action.  Even logically read-only searches may rotate the
+ * tree and invalidate node snapshots.  Amortized operations are O(log n).
+ */
 template <class T, class C = nless<T>, bool Multi = false, class A = nempty_augment<T>>
 class nset_splay {
     struct node {
@@ -4496,6 +4587,8 @@ class nset_splay {
     }
 };
 
+// Reference ordered-set backend.  C is a strict weak ordering; iterator/reference
+// invalidation follows std::set/multiset and no AST node/augmentation API is provided.
 template <class T, class C = nless<T>> class nset_stl {
     set<T, C> values_;
 
@@ -4642,6 +4735,11 @@ template <class T, class C = nless<T>, class A = nempty_augment<T>,
 using nbag = nset_fhq<T, C, true, A, L>;
 
 // ---- 24_map.hpp ----
+/**
+ * Owning hash map with separate chaining.  H and E must agree on key identity
+ * (equal keys have equal hashes); mutating operations may invalidate references and
+ * enumeration cursors.  nseed must be called before construction for reproducibility.
+ */
 template <class K, class V, class H = nhash<K>, class E = equal_to<K>> class nmap_hash {
     using storage_type = unordered_map<K, V, H, E>;
     storage_type values_;
@@ -4740,6 +4838,10 @@ template <class K, class V, class H = nhash<K>, class E = equal_to<K>> class nma
     }
 };
 
+/**
+ * Open-addressing owning map.  H/E obey the same equivalence contract, and load factor
+ * is bounded by the implementation.  Rehashing invalidates all borrowed references.
+ */
 template <class K, class V, class H = nhash<K>, class E = equal_to<K>> class nmap_flat {
     struct node {
         K key;
@@ -4982,6 +5084,10 @@ template <class K, class V, class H = nhash<K>, class E = equal_to<K>>
 using nmap = nmap_flat<K, V, H, E>;
 
 // ---- 25_relation.hpp ----
+/**
+ * Finite relation with scan backend.  EL/ER define equivalence classes consistently;
+ * binding/removing a pair updates both projections.  Lookups are linear in stored pairs.
+ */
 template <class L, class R, class EL = nequal<>, class ER = nequal<>> class nrel_scan {
     struct edge {
         L left;
@@ -5126,6 +5232,8 @@ using nrel = nrel_scan<L, R, EL, ER>;
 
 template <class A, class B, class HA = nhash<A>, class HB = nhash<B>,
           class EA = equal_to<A>, class EB = equal_to<B>>
+// Partial bijection backed by hash tables.  HA/HB must agree with the equality objects;
+// each side has at most one partner and unbound keys are represented explicitly.
 class npartial_hash {
     nmap_flat<A, B, HA, EA> forward_;
     [[no_unique_address]] EB equal_value_{};
@@ -5172,6 +5280,8 @@ using npartial = npartial_hash<A, B, HA, HB, EA, EB>;
 
 template <class A, class B, class HA = nhash<A>, class HB = nhash<B>,
           class EA = equal_to<A>, class EB = equal_to<B>>
+// Total bijection facade over two synchronized hash maps.  Every bind preserves one-to-
+// one correspondence; stale references/iterators are invalidated by rehash.
 class nbije_hash {
     template <class, class, class, class, class, class> friend class nbije_hash;
 
@@ -5259,6 +5369,10 @@ class nbije_hash {
     }
 };
 
+/**
+ * Rank compression owns sorted unique values.  C must be a strict weak ordering; `to`
+ * is O(log n) and `from` returns only values in the built immutable rank universe.
+ */
 template <class T, class C = nless<T>> class nbije_rank {
     nvector<T> values_;
     [[no_unique_address]] C compare_{};
@@ -5352,6 +5466,11 @@ concept ndirect_domain_locator = requires(const D& domain, const K& key) {
     { domain.position(key) } -> convertible_to<int>;
 };
 
+/**
+ * Finite key/value binding over equally sized borrowed-or-owned sequences.  Keys must
+ * be unique under the locator/equality policy; otherwise lookup position is ambiguous.
+ * Both holders must remain valid for the function lifetime.
+ */
 template <class DH, class VH> class nbound_function {
     using domain_type = remove_reference_t<decltype(declval<DH&>().get())>;
     using key_type = nindex_value_t<domain_type>;
@@ -5507,6 +5626,8 @@ concept nbranch_ref_compatible =
     same_as<decltype(declval<G&>()[0]),
             invoke_result_t<G&, nbranch_key_reference_t<G>>>;
 
+// Branch adapter evaluates exactly one branch.  Predicate truth and alternative/base
+// domains must cover every queried key; all holders follow nobject_holder lifetimes.
 template <class GH, class PH, class AH> class nbranch_value_function {
     GH base_;
     [[no_unique_address]] PH predicate_;
@@ -5594,6 +5715,8 @@ template <class GH, class PH, class AH> class nbranch_value_function {
     }
 };
 
+// Reference-preserving branch adapter.  Both branches return compatible stable lvalue
+// references; returning a temporary would make the selected result dangle.
 template <class GH, class PH, class AH> class nbranch_ref_function {
     GH base_;
     [[no_unique_address]] PH predicate_;
@@ -5743,6 +5866,8 @@ auto nbranch(G&& function, P&& predicate, A&& alternative) {
 }
 
 namespace ni {
+// Run segmentation groups adjacent equal projected values.  Equality must be stable and
+// state is single-pass: mutating the source while enumerating invalidates boundaries.
 template <class H> struct nrun_state {
     H source;
     nvector<int> starts;
@@ -5886,6 +6011,13 @@ auto nruns(A&& source, P together = {}) {
 }
 
 // ---- 30_ds.hpp ----
+/**
+ * Fenwick tree for point-combine and prefix folds.
+ * O provides id() and an associative, commutative combine; arbitrary point updates
+ * are not valid for a merely noncommutative operation.  fold/get additionally call
+ * inv() and require a true inverse.  lower() requires prefix values to be monotone
+ * under the supplied comparator.  Operations are O(log n), storage O(n).
+ */
 template <class T, class O = nadd<T>> class nfenwick {
     [[no_unique_address]] O operation_;
     int size_ = 0;
@@ -5966,6 +6098,12 @@ template <class T, class O = nadd<T>> class nfenwick {
     }
 };
 
+/**
+ * Iterative ordered segment tree over [0,n).
+ * O provides a two-sided id() and associative op(left,right); commutativity is not
+ * required.  Structural node views cover [0,bit_ceil(n)) and expire after mutation.
+ * Build is O(n), point set and range fold are O(log n), storage O(bit_ceil(n)).
+ */
 template <class T, class O = nadd<T>> class nseg {
     [[no_unique_address]] O operation_;
     int size_ = 0, base_ = 1;
@@ -6094,12 +6232,21 @@ template <class T, class O = nadd<T>> class nseg {
 template <class T, class O = nadd<T>> using nseg_iter = nseg<T, O>;
 
 // ---- 31_lazy.hpp ----
+// Range-add/range-sum action.  Arithmetic must distribute over the stored sum and
+// `delta * length` must stay representable.  compose(newer,older) applies older first.
 template <class T> struct naddsum_action {
     constexpr T tag_id() const { return T{}; }
     constexpr T compose(const T& newer, const T& older) const { return older + newer; }
     constexpr T apply(T sum, const T& delta, int length) const { return sum + delta * T(length); }
 };
 
+/**
+ * Lazy segment tree over [0,n).
+ * M is an ordered associative merge with identity.  A provides tag_id(),
+ * compose(newer,older), and apply(aggregate,tag,length); composition is associative
+ * and apply must respect interval concatenation.  Mutations invalidate node views.
+ * Build is O(n); set/apply/fold are O(log n); storage O(bit_ceil(n)).
+ */
 template <class S, class F, class M, class A>
 class nlazyseg {
     [[no_unique_address]] M operation_;
@@ -6327,6 +6474,11 @@ class nlazyseg {
 template <class T> using nlazy_addsum = nlazyseg<T, T, nadd<T>, naddsum_action<T>>;
 
 // ---- 32_dsu_queue.hpp ----
+/**
+ * Two-stack queue with an aggregate in queue order.  O must have a true identity and
+ * associative ordered combine; it need not be commutative.  fold is O(1), push/pop
+ * are amortized O(1).
+ */
 template <class T, class O = nadd<T>> class nqueue_agg {
     struct node {
         T value;
@@ -6390,6 +6542,8 @@ template <class T, class O = nadd<T>> class nqueue_agg {
     }
 };
 
+// Union-find assumes vertex ids remain in [0,len()); parent_ stores negative set size
+// at roots.  Path compression and union-by-size give inverse-Ackermann amortized cost.
 class ndsu {
     vector<int> parent_;
 
@@ -6443,6 +6597,8 @@ class ndsu {
     }
 };
 
+// Rollback DSU intentionally omits path compression.  Every parent/size write is logged
+// and rollback order is LIFO; a checkpoint cannot outlive the DSU mutation history.
 class nrollback_dsu {
     struct change {
         int large, large_parent, small, small_parent;
@@ -6499,6 +6655,12 @@ class nrollback_dsu {
 using ndsu_rollback = nrollback_dsu;
 
 // ---- 33_persistent.hpp ----
+/**
+ * Path-copying persistent ordered segment tree.
+ * O provides a two-sided identity and associative op(left,right); T and O must be
+ * copyable for version sharing.  Each set appends O(log n) immutable nodes, so old
+ * version views remain current until the whole owner is assigned/moved/destroyed.
+ */
 template <class T, class O = nadd<T>> class npersistent_seg {
     struct node {
         T aggregate;
@@ -6681,6 +6843,12 @@ template <class T, class O = nadd<T>> class npersistent_seg {
 // Dynamic (open-point) segment trees.  Nodes are allocated only on paths that
 // are written; absent children represent the operation identity.
 
+/**
+ * Sparse point-update segment tree on the fixed half-open long-long domain [lo,hi).
+ * O has a two-sided identity and associative ordered merge.  Domain width must fit
+ * signed long long; each write allocates O(log(width)) nodes, reads allocate none.
+ * Any mutation invalidates structural node views.
+ */
 template <class T, class O = nadd<T>> class ndynamic_seg {
     struct node {
         T aggregate;
@@ -6869,6 +7037,13 @@ template <class T, class O = nadd<T>> class ndynamic_seg {
     int nseg_right(int handle) const noexcept { return handle ? nodes_[size_t(handle)].right : 0; }
 };
 
+/**
+ * Sparse lazy segment tree on [lo,hi).
+ * M/A obey the same merge/action contracts as nlazyseg, including
+ * compose(newer,older).  Width is limited to INT_MAX because action lengths are int.
+ * Updates and queries are O(log(width)); pushing a pending tag may allocate both
+ * children, while read-only queries and nseg_node descent never allocate.
+ */
 template <class S, class F, class M, class A> class ndynamic_lazyseg {
     struct node {
         S aggregate;
@@ -7126,6 +7301,10 @@ template <class S, class F, class M, class A> class ndynamic_lazyseg {
 template <class T> using ndynamic_addsum = ndynamic_lazyseg<T, T, nadd<T>, naddsum_action<T>>;
 
 // ---- 34_wavelet.hpp ----
+/**
+ * Static wavelet matrix over an immutable integral sequence.  Bit width and signed
+ * ordering are fixed at construction; queries use [l,r) and never mutate the owner.
+ */
 template <integral T>
     requires(!same_as<remove_cv_t<T>, bool>)
 class nwavelet {
@@ -7259,6 +7438,8 @@ class nwavelet {
 };
 
 // ---- 35_offline.hpp ----
+// Offline interval queries use half-open [l,r) endpoints and a stable query id.  The
+// add/remove callbacks must maintain a reversible current-window invariant.
 struct ninterval_query {
     int left, right, id;
 };
@@ -7308,6 +7489,11 @@ void nrun_mo(const Q& queries, int universe, Add&& add, Remove&& remove, Answer&
 }
 
 // ---- 36_classic.hpp ----
+/**
+ * Disjoint sparse table for immutable ordered range folds.
+ * O provides id() and an associative op(left,right); idempotence and commutativity
+ * are not required.  Build is O(n log n), nonempty fold O(1), storage O(n log n).
+ */
 template <class T, class O = nmin<T>> class nsparse {
     nvector<T> values_;
     nvector<nvector<T>> table_;
@@ -7365,6 +7551,12 @@ template <class T>
         { -a } -> convertible_to<T>;
         { a == b } -> convertible_to<bool>;
     }
+/**
+ * Weighted DSU storing potential(v)-potential(parent(v)).
+ * T must form an exact additive group under += and unary minus; equality decides
+ * constraint consistency.  Overflow or approximate equality breaks the invariant.
+ * Operations have inverse-Ackermann amortized complexity.
+ */
 class npotential_dsu {
     vector<int> parent_;
     nvector<T> delta_; // potential(vertex) - potential(parent(vertex))
@@ -7436,6 +7628,8 @@ class npotential_dsu {
 };
 
 // ---- 40_graph.hpp ----
+// Directed weighted edge record.  `to` must be a vertex id in the owning graph; W is
+// interpreted by the selected algorithm (Dijkstra additionally requires W >= 0).
 template <class W = int> struct narc {
     int to;
     W weight;
@@ -7464,6 +7658,8 @@ constexpr decltype(auto) nedge_weight(const E& edge) {
     return edge.w;
 }
 
+// Undirected edge record used by MST/flow helpers.  Endpoints must belong to the graph;
+// parallel edges are allowed and self-loops are algorithm-specific.
 template <class W = int> struct nedge {
     int from, to, id;
     W w;
@@ -7484,6 +7680,11 @@ template <class T> constexpr T ncapadd(T left, T right, T infinity = ninf<T>) {
     }
 }
 
+/**
+ * Borrowed graph capability view.  F(vertex) returns an enumerable neighbor range whose
+ * edge objects expose a checked integer destination and optional weight.  The source
+ * owner and captured adjacency must outlive this view; it never owns vertices.
+ */
 template <class F> class ngraph_view {
     int vertices_ = 0;
     [[no_unique_address]] F adjacency_;
@@ -7534,6 +7735,8 @@ using ngraph_weight_t = remove_cvref_t<decltype(nedge_weight(declval<ngraph_neig
 template <class G> using ngraph_edge_t = ngraph_neighbor_t<G>;
 } // namespace ni
 
+// Owning adjacency-list graph.  Algorithms assume every neighbor destination is in
+// [0,vertices()); insertion may invalidate borrowed neighbor views.
 template <class W = int> class ngraph_list {
     vector<vector<narc<W>>> adjacency_;
     int arcs_ = 0;
@@ -7569,6 +7772,8 @@ template <class W = int> class ngraph_list {
     }
 };
 
+// Owning forward-star graph.  Edge handles are representation details and may change
+// on rebuild; neighbor iteration is directed and permits parallel arcs.
 template <class W = int> class ngraph_forward {
     int vertices_ = 0;
     vector<int> head_, to_, next_;
@@ -7752,6 +7957,10 @@ template <class W = int> class ngraph_forward {
     }
 };
 
+/**
+ * Immutable CSR graph built from a graph-like source.  Source destinations must be in
+ * range; the CSR owner copies topology and iteration order is preserved from input.
+ */
 template <class W = int> class ngraph_csr {
     int vertices_ = 0;
     vector<int> offset_{0}, to_;
@@ -7926,6 +8135,8 @@ template <ngraph_like G> auto nvertices(const G& graph) {
     return nrange(ni::ngraph_vertices(graph));
 }
 
+// Flattened borrowed arc view.  The graph owner must outlive enumeration and must not
+// mutate adjacency while a cursor is active; arc order is backend iteration order.
 template <class G> class ngraph_arcs_view {
     G* graph_;
     using adjacency_type = decltype(declval<G&>().neighbors(0));
@@ -8001,6 +8212,8 @@ template <ngraph_like G> auto narcs(G& graph) { return ngraph_arcs_view<G>(graph
 template <ngraph_like G> auto narcs(const G& graph) { return ngraph_arcs_view<const G>(graph); }
 template <ngraph_like G> auto narcs(G&&) = delete;
 
+// Borrowed filtered graph view.  P must be stable and side-effect-safe across repeated
+// neighbor enumeration; the source graph must outlive the view and stay structurally valid.
 template <class G, class P> class ngraph_where_view {
     const G* graph_;
     [[no_unique_address]] P predicate_;
@@ -8089,6 +8302,8 @@ template <ngraph_like G, class P> auto ngraph_where(const G& graph, P predicate)
 }
 template <ngraph_like G, class P> auto ngraph_where(const G&&, P) = delete;
 
+// Path result uses parent pointers over one fixed vertex universe.  `reachable` is the
+// only authority for path validity; a missing parent is valid at the source.
 template <class D> struct npath_result {
     nvector<D> d;
     nvector<int> p;
@@ -8140,6 +8355,8 @@ template <ngraph_like G> npath_result<int> nbfs_path(const G& graph, int source)
     return result;
 }
 
+// Dijkstra requires every traversed edge weight to be nonnegative and all additions to
+// stay below the chosen infinity sentinel.  Negative edges invalidate the greedy proof.
 template <class D = long long, ngraph_like G>
     requires is_arithmetic_v<D> && (!same_as<remove_cv_t<D>, bool>)
 npath_result<D> ndijkstra_path(const G& graph, int source, D infinity = nmin<D>{}.id()) {
@@ -8232,6 +8449,8 @@ nvector<D> ndijkstra(const G& graph, int source, D infinity = nmin<D>{}.id()) {
 }
 
 // ---- 41_graph_alg.hpp ----
+// Topological sort requires a directed graph; a cycle yields an empty nmaybe rather
+// than a partial order.  Vertex ids must be dense [0,V).
 template <ngraph_like G> nmaybe<nvector<int>> ntoposort(const G& graph) {
     int vertices = ni::ngraph_vertices(graph);
     nvector<int> indegree(vertices, 0);
@@ -8376,6 +8595,8 @@ template <ngraph_like G> npartition nscc_tarjan(const G& graph) {
 }
 
 namespace ni {
+// Rooted-tree layout is only meaningful for a connected acyclic undirected graph.
+// `require_symmetric` additionally checks that every adjacency arc has a reverse.
 struct ntree_layout {
     vector<vector<int>> adjacency;
     nvector<int> parent, order;
@@ -8429,6 +8650,10 @@ ntree_layout nbuild_tree_layout(const G& graph, int root, bool require_symmetric
 }
 } // namespace ni
 
+/**
+ * Binary-lifting LCA index.  Input must be a connected undirected tree with symmetric
+ * adjacency and a valid root.  Preprocessing is O(V log V), each query O(log V).
+ */
 class nlca {
     int vertices_ = 0;
     vector<vector<int>> ancestor_;
@@ -8505,6 +8730,11 @@ class nlca {
 };
 
 // ---- 42_tree.hpp ----
+/**
+ * Reroot/tree-path aggregation helper.  The graph must be a connected undirected tree;
+ * Merge/Lift must preserve path direction and any noncommutative order chosen by the
+ * caller.  All vertex ids are dense [0,V).
+ */
 template <ngraph_like G, class T, class Merge, class Vertex, class Lift>
     requires copyable<T>
 nvector<T> nreroot(const G& graph, T identity, Merge merge, Vertex vertex, Lift lift, int root = 0) {
@@ -8557,6 +8787,10 @@ struct nhld_segment {
     bool rev;
 };
 
+/**
+ * Heavy-light decomposition of a connected undirected tree.  path() emits half-open
+ * base-array segments with a direction bit; noncommutative folds must honor that bit.
+ */
 class nhld {
     int vertices_ = 0;
     nvector<int> parent_, depth_, heavy_, head_, position_, inverse_, subtree_;
@@ -8681,6 +8915,8 @@ class nhld {
     }
 };
 
+// Binary-lifting LCA over a validated rooted tree.  Ancestor tables are immutable after
+// construction; every query vertex belongs to the original [0,V) universe.
 template <class W = int> class nlca_binary {
     int vertices_ = 0, levels_ = 0;
     vector<vector<int>> ancestor_;
@@ -8847,6 +9083,8 @@ template <ngraph_like G> nvector<int> n01bfs(const G& graph, int source) {
     return distance;
 }
 
+// MST result is meaningful only for the graph's chosen vertex universe.  For a
+// disconnected graph, connected=false and edges describe the selected forest.
 template <class W> struct nmst_result {
     W weight{};
     W cost{};
@@ -8936,6 +9174,10 @@ template <ngraph_like G> auto nkruskal(const G& graph) {
                      [](const auto& edge) -> decltype(auto) { return nedge_weight(edge); });
 }
 
+/**
+ * Residual-network max-flow model.  Capacities are nonnegative and must fit C;
+ * reverse arcs maintain residual conservation.  Edge handles are invalid after reset.
+ */
 template <class C>
     requires integral<C> && (!same_as<remove_cv_t<C>, bool>)
 class nmaxflow {
@@ -9050,6 +9292,10 @@ class nmaxflow {
     }
 };
 
+/**
+ * Dinic residual network.  Capacities are nonnegative values in C.  `flow()` is valid
+ * for the current source/sink and graph; O(V^2 E) is the integral-capacity worst case.
+ */
 template <class C>
     requires integral<C> && (!same_as<remove_cv_t<C>, bool>)
 class nflow_dinic {
@@ -9180,11 +9426,15 @@ class nflow_dinic {
 template <class C> using nflow = nflow_dinic<C>;
 
 // ---- 44_matching.hpp ----
+// Matching arrays use dense left/right universes and npos for unmatched vertices.
+// Every matched pair must be mutual across the two arrays.
 struct nbipartite_matching {
     int size = 0;
     nvector<int> left, right;
 };
 
+// Graph vertices form the left part and every edge destination belongs to the separate
+// [0,right_vertices) part; edges within one side violate the bipartite model.
 template <ngraph_like G> nbipartite_matching nhopcroft_karp(const G& graph, int right_vertices) {
     int left_vertices = ni::ngraph_vertices(graph);
     npre(right_vertices >= 0);
@@ -9277,6 +9527,8 @@ struct nbicover {
     nvector<int> l, r;
 };
 
+// Stateful Hopcroft-Karp owner.  add() uses distinct dense left/right id spaces;
+// solve() invalidates earlier matching/cover snapshots after graph mutation.
 class nbimatch_hopcroft {
     int left_vertices_ = 0, right_vertices_ = 0;
     nvector<nvector<int>> adjacency_;
@@ -9630,6 +9882,11 @@ inline nvector<uint64_t> nfactor(uint64_t value) {
 
 inline nvector<uint64_t> nfactor_rho(uint64_t value) { return nfactor(value); }
 
+/**
+ * Normalized exact fraction over signed T.  Denominator is positive and gcd-reduced;
+ * intermediate arithmetic must fit T/__int128 as used by each operator.  Zero
+ * denominator is invalid.
+ */
 template <signed_integral T = long long> class nfrac {
     using W = nwide_t<T>;
     using U = make_unsigned_t<W>;
@@ -9730,6 +9987,8 @@ template <signed_integral T = long long> class nfrac {
     }
 };
 
+// Congruence x == residue (mod modulus), with positive modulus and canonical residue.
+// CRT merge may fail when residues disagree modulo gcd or the lcm overflows.
 struct ncongruence {
     long long a = 0, m = 1;
 
@@ -9779,6 +10038,8 @@ inline ncongruence ncrt(ncongruence left, ncongruence right, ncongruence fallbac
     return result ? result.val() : move(fallback);
 }
 
+// Sieve table is immutable after construction; queries outside its built limit must use
+// the separate primality/factorization routines rather than indexing this table.
 class nprime_table {
     static int checked_limit(int limit) {
         npre(0 <= limit && limit < INT_MAX);
@@ -9847,6 +10108,11 @@ class nprime_table {
 };
 
 // ---- 51_modular.hpp ----
+/**
+ * Static modular integer with canonical values in [0,Modulus).  Modulus is positive;
+ * division/inverse succeeds only when gcd(value,Modulus)==1.  Field algorithms require
+ * the caller to know that Modulus is prime, not merely that this type compiles.
+ */
 template <uint64_t Modulus>
     requires(Modulus > 0)
 class nmodint {
@@ -9961,6 +10227,11 @@ class nmodint {
     }
 };
 
+/**
+ * Dynamic-modulus integer.  All objects with the same Tag share one process-global
+ * modulus; changing it while old values are still used changes their interpretation.
+ * Inversion requires coprimality and field algorithms must check primality at runtime.
+ */
 template <int Tag = 0> class nmod_dynamic {
     static inline uint64_t modulus_ = 1;
     uint64_t value_ = 0;
@@ -10069,6 +10340,10 @@ template <uint64_t Modulus> using nmod_static = nmodint<Modulus>;
 template <uint64_t Modulus> using nmod = nmodint<Modulus>;
 template <int Tag = 0> using ndmod = nmod_dynamic<Tag>;
 
+/**
+ * Factorial/inverse-factorial table.  factorial(n) must be invertible in Mint; for a
+ * prime modulus, n < modulus is the common sufficient condition.  Build O(n), query O(1).
+ */
 template <class Mint> class ncomb {
     nvector<Mint> factorial_, inverse_factorial_;
 
@@ -10109,6 +10384,8 @@ template <class Mint> class ncomb {
 };
 
 // ---- 52_comb.hpp ----
+// Submask enumeration is finite over the set bits of mask.  It uses unsigned wrap-safe
+// bit arithmetic; bool is excluded because it has no useful bit universe.
 template <unsigned_integral T>
     requires(!same_as<remove_cv_t<T>, bool>)
 class nsubmask_range {
@@ -10226,6 +10503,8 @@ void nfwht_xor(A&& a, bool inverse = false) {
             a[i] /= nlen(a);
 }
 
+// OR/AND/XOR subset convolutions require equal power-of-two lengths.  Scalar operations
+// must support the transform's exact additions/subtractions; XOR inverse also divides.
 template <nindexed A, nindexed B> auto nconv_or(const A& a, const B& b) {
     npre(nlen(a) == nlen(b));
     auto left = ncollect(a), right = ncollect(b);
@@ -10260,6 +10539,10 @@ template <nindexed A, nindexed B> auto nconv_xor(const A& a, const B& b) {
 }
 
 // ---- 53_linear.hpp ----
+/**
+ * Row-major owning matrix with int dimensions.  Views/rows/columns/diagonals borrow
+ * this owner and cannot survive move, destruction, or storage replacement.
+ */
 template <class T> class nmatrix {
     int rows_ = 0, columns_ = 0;
     nvector<T> storage_;
@@ -10345,6 +10628,9 @@ concept nmatrix_like = requires(const A& matrix, int row, int column) {
     matrix(row, column);
 };
 
+// Matrix identity/multiplication/power require Add/Mul identities plus the semiring
+// laws used by matrix algebra: associativity, distributivity and additive zero absorb.
+// These properties are local contracts, not named traits.
 template <class T, class Add = nadd<T>, class Mul = nmul<T>>
 nmatrix<T> nmatrix_identity(int n, Add add = {}, Mul multiply = {}) {
     npre(n >= 0);
@@ -10383,6 +10669,11 @@ nmatrix<T> nmatpow(nmatrix<T> base, uint64_t exponent, Add add = {}, Mul multipl
     return result;
 }
 
+/**
+ * Matrix facade binding Add/Mul to operators.  It shares nmatrix ownership rules and
+ * assumes the same semiring laws; integer overflow or floating reassociation may break
+ * mathematical equivalence even when the expressions compile.
+ */
 template <class T, class Add = nadd<T>, class Mul = nmul<T>> class nmat : public nmatrix<T> {
     using base = nmatrix<T>;
 
@@ -10453,6 +10744,12 @@ template <class T, class Add = nadd<T>, class Mul = nmul<T>> class nmat : public
     }
 };
 
+/**
+ * Exact Gaussian-elimination family below.  T must behave as a field: T{} and T{1}
+ * are zero/one and every selected nonzero pivot has exact division.  Plain integers,
+ * composite-modulus residues and approximate floats violate this contract unless the
+ * caller supplies the missing semantics.  Complexity is cubic in matrix dimensions.
+ */
 template <class T> int nrref(nmatrix<T>& matrix, nvector<int>* pivot_columns = nullptr) {
     if (pivot_columns)
         pivot_columns->clear();
@@ -10572,6 +10869,8 @@ nmat<T, Add, Mul> ninverse(nmat<T, Add, Mul> matrix, nmat<T, Add, Mul> fallback)
     return result ? move(result.val()) : move(fallback);
 }
 
+// Affine solution set: particular + span(basis).  `consistent` is used by ngauss;
+// nlinear_solve instead reports inconsistency with an empty nmaybe.
 template <class T> struct nlinear_solution {
     bool consistent = true;
     int rank = 0;
@@ -10688,6 +10987,11 @@ nlinear_solution<T> ngauss(nmat<T, Add, Mul> coefficients, const B& values) {
 }
 
 // ---- 54_poly.hpp ----
+/**
+ * Optional primitive-root cache for a static modular type.  Setting ok=true asserts
+ * that root is a genuine primitive root of the prime modulus; a false assertion causes
+ * silent wrong convolution, so specializations require naive differential evidence.
+ */
 template <class T> struct nntt_info {
     static constexpr bool ok = false;
 };
@@ -10705,6 +11009,8 @@ template <> struct nntt_info<nmodint<469762049>> {
 };
 
 namespace ni {
+// Dispatch marker only: this does not assert primality, invertibility or ring laws.
+// nconv_auto checks those runtime preconditions before selecting NTT.
 template <class T> inline constexpr bool nstatic_modular = false;
 template <uint64_t Modulus> inline constexpr bool nstatic_modular<nmodint<Modulus>> = true;
 
@@ -10792,6 +11098,11 @@ template <nindexed A, nindexed B> auto nconv_naive(const A& a, const B& b) {
     return result;
 }
 
+/**
+ * NTT convolution for equal static nmodint coefficient types.  The modulus is prime,
+ * fits uint32, and the power-of-two transform length divides mod-1.  These preconditions
+ * are checked at runtime because the deleted algebra trait system no longer certifies a field.
+ */
 template <nindexed A, nindexed B>
     requires ni::nstatic_modular<nindex_value_t<const A>> &&
              same_as<nindex_value_t<const A>, nindex_value_t<const B>>
@@ -10845,6 +11156,8 @@ template <nindexed A> auto npoly_derivative(const A& polynomial) {
     return result;
 }
 
+// Formal integral and FPS inverse require every performed scalar division to be exact
+// and invertible.  Ordinary integer truncation and nonunits under composite moduli are invalid.
 template <nindexed A> auto npoly_integral(const A& polynomial) {
     using T = nindex_value_t<const A>;
     npre(nlen(polynomial) < INT_MAX);
@@ -10885,6 +11198,11 @@ template <nindexed A> auto nfps_inverse(const A& series, int terms) {
     return result;
 }
 
+/**
+ * Owning low-to-high coefficient polynomial normalized by removing trailing zeros.
+ * Division-based FPS operations require a field-like T; inv/log/exp additionally need
+ * constant terms nonzero/one/zero respectively.  Multiplication follows nconv's backend.
+ */
 template <class T> class npoly {
   public:
     using value_type = T;
@@ -10998,6 +11316,8 @@ template <class T> class npoly {
     }
 };
 
+// Berlekamp-Massey and recurrence recovery require field arithmetic so every nonzero
+// discrepancy divisor is invertible; equality to T{} must be exact.
 template <nindexed A> auto nberlekamp(const A& sequence) {
     using T = nindex_value_t<const A>;
     nvector<T> current{T{1}}, previous{T{1}};
@@ -11084,6 +11404,10 @@ auto nrec_nth(const A& initial, const C& recurrence, uint64_t index,
 }
 
 // ---- 55_game.hpp ----
+/**
+ * Linear basis over GF(2).  Values are unsigned bit vectors; insertion and max-xor
+ * preserve the pivot invariant, and rank counts independent vectors.
+ */
 template <unsigned_integral T = uint64_t> class nxorbasis {
     static constexpr int bits = numeric_limits<T>::digits;
     array<T, bits> basis_{};
@@ -11125,6 +11449,10 @@ template <unsigned_integral T = uint64_t> class nxorbasis {
     }
 };
 
+/**
+ * Finite probability distribution.  Weights must be nonnegative with positive total;
+ * normalization is floating-point and carries the usual precision/rounding boundary.
+ */
 template <class P = long double> class nprob {
     nvector<P> weights_;
 
@@ -11230,6 +11558,8 @@ template <class P, class F> auto nexpect(const nprob<P>& distribution, F evaluat
     return distribution.expect(move(evaluate));
 }
 
+// Nim helper assumes nonnegative unsigned heap sizes and normal-play rules; xor is the
+// SG invariant and does not describe misere play.
 template <unsigned_integral T = uint64_t> class nnim {
   public:
     nvector<T> h;
@@ -11271,6 +11601,8 @@ template <unsigned_integral T = uint64_t> class nnim {
     }
 };
 
+// SG evaluation requires a finite directed acyclic graph.  Cycles have no recursive
+// mex order and are reported as an unavailable result.
 template <ngraph_like G> nmaybe<nvector<int>> nsg_dag(const G& graph) {
     auto order = ntoposort(graph);
     if (!order)
@@ -11364,6 +11696,10 @@ template <nindexed Text, nindexed Pattern> nvector<int> nkmp_find(const Text& te
     return result;
 }
 
+/**
+ * Manacher radius index for an immutable sequence.  Equality must be stable for the
+ * sequence lifetime; intervals are half-open and queries are O(1) after O(n) build.
+ */
 class npalindrome_index {
     nvector<int> odd_, even_;
 
@@ -11432,6 +11768,8 @@ nvector<int> nkmp(const Text& text, const Pattern& pattern) {
 
 using nmanacher_result = npalindrome_index;
 
+// Suffix-array construction requires a strict weak ordering on symbols and compares
+// suffixes lexicographically.  The source sequence is copied; queries use [l,r).
 template <nindexed A, class C = nless<>> nvector<int> nsuffix_array(const A& sequence, C compare = {}) {
     int n = nlen(sequence);
     nvector<int> suffix(n), rank(n), next_rank(n);
@@ -11510,6 +11848,10 @@ struct nmatch {
     friend bool operator==(const nmatch&, const nmatch&) = default;
 };
 
+/**
+ * Trie nodes index symbols in [0,Alphabet).  Alphabet mapping is external; invalid
+ * symbols are precondition failures and node handles are owner-local.
+ */
 template <int Alphabet>
     requires(Alphabet > 0)
 class ntrie {
@@ -11573,6 +11915,8 @@ class ntrie {
     }
 };
 
+// Aho-Corasick links require a completed trie and preserve the same dense alphabet
+// contract.  After build, output links are immutable until rebuild.
 template <int Alphabet>
     requires(Alphabet > 0)
 class nac {
@@ -11691,6 +12035,10 @@ template <class T> constexpr nwide_t<T> ngeom_widen(const T& value) {
 }
 } // namespace ni
 
+/**
+ * Exact/approximate 2D point primitive.  Integral predicates widen to nwide_t but still
+ * require products to fit that type; floating predicates need an application-chosen eps.
+ */
 template <class T> struct npoint {
     T x{}, y{};
 
@@ -11839,6 +12187,8 @@ constexpr bool nsegment_intersect(const npoint<T>& a, const npoint<T>& b, const 
                      (!cd_b && nonseg(c, d, b, epsilon));
 }
 
+// Infinite line through two distinct points.  Degenerate equal endpoints have no
+// unique direction and are invalid for intersection/orientation routines.
 template <class T> struct nline2 {
     npoint<T> p, v;
     template <class U> auto operator()(const U& scale) const { return p + v * scale; }
@@ -11859,6 +12209,8 @@ nmaybe<npoint<long double>> nline_intersect(const nline2<T>& a, const nline2<T>&
                                static_cast<long double>(a.p.y) + av.y * scale};
 }
 
+// Convex hull assumes the point comparator is a strict total order.  Floating input
+// without a consistent epsilon policy can make sorting and orientation disagree.
 template <nindexed A> auto nconvex_hull(const A& source, bool keep_collinear = false) {
     using P = nindex_value_t<const A>;
     nvector<P> points;
@@ -11978,6 +12330,8 @@ nmaybe<npoint<long double>> nline_intersection(const npoint<T>& a, const npoint<
 }
 
 // ---- 71_opt.hpp ----
+// Affine function evaluated in nwide_t<T>; callers still ensure slope*x+intercept fits
+// that widened representation and choose Better consistently for min/max queries.
 template <class T> struct nline_function {
     T slope{}, intercept{};
     using value_type = nwide_t<T>;
@@ -11987,6 +12341,11 @@ template <class T> struct nline_function {
     }
 };
 
+/**
+ * Dynamic Li Chao tree on a fixed integer domain.  Inserted functions must be lines so
+ * any pair crosses at most once; Better is a strict ordering.  Each add/query is
+ * O(log domain_width), and domain endpoints never change after construction.
+ */
 template <signed_integral T, class Better = nless<nwide_t<T>>> class nlichao {
   public:
     using line_type = nline_function<T>;
@@ -12087,6 +12446,8 @@ template <signed_integral T, class Better = nless<nwide_t<T>>> class nlichao {
     }
 };
 
+// Compatibility affine line with the same overflow and single-crossing contract as
+// nline_function when inserted into a Li Chao structure.
 template <class T> struct nline {
     T m{}, b{};
     using value_type = nwide_t<T>;
@@ -12098,6 +12459,8 @@ template <class T> struct nline {
     friend bool operator==(const nline&, const nline&) = default;
 };
 
+// Static-coordinate Li Chao tree has the same single-crossing contract; every queried
+// x must belong to the sorted coordinate set supplied at construction.
 template <class T, class Better = nless<nwide_t<T>>>
     requires is_arithmetic_v<T> && (!same_as<remove_cv_t<T>, bool>)
 class nlichao_static {
@@ -12208,6 +12571,8 @@ class nlichao_static {
     }
 };
 
+// Discrete ternary/unimodal search requires one optimum with monotone improvement then
+// worsening over the integer interval; arbitrary functions invalidate the elimination.
 template <signed_integral I, class F, class Better = nless<>>
 I nunimodal_arg(I first, I last, F function, Better better = {}) {
     npre(first < last);
@@ -12268,6 +12633,8 @@ template <> struct nio_unsigned_type<__uint128_t> {
 template <class T> using nio_unsigned_t = typename nio_unsigned_type<T>::type;
 } // namespace ni
 
+// Buffered token input.  Integer parsing requires a syntactically valid in-range token;
+// EOF/failure is reported by read(), and the buffer is tied to the FILE* lifetime.
 class ninput {
     static constexpr int capacity_ = 1 << 16;
     FILE* file_ = nullptr;
@@ -12361,6 +12728,8 @@ class ninput {
     }
 };
 
+// Buffered output tied to a live FILE*.  Destruction/flush commits pending bytes; callers
+// must flush explicitly before interactive reads.
 class noutput {
     static constexpr int capacity_ = 1 << 16;
     FILE* file_ = nullptr;

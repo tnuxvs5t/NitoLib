@@ -92,6 +92,11 @@ template <class F> class nindexed2_access {
 // One public view family. The model/accessor determines capabilities: the default
 // model is contiguous, while lambda and composed models may expose only indexing.
 // Copying an nview copies the access description and never materializes elements.
+/**
+ * Zero-owning indexed view.  F maps positions to references or stable values; any
+ * referenced owner must outlive the view and must not be structurally invalidated.
+ * Shape/stride accessors describe layout only and never extend pointee lifetime.
+ */
 template <class T, class F = ni::ncontiguous_access<T>> class nview {
     int size_ = 0;
     [[no_unique_address]] F access_;
@@ -282,6 +287,8 @@ concept nviewable_indexed = nindexed<remove_reference_t<A>> &&
                              constructible_from<remove_cvref_t<A>, A>);
 
 namespace ni {
+// Indexed holder owns safe rvalues/views and borrows ordinary lvalues.  A borrowed
+// source must outlive every derived view and remain structurally unmodified.
 template <class A> class nindexed_holder {
     using value_type = remove_cvref_t<A>;
     static constexpr bool stores_value =

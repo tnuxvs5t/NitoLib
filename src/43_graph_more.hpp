@@ -24,6 +24,8 @@ template <ngraph_like G> nvector<int> n01bfs(const G& graph, int source) {
     return distance;
 }
 
+// MST result is meaningful only for the graph's chosen vertex universe.  For a
+// disconnected graph, connected=false and edges describe the selected forest.
 template <class W> struct nmst_result {
     W weight{};
     W cost{};
@@ -113,6 +115,10 @@ template <ngraph_like G> auto nkruskal(const G& graph) {
                      [](const auto& edge) -> decltype(auto) { return nedge_weight(edge); });
 }
 
+/**
+ * Residual-network max-flow model.  Capacities are nonnegative and must fit C;
+ * reverse arcs maintain residual conservation.  Edge handles are invalid after reset.
+ */
 template <class C>
     requires integral<C> && (!same_as<remove_cv_t<C>, bool>)
 class nmaxflow {
@@ -227,6 +233,10 @@ class nmaxflow {
     }
 };
 
+/**
+ * Dinic residual network.  Capacities are nonnegative values in C.  `flow()` is valid
+ * for the current source/sink and graph; O(V^2 E) is the integral-capacity worst case.
+ */
 template <class C>
     requires integral<C> && (!same_as<remove_cv_t<C>, bool>)
 class nflow_dinic {

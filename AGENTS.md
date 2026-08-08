@@ -35,6 +35,9 @@ another Nitori reference document or header snapshot.
 9. Keep representations private when they protect an invariant.
 10. Prefer short contest code, but never hide the invariant, precondition or overflow
     boundary that makes it correct.
+11. Put hidden mathematical, lifetime, ordering and complexity contracts beside the
+    class/struct/algorithm that relies on them; do not replace local explanation with
+    a registry-only concept or trait.
 
 ## Dependency direction
 
