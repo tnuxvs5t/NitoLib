@@ -2111,6 +2111,7 @@ auto node = seg.root();
 node.aggregate(); node.info();
 node.left_bound(); node.right_bound(); node.width(); node.leaf();
 node.left(); node.right(); node.handle();
+node.identity(); node.same_domain(other);
 
 auto found = nseg_walk(seg, decide);             // 从 root() 调度
 auto old_found = nseg_walk(p.root(version), decide); // 从指定节点调度
@@ -2182,6 +2183,15 @@ s.clear();
 
 单点与区间操作 `O(log n)`；整体 fold `O(1)`。别名 `nseg_iter`。
 
+两个相同长度的固定树可以消费式做逐点结构合并：
+
+```cpp
+left.merge_from(move(right));       // leaf: left_value op right_value
+```
+
+这不是对两个 root aggregate 只调用一次 `op`；实现会按叶子合并后重建父节点，因而仍然
+保持非交换操作的坐标顺序。代价 `O(bit_ceil(n))`，`right` 被清空，双方旧视图失效。
+
 正确性的承重步骤只有两个：每个节点始终等于自己区间的有序聚合；查询选出的节点恰好
 无重无漏覆盖 `[l,r)`。单点修改后沿祖先重算，因而第一个不变量恢复。
 
@@ -2220,6 +2230,10 @@ seg.clear();
 ```cpp
 nlazy_addsum<long long> seg(source);
 ```
+
+`nlazyseg` 也有同长度的消费式 `merge_from(move(other))`。它先下推两棵树的 pending tag，
+再按叶子执行 `M(this, other)` 并重建；因此 `compose(newer,older)` 的时间顺序不会被
+一个“合并 root”捷径掩盖。复杂度 `O(bit_ceil(n))`，`other` 清空且旧视图失效。
 
 **最小自检：**用两个不同的 tag 连续覆盖同一区间，再与逐元素暴力比较；只测试交换的
 区间加法，无法发现 `compose` 顺序写反。
@@ -2265,6 +2279,17 @@ p.reserve_nodes(count);
 
 点设与查询 `O(log n)`，每次 set 产生 `O(log n)` 新节点。
 
+版本也可以做持久化的**逐点结构合并**：
+
+```cpp
+int merged = p.merge(version_left, version_right);
+```
+
+它按每个对应叶子执行 `left_value op right_value`，不是把两个区间整体相接；一侧缺失
+的子树直接共享，双方都存在的路径才做 path-copy。旧版本和旧 `nseg_node` 不会被改写，
+代价是两棵版本树物化节点并集的 `O(U)`。`domain()` 只暴露 append-only 节点域；普通复制
+仍会 `clone()`，不会因后续版本追加而和源 owner 共享所有权。
+
 它适合“询问历史状态”或“不同方案从同一版本分叉”。如果题目只是坐标巨大但不需要
 旧版本，动态开点通常更直接；持久化和动态开点解决的是两个不同维度。
 
@@ -2288,6 +2313,19 @@ seg.get(x); seg.fold(l, r); seg.fold();
 seg.nodes(); seg.reserve_nodes(capacity); seg.clear();
 ```
 
+多个 owner 可以显式共享 `domain()`，再做消费式逐点合并：
+
+```cpp
+auto domain = ndynamic_seg<long long>(lo, hi).domain();
+ndynamic_seg<long long> a(domain, lo, hi), b(domain, lo, hi);
+a.merge_from(move(b));
+```
+
+`merge_from` 要求同一 domain、相同坐标界、root 不重叠以及 `O` 的语义等价；它对对应叶子
+按 `a_value op b_value` 合并，缺失节点是单位元，不是把两个区间的 aggregate 直接做一次
+`op`。这是 destructive merge，访问两个物化结构的并集，成功后 `b` 为空且共享 epoch 使
+旧结构视图失效。复制动态树会 clone domain，因此不会意外把后续写入传回源树。
+
 设坐标域宽度为 `W`：点修改和区间查询为 `O(log W)`，每个首次写入的点至多增加
 `O(log W)` 节点；只读查询不分配节点。坐标域宽度必须能装入 `long long`。
 
@@ -2305,6 +2343,11 @@ ndynamic_addsum<long long> sum(lo, hi); // 区间加、区间和
 更新、查询均为 `O(log W)`；查询通过携带未下推 tag 计算，不为缺失子树开点。更新在下推
 已有 tag 时可能建立两个孩子，总空间仍为 `O(q log W)`。由于统一 action 的 length 是
 `int`，lazy 动态树要求 `hi-lo <= INT_MAX`；坐标本身仍可为 `long long`。
+
+lazy 动态树也支持同域 owner 的 `merge_from(move(other))`。两棵树在双方根都存在的区间先
+下推 pending tag，再逐点按 `M` 合并；单侧缺失时直接转移子树，不因合并读取而伪造节点。
+因此非交换 `M` 与非交换 action 的先后都保留在局部契约中，合并复杂度为物化节点并集
+`O(U)`（加上为暴露 pending tag 所需的开点）。
 
 **最小反例方向：**记录 `nodes()`，执行大量纯查询后它必须不增长；对 lazy 动态树再
 测试“整域加、局部查询”，确认缺失子树能继承逻辑 tag，而不需要为了读取补开节点。
@@ -4195,7 +4238,8 @@ python3 tools/bench.py
 
 ```text
 隐式 FHQ 策略/API       → python3 tools/test.py implicit_fhq
-动态线段树              → python3 tools/test.py property_dynamic
+线段树域与 merge        → python3 tools/test.py property_segment_merge property_segment_domain
+动态线段树              → python3 tools/test.py property_dynamic property_segment_domain
 Wavelet/Mo              → python3 tools/test.py property_wavelet offline
 树与 reroot             → python3 tools/test.py tree_compat property_reroot
 字符串/自动机           → python3 tools/test.py string automata

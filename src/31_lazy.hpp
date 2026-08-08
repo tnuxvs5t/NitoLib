@@ -107,6 +107,23 @@ class nlazyseg {
         pull(node);
     }
 
+    void merge0(int node, int left, int right, nlazyseg& other) {
+        if (right - left == 1) {
+            tree_[size_t(node)] = operation_(move(tree_[size_t(node)]), other.tree_[size_t(node)]);
+            lazy_[size_t(node)] = action_.tag_id();
+            pending_[size_t(node)] = false;
+            other.lazy_[size_t(node)] = other.action_.tag_id();
+            other.pending_[size_t(node)] = false;
+            return;
+        }
+        push(node, left, right);
+        other.push(node, left, right);
+        int middle = left + (right - left) / 2;
+        merge0(node << 1, left, middle, other);
+        merge0(node << 1 | 1, middle, right, other);
+        pull(node);
+    }
+
   public:
     using aggregate_type = S;
     using tag_type = F;
@@ -209,6 +226,22 @@ class nlazyseg {
     S get(int index) const {
         npre(0 <= index && index < size_);
         return fold(index, index + 1);
+    }
+
+    /**
+     * Consume `other` and combine corresponding leaves point by point.  Pending
+     * actions are pushed before descending, then `M` is applied as
+     * `this_value op other_value`; this is not an aggregate-level root merge.
+     * The logical lengths and the M/A semantics must match.  Cost is O(bit_ceil(n));
+     * both owners' old node views expire after the operation.
+     */
+    void merge_from(nlazyseg&& other) {
+        npre(this != addressof(other));
+        npre(size_ == other.size_);
+        if (size_)
+            merge0(1, 0, base_, other);
+        other.clear();
+        touch();
     }
 
     node_view root() const { return node_view(this, size_ ? 1 : 0, epoch_, 0, base_); }

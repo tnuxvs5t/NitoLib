@@ -238,15 +238,24 @@ template <class S> class nseg_node {
 
   private:
     const S* owner_ = nullptr;
+    const void* domain_ = nullptr;
     int handle_ = 0;
     uint64_t epoch_ = 0;
     long long left_ = 0, right_ = 0;
     state_type carry_{};
 
-    constexpr nseg_node(const S* owner, int handle, uint64_t epoch, long long left,
-                        long long right, state_type carry = {})
-        : owner_(owner), handle_(handle), epoch_(epoch), left_(left), right_(right),
-          carry_(move(carry)) {}
+    static const void* domain_token_of(const S* owner) noexcept {
+        if (!owner)
+            return nullptr;
+        if constexpr (requires(const S& value) { value.nseg_domain_token(); })
+            return owner->nseg_domain_token();
+        return owner;
+    }
+
+    nseg_node(const S* owner, int handle, uint64_t epoch, long long left, long long right,
+              state_type carry = {})
+        : owner_(owner), domain_(domain_token_of(owner)), handle_(handle), epoch_(epoch), left_(left),
+          right_(right), carry_(move(carry)) {}
     friend S;
 
     static constexpr bool has_lazy_view = requires(const S& owner, int handle,
@@ -274,9 +283,26 @@ template <class S> class nseg_node {
   public:
     constexpr nseg_node() = default;
 
-    bool current() const { return owner_ && epoch_ == owner_->nseg_epoch(); }
+    bool current() const {
+        return owner_ && domain_ == domain_token_of(owner_) && epoch_ == owner_->nseg_epoch();
+    }
     bool ok() const { return current() && handle_ && owner_->nseg_alive(handle_); }
     explicit operator bool() const { return ok(); }
+
+    bool same_owner(const nseg_node& other) const noexcept { return owner_ == other.owner_; }
+    bool same_domain(const nseg_node& other) const noexcept {
+        return domain_ && domain_ == other.domain_;
+    }
+    nnode_identity identity() const {
+        npre(current());
+        if constexpr (requires(const S& owner, int handle) {
+                          owner.nseg_identity_of(handle);
+                      }) {
+            return owner_->nseg_identity_of(handle_);
+        } else {
+            return {domain_, handle_, handle_ ? 1u : 0u};
+        }
+    }
 
     aggregate_type aggregate() const {
         npre(current());

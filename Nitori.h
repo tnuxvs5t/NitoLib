@@ -1495,15 +1495,24 @@ template <class S> class nseg_node {
 
   private:
     const S* owner_ = nullptr;
+    const void* domain_ = nullptr;
     int handle_ = 0;
     uint64_t epoch_ = 0;
     long long left_ = 0, right_ = 0;
     state_type carry_{};
 
-    constexpr nseg_node(const S* owner, int handle, uint64_t epoch, long long left,
-                        long long right, state_type carry = {})
-        : owner_(owner), handle_(handle), epoch_(epoch), left_(left), right_(right),
-          carry_(move(carry)) {}
+    static const void* domain_token_of(const S* owner) noexcept {
+        if (!owner)
+            return nullptr;
+        if constexpr (requires(const S& value) { value.nseg_domain_token(); })
+            return owner->nseg_domain_token();
+        return owner;
+    }
+
+    nseg_node(const S* owner, int handle, uint64_t epoch, long long left, long long right,
+              state_type carry = {})
+        : owner_(owner), domain_(domain_token_of(owner)), handle_(handle), epoch_(epoch), left_(left),
+          right_(right), carry_(move(carry)) {}
     friend S;
 
     static constexpr bool has_lazy_view = requires(const S& owner, int handle,
@@ -1531,9 +1540,26 @@ template <class S> class nseg_node {
   public:
     constexpr nseg_node() = default;
 
-    bool current() const { return owner_ && epoch_ == owner_->nseg_epoch(); }
+    bool current() const {
+        return owner_ && domain_ == domain_token_of(owner_) && epoch_ == owner_->nseg_epoch();
+    }
     bool ok() const { return current() && handle_ && owner_->nseg_alive(handle_); }
     explicit operator bool() const { return ok(); }
+
+    bool same_owner(const nseg_node& other) const noexcept { return owner_ == other.owner_; }
+    bool same_domain(const nseg_node& other) const noexcept {
+        return domain_ && domain_ == other.domain_;
+    }
+    nnode_identity identity() const {
+        npre(current());
+        if constexpr (requires(const S& owner, int handle) {
+                          owner.nseg_identity_of(handle);
+                      }) {
+            return owner_->nseg_identity_of(handle_);
+        } else {
+            return {domain_, handle_, handle_ ? 1u : 0u};
+        }
+    }
 
     aggregate_type aggregate() const {
         npre(current());
@@ -7123,6 +7149,26 @@ template <class T, class O = nadd<T>> class nseg {
 
     T fold() const { return size_ ? tree_[1] : operation_.id(); }
 
+    /**
+     * Consume `other` and combine corresponding leaves point by point.  The
+     * operation is `this_value op other_value`, so rebuilding parents preserves
+     * ordered/non-commutative folds; it is not a single operation on the two root
+     * aggregates.  The trees must have equal logical length and equivalent
+     * operation semantics.  Cost is O(bit_ceil(n)) and both owners' old views
+     * expire after the mutation.
+     */
+    void merge_from(nseg&& other) {
+        npre(this != addressof(other));
+        npre(size_ == other.size_);
+        for (int index = 0; index < base_; ++index)
+            tree_[size_t(base_ + index)] = operation_(move(tree_[size_t(base_ + index)]),
+                                                      other.tree_[size_t(other.base_ + index)]);
+        for (int node = base_; --node > 0;)
+            tree_[size_t(node)] = operation_(tree_[size_t(node << 1)], tree_[size_t(node << 1 | 1)]);
+        other.clear();
+        touch();
+    }
+
     node_view root() const { return node_view(this, size_ ? 1 : 0, epoch_, 0, base_); }
 
   private:
@@ -7255,6 +7301,23 @@ class nlazyseg {
         pull(node);
     }
 
+    void merge0(int node, int left, int right, nlazyseg& other) {
+        if (right - left == 1) {
+            tree_[size_t(node)] = operation_(move(tree_[size_t(node)]), other.tree_[size_t(node)]);
+            lazy_[size_t(node)] = action_.tag_id();
+            pending_[size_t(node)] = false;
+            other.lazy_[size_t(node)] = other.action_.tag_id();
+            other.pending_[size_t(node)] = false;
+            return;
+        }
+        push(node, left, right);
+        other.push(node, left, right);
+        int middle = left + (right - left) / 2;
+        merge0(node << 1, left, middle, other);
+        merge0(node << 1 | 1, middle, right, other);
+        pull(node);
+    }
+
   public:
     using aggregate_type = S;
     using tag_type = F;
@@ -7357,6 +7420,22 @@ class nlazyseg {
     S get(int index) const {
         npre(0 <= index && index < size_);
         return fold(index, index + 1);
+    }
+
+    /**
+     * Consume `other` and combine corresponding leaves point by point.  Pending
+     * actions are pushed before descending, then `M` is applied as
+     * `this_value op other_value`; this is not an aggregate-level root merge.
+     * The logical lengths and the M/A semantics must match.  Cost is O(bit_ceil(n));
+     * both owners' old node views expire after the operation.
+     */
+    void merge_from(nlazyseg&& other) {
+        npre(this != addressof(other));
+        npre(size_ == other.size_);
+        if (size_)
+            merge0(1, 0, base_, other);
+        other.clear();
+        touch();
     }
 
     node_view root() const { return node_view(this, size_ ? 1 : 0, epoch_, 0, base_); }
@@ -7574,6 +7653,8 @@ using ndsu_rollback = nrollback_dsu;
  * O provides a two-sided identity and associative op(left,right); T and O must be
  * copyable for version sharing.  Each set appends O(log n) immutable nodes, so old
  * version views remain current until the whole owner is assigned/moved/destroyed.
+ * The node domain is append-only: unlike a mutable tree, adding a version does not
+ * touch its epoch and therefore cannot invalidate a view into an older version.
  */
 template <class T, class O = nadd<T>> class npersistent_seg {
     struct node {
@@ -7581,11 +7662,17 @@ template <class T, class O = nadd<T>> class npersistent_seg {
         int left = 0, right = 0;
     };
 
+  public:
+    // Persistent nodes are append-only resources.  Sharing this domain is safe
+    // because an update never rewrites an existing node; copying an owner still
+    // clones the domain so the old owner cannot observe a later append as its own.
+    using domain_type = nnode_domain<node>;
+
+  private:
     [[no_unique_address]] O operation_;
     int size_ = 0, base_ = 1;
-    vector<node> nodes_;
+    mutable domain_type pool_;
     vector<int> roots_;
-    uint64_t epoch_ = 1;
 
     friend class nseg_node<npersistent_seg>;
 
@@ -7594,19 +7681,11 @@ template <class T, class O = nadd<T>> class npersistent_seg {
         return n;
     }
 
-    void touch() noexcept {
-        if (!++epoch_)
-            ++epoch_;
-    }
+    void touch() noexcept { pool_.touch(); }
 
-    const T& aggregate(int node_index) const { return nodes_[node_index].aggregate; }
+    T aggregate(int node_index) const { return node_index ? pool_[node_index].aggregate : operation_.id(); }
 
-    int append(node value) {
-        npre(nodes_.size() <= size_t(INT_MAX));
-        int index = int(nodes_.size());
-        nodes_.push_back(move(value));
-        return index;
-    }
+    int append(node value) { return pool_.make(move(value)); }
 
     template <class V> int build(const V& source, int left, int right) {
         if (left >= size_)
@@ -7622,8 +7701,8 @@ template <class T, class O = nadd<T>> class npersistent_seg {
     int set0(int current, int left, int right, int index, const T& value) {
         if (right - left == 1)
             return append({value, 0, 0});
-        int left_node = nodes_[current].left;
-        int right_node = nodes_[current].right;
+        int left_node = current ? pool_[current].left : 0;
+        int right_node = current ? pool_[current].right : 0;
         int middle = left + (right - left) / 2;
         if (index < middle)
             left_node = set0(left_node, left, middle, index, value);
@@ -7638,8 +7717,24 @@ template <class T, class O = nadd<T>> class npersistent_seg {
         if (query_left <= left && right <= query_right)
             return aggregate(current);
         int middle = left + (right - left) / 2;
-        return operation_(fold0(nodes_[current].left, left, middle, query_left, query_right),
-                          fold0(nodes_[current].right, middle, right, query_left, query_right));
+        return operation_(fold0(pool_[current].left, left, middle, query_left, query_right),
+                          fold0(pool_[current].right, middle, right, query_left, query_right));
+    }
+
+    // Pointwise version merge.  It is path-copying: a subtree that is absent on
+    // one side is shared directly, while nodes whose two sides are present are
+    // rebuilt.  `op(left_value,right_value)` is applied at every corresponding leaf.
+    int merge0(int left_node, int right_node, int left, int right) {
+        if (!left_node)
+            return right_node;
+        if (!right_node)
+            return left_node;
+        if (right - left == 1)
+            return append({operation_(aggregate(left_node), aggregate(right_node)), 0, 0});
+        int middle = left + (right - left) / 2;
+        int merged_left = merge0(pool_[left_node].left, pool_[right_node].left, left, middle);
+        int merged_right = merge0(pool_[left_node].right, pool_[right_node].right, middle, right);
+        return append({operation_(aggregate(merged_left), aggregate(merged_right)), merged_left, merged_right});
     }
 
   public:
@@ -7648,17 +7743,18 @@ template <class T, class O = nadd<T>> class npersistent_seg {
     using node_view = nseg_node<npersistent_seg>;
 
     explicit npersistent_seg(int n = 0, O operation = {})
-        : operation_(move(operation)), size_(checked_size(n)), base_(nbitceil(size_)),
-          nodes_{{operation_.id(), 0, 0}}, roots_{0} {}
+        : operation_(move(operation)), size_(checked_size(n)), base_(nbitceil(size_)), roots_{0} {}
+    explicit npersistent_seg(domain_type domain, int n = 0, O operation = {})
+        : operation_(move(operation)), size_(checked_size(n)), base_(nbitceil(size_)), pool_(move(domain)), roots_{0} {}
 
     npersistent_seg(const npersistent_seg& other)
-        : operation_(other.operation_), size_(other.size_), base_(other.base_), nodes_(other.nodes_),
+        : operation_(other.operation_), size_(other.size_), base_(other.base_), pool_(other.pool_.clone()),
           roots_(other.roots_) {}
     npersistent_seg(npersistent_seg&& other) noexcept(
-        is_nothrow_move_constructible_v<O> && is_nothrow_move_constructible_v<vector<node>> &&
+        is_nothrow_move_constructible_v<O> && is_nothrow_move_constructible_v<domain_type> &&
         is_nothrow_move_constructible_v<vector<int>>)
         : operation_(move(other.operation_)), size_(exchange(other.size_, 0)),
-          base_(exchange(other.base_, 1)), nodes_(move(other.nodes_)), roots_(move(other.roots_)) {
+          base_(exchange(other.base_, 1)), pool_(move(other.pool_)), roots_(move(other.roots_)) {
         other.touch();
     }
     npersistent_seg& operator=(const npersistent_seg& other) {
@@ -7666,20 +7762,20 @@ template <class T, class O = nadd<T>> class npersistent_seg {
             operation_ = other.operation_;
             size_ = other.size_;
             base_ = other.base_;
-            nodes_ = other.nodes_;
+            pool_ = other.pool_.clone();
             roots_ = other.roots_;
-            touch();
         }
+        touch();
         return *this;
     }
     npersistent_seg& operator=(npersistent_seg&& other) noexcept(
-        is_nothrow_move_assignable_v<O> && is_nothrow_move_assignable_v<vector<node>> &&
+        is_nothrow_move_assignable_v<O> && is_nothrow_move_assignable_v<domain_type> &&
         is_nothrow_move_assignable_v<vector<int>>) {
         if (this != addressof(other)) {
             operation_ = move(other.operation_);
             size_ = exchange(other.size_, 0);
             base_ = exchange(other.base_, 1);
-            nodes_ = move(other.nodes_);
+            pool_ = move(other.pool_);
             roots_ = move(other.roots_);
             touch();
             other.touch();
@@ -7689,8 +7785,13 @@ template <class T, class O = nadd<T>> class npersistent_seg {
 
     template <nindexed V>
     explicit npersistent_seg(const V& source, O operation = {})
-        : operation_(move(operation)), size_(checked_size(nlen(source))), base_(nbitceil(size_)),
-          nodes_{{operation_.id(), 0, 0}} {
+        : operation_(move(operation)), size_(checked_size(nlen(source))), base_(nbitceil(size_)) {
+        roots_.push_back(size_ ? build(source, 0, base_) : 0);
+    }
+    template <nindexed V>
+    explicit npersistent_seg(domain_type domain, const V& source, O operation = {})
+        : operation_(move(operation)), size_(checked_size(nlen(source))), base_(nbitceil(size_)), pool_(move(domain)),
+          roots_{} {
         roots_.push_back(size_ ? build(source, 0, base_) : 0);
     }
 
@@ -7699,15 +7800,16 @@ template <class T, class O = nadd<T>> class npersistent_seg {
         npre(roots_.size() <= size_t(INT_MAX));
         return int(roots_.size());
     }
-    int nodes() const noexcept {
-        npre(0 < nodes_.size() && nodes_.size() <= size_t(INT_MAX) + 1);
-        return int(nodes_.size() - 1);
-    }
+    int nodes() const noexcept { return pool_.len(); }
     const O& operation() const noexcept { return operation_; }
+    domain_type domain() const { return pool_; }
+    bool same_domain(const npersistent_seg& other) const noexcept {
+        return pool_.same_domain(other.pool_);
+    }
 
     void reserve_nodes(int count) {
         npre(count >= 0);
-        nodes_.reserve(size_t(count) + 1);
+        pool_.reserve(count);
     }
 
     int fork(int version) {
@@ -7726,6 +7828,25 @@ template <class T, class O = nadd<T>> class npersistent_seg {
         return versions() - 1;
     }
 
+    /**
+     * Create a new immutable version by combining corresponding leaves of two
+     * existing versions.  The operation order is `left_value op right_value`,
+     * not interval concatenation.  A missing subtree is the operation identity;
+     * when one side is missing its immutable subtree is shared directly, while
+     * nodes on paths where both sides exist are rebuilt.  Old versions and their
+     * views therefore remain valid.  The cost is O(U) for the union of the two
+     * materialized paths/subtrees and the new storage is path-copying, not a
+     * destructive rewrite.
+     */
+    int merge(int left_version, int right_version) {
+        npre(0 <= left_version && left_version < versions());
+        npre(0 <= right_version && right_version < versions());
+        npre(roots_.size() < size_t(INT_MAX));
+        int root = merge0(roots_[size_t(left_version)], roots_[size_t(right_version)], 0, base_);
+        roots_.push_back(root);
+        return versions() - 1;
+    }
+
     T fold(int version, int left, int right) const {
         npre(0 <= version && version < versions());
         npre(0 <= left && left <= right && right <= size_);
@@ -7739,18 +7860,21 @@ template <class T, class O = nadd<T>> class npersistent_seg {
 
     node_view root(int version) const {
         npre(0 <= version && version < versions());
-        return node_view(this, roots_[size_t(version)], epoch_, 0, base_);
+        return node_view(this, roots_[size_t(version)], pool_.epoch(), 0, base_);
     }
     node_view root() const { return root(0); }
 
   private:
-    uint64_t nseg_epoch() const noexcept { return epoch_; }
-    bool nseg_alive(int handle) const noexcept {
-        return 0 < handle && size_t(handle) < nodes_.size();
+    uint64_t nseg_epoch() const noexcept { return pool_.epoch(); }
+    const void* nseg_domain_token() const noexcept { return pool_.domain_token(); }
+    nnode_identity nseg_identity_of(int handle) const noexcept {
+        return handle ? pool_.identity(handle)
+                      : nnode_identity{pool_.domain_token(), 0, 0};
     }
-    T nseg_aggregate(int handle) const { return handle ? nodes_[size_t(handle)].aggregate : operation_.id(); }
-    int nseg_left(int handle) const noexcept { return handle ? nodes_[size_t(handle)].left : 0; }
-    int nseg_right(int handle) const noexcept { return handle ? nodes_[size_t(handle)].right : 0; }
+    bool nseg_alive(int handle) const noexcept { return pool_.alive(handle); }
+    T nseg_aggregate(int handle) const { return aggregate(handle); }
+    int nseg_left(int handle) const noexcept { return handle ? pool_[handle].left : 0; }
+    int nseg_right(int handle) const noexcept { return handle ? pool_[handle].right : 0; }
 };
 
 // ---- 34_dynamic.hpp ----
@@ -7769,11 +7893,17 @@ template <class T, class O = nadd<T>> class ndynamic_seg {
         int left = 0, right = 0;
     };
 
+  public:
+    // Several owners may share this pool.  A copied tree clones it; a tree made
+    // from an explicit domain participates in destructive structural merge.
+    using domain_type = nnode_domain<node>;
+
+  private:
     [[no_unique_address]] O operation_;
     long long domain_left_ = 0, domain_right_ = 1;
-    vector<node> nodes_{{operation_.id(), 0, 0}};
+    mutable domain_type pool_;
     int root_ = 0;
-    uint64_t epoch_ = 1;
+    int owned_nodes_ = 0;
 
     friend class nseg_node<ndynamic_seg>;
 
@@ -7785,59 +7915,59 @@ template <class T, class O = nadd<T>> class ndynamic_seg {
         return left + static_cast<long long>((__int128_t(right) - left) / 2);
     }
     void touch() noexcept {
-        if (!++epoch_)
-            ++epoch_;
+        pool_.touch();
     }
     int make_node() {
-        npre(nodes_.size() < size_t(INT_MAX));
-        nodes_.push_back({operation_.id(), 0, 0});
-        return int(nodes_.size() - 1);
+        npre(owned_nodes_ < INT_MAX);
+        int handle = pool_.make(operation_.id(), 0, 0);
+        ++owned_nodes_;
+        return handle;
     }
     int ensure(int& handle) {
         if (!handle)
             handle = make_node();
         return handle;
     }
+    T aggregate_of(int handle) const { return handle ? pool_[handle].aggregate : operation_.id(); }
     void pull(int handle) {
-        nodes_[size_t(handle)].aggregate =
-            operation_(nodes_[size_t(nodes_[size_t(handle)].left)].aggregate,
-                       nodes_[size_t(nodes_[size_t(handle)].right)].aggregate);
+        pool_[handle].aggregate = operation_(aggregate_of(pool_[handle].left),
+                                             aggregate_of(pool_[handle].right));
     }
     void set0(int& handle, long long left, long long right, long long index, T value) {
         ensure(handle);
         if (right - left == 1) {
-            nodes_[size_t(handle)].aggregate = move(value);
+            pool_[handle].aggregate = move(value);
             return;
         }
         long long mid = middle(left, right);
         if (index < mid) {
-            int child = nodes_[size_t(handle)].left;
+            int child = pool_[handle].left;
             ensure(child);
             set0(child, left, mid, index, move(value));
-            nodes_[size_t(handle)].left = child;
+            pool_[handle].left = child;
         } else {
-            int child = nodes_[size_t(handle)].right;
+            int child = pool_[handle].right;
             ensure(child);
             set0(child, mid, right, index, move(value));
-            nodes_[size_t(handle)].right = child;
+            pool_[handle].right = child;
         }
         pull(handle);
     }
     void combine0(int& handle, long long left, long long right, long long index, const T& delta) {
         ensure(handle);
         if (right - left == 1) {
-            nodes_[size_t(handle)].aggregate = operation_(move(nodes_[size_t(handle)].aggregate), delta);
+            pool_[handle].aggregate = operation_(move(pool_[handle].aggregate), delta);
             return;
         }
         long long mid = middle(left, right);
         if (index < mid) {
-            int child = nodes_[size_t(handle)].left;
+            int child = pool_[handle].left;
             combine0(child, left, mid, index, delta);
-            nodes_[size_t(handle)].left = child;
+            pool_[handle].left = child;
         } else {
-            int child = nodes_[size_t(handle)].right;
+            int child = pool_[handle].right;
             combine0(child, mid, right, index, delta);
-            nodes_[size_t(handle)].right = child;
+            pool_[handle].right = child;
         }
         pull(handle);
     }
@@ -7846,10 +7976,50 @@ template <class T, class O = nadd<T>> class ndynamic_seg {
         if (!handle || query_right <= left || right <= query_left)
             return operation_.id();
         if (query_left <= left && right <= query_right)
-            return nodes_[size_t(handle)].aggregate;
+            return pool_[handle].aggregate;
         long long mid = middle(left, right);
-        return operation_(fold0(nodes_[size_t(handle)].left, left, mid, query_left, query_right),
-                          fold0(nodes_[size_t(handle)].right, mid, right, query_left, query_right));
+        return operation_(fold0(pool_[handle].left, left, mid, query_left, query_right),
+                          fold0(pool_[handle].right, mid, right, query_left, query_right));
+    }
+    void release(int handle) {
+        if (!handle)
+            return;
+        int left = pool_[handle].left, right = pool_[handle].right;
+        release(left);
+        release(right);
+        pool_.erase(handle);
+    }
+    int count_nodes(int handle) const {
+        if (!handle)
+            return 0;
+        return 1 + count_nodes(pool_[handle].left) + count_nodes(pool_[handle].right);
+    }
+
+    // Combine two sparse trees point by point.  This is deliberately not an
+    // aggregate-level `op(left.aggregate,right.aggregate)`: for ordered or
+    // otherwise non-commutative values that would concatenate whole intervals
+    // instead of combining corresponding leaves.  Missing subtrees are the
+    // operation identity and may be transferred without copying.
+    int merge0(int left, int right, long long bound_left, long long bound_right) {
+        if (!left)
+            return right;
+        if (!right)
+            return left;
+        if (bound_right - bound_left == 1) {
+            pool_[left].aggregate = operation_(move(pool_[left].aggregate), pool_[right].aggregate);
+            pool_.erase(right);
+            return left;
+        }
+        long long middle_point = middle(bound_left, bound_right);
+        int left_left = pool_[left].left, left_right = pool_[left].right;
+        int right_left = pool_[right].left, right_right = pool_[right].right;
+        int merged_left = merge0(left_left, right_left, bound_left, middle_point);
+        int merged_right = merge0(left_right, right_right, middle_point, bound_right);
+        pool_[left].left = merged_left;
+        pool_[left].right = merged_right;
+        pull(left);
+        pool_.erase(right);
+        return left;
     }
 
   public:
@@ -7860,18 +8030,20 @@ template <class T, class O = nadd<T>> class ndynamic_seg {
 
     ndynamic_seg() = default;
     explicit ndynamic_seg(long long left, long long right, O operation = {})
-        : operation_(move(operation)), domain_left_(left), domain_right_(right),
-          nodes_{{operation_.id(), 0, 0}} {
+        : ndynamic_seg(domain_type{}, left, right, move(operation)) {}
+    explicit ndynamic_seg(domain_type domain, long long left, long long right, O operation = {})
+        : operation_(move(operation)), domain_left_(left), domain_right_(right), pool_(move(domain)) {
         check_domain(left, right);
     }
 
     ndynamic_seg(const ndynamic_seg& other)
-        : operation_(other.operation_), domain_left_(other.domain_left_),
-          domain_right_(other.domain_right_), nodes_(other.nodes_), root_(other.root_) {}
+        : operation_(other.operation_), domain_left_(other.domain_left_), domain_right_(other.domain_right_),
+          pool_(other.pool_.clone()), root_(other.root_), owned_nodes_(other.owned_nodes_) {}
     ndynamic_seg(ndynamic_seg&& other) noexcept(
-        is_nothrow_move_constructible_v<O> && is_nothrow_move_constructible_v<vector<node>>)
+        is_nothrow_move_constructible_v<O> && is_nothrow_move_constructible_v<domain_type>)
         : operation_(move(other.operation_)), domain_left_(other.domain_left_),
-          domain_right_(other.domain_right_), nodes_(move(other.nodes_)), root_(exchange(other.root_, 0)) {
+          domain_right_(other.domain_right_), pool_(move(other.pool_)), root_(exchange(other.root_, 0)),
+          owned_nodes_(exchange(other.owned_nodes_, 0)) {
         other.touch();
     }
     ndynamic_seg& operator=(const ndynamic_seg& other) {
@@ -7879,20 +8051,22 @@ template <class T, class O = nadd<T>> class ndynamic_seg {
             operation_ = other.operation_;
             domain_left_ = other.domain_left_;
             domain_right_ = other.domain_right_;
-            nodes_ = other.nodes_;
+            pool_ = other.pool_.clone();
             root_ = other.root_;
-            touch();
+            owned_nodes_ = other.owned_nodes_;
         }
+        touch();
         return *this;
     }
     ndynamic_seg& operator=(ndynamic_seg&& other) noexcept(
-        is_nothrow_move_assignable_v<O> && is_nothrow_move_assignable_v<vector<node>>) {
+        is_nothrow_move_assignable_v<O> && is_nothrow_move_assignable_v<domain_type>) {
         if (this != addressof(other)) {
             operation_ = move(other.operation_);
             domain_left_ = other.domain_left_;
             domain_right_ = other.domain_right_;
-            nodes_ = move(other.nodes_);
+            pool_ = move(other.pool_);
             root_ = exchange(other.root_, 0);
+            owned_nodes_ = exchange(other.owned_nodes_, 0);
             touch();
             other.touch();
         }
@@ -7903,20 +8077,26 @@ template <class T, class O = nadd<T>> class ndynamic_seg {
     long long right_bound() const noexcept { return domain_right_; }
     long long width() const { return domain_right_ - domain_left_; }
     int nodes() const {
-        npre(nodes_.size() <= size_t(INT_MAX));
-        return int(nodes_.size() - 1);
+        return owned_nodes_;
     }
     bool empty() const noexcept { return root_ == 0; }
     const O& operation() const noexcept { return operation_; }
+    domain_type domain() const { return pool_; }
+    bool same_domain(const ndynamic_seg& other) const noexcept {
+        return pool_.same_domain(other.pool_);
+    }
     void reserve_nodes(int count) {
         npre(count >= 0);
-        nodes_.reserve(size_t(count) + 1);
+        // Handles are positive, but the pool's capacity counts slots rather than
+        // the zero sentinel; adding one here can overflow at INT_MAX.
+        pool_.reserve(count);
     }
     void clear() {
-        nodes_.clear();
-        nodes_.push_back({operation_.id(), 0, 0});
-        root_ = 0;
-        touch();
+        if (root_) {
+            release(exchange(root_, 0));
+            owned_nodes_ = 0;
+            touch();
+        }
     }
 
     void set(long long index, T value) {
@@ -7939,16 +8119,42 @@ template <class T, class O = nadd<T>> class ndynamic_seg {
         return fold(index, index + 1);
     }
 
-    node_view root() const { return node_view(this, root_, epoch_, domain_left_, domain_right_); }
+    /**
+     * Consume `other` and combine corresponding leaves into this sparse tree.
+     * Both owners must share a domain, have equal coordinate bounds, own disjoint
+     * roots, and use semantically equivalent ordered operations.  The leaf rule is
+     * `this_value = op(this_value, other_value)`; it is not interval concatenation.
+     * Missing subtrees are the operation identity.  The merge is destructive and
+     * visits the union of materialized nodes, so its structural cost is O(U), where
+     * U is the number of nodes reached by the two roots.  Old views in the shared
+     * domain expire after the transaction.
+     */
+    void merge_from(ndynamic_seg&& other) {
+        npre(this != addressof(other));
+        npre(same_domain(other));
+        npre(domain_left_ == other.domain_left_ && domain_right_ == other.domain_right_);
+        npre(!root_ || !other.root_ || root_ != other.root_);
+        root_ = merge0(root_, exchange(other.root_, 0), domain_left_, domain_right_);
+        owned_nodes_ = count_nodes(root_);
+        other.owned_nodes_ = 0;
+        touch();
+    }
+
+    node_view root() const { return node_view(this, root_, pool_.epoch(), domain_left_, domain_right_); }
 
   private:
-    uint64_t nseg_epoch() const noexcept { return epoch_; }
-    bool nseg_alive(int handle) const noexcept {
-        return 0 < handle && size_t(handle) < nodes_.size();
+    uint64_t nseg_epoch() const noexcept { return pool_.epoch(); }
+    const void* nseg_domain_token() const noexcept { return pool_.domain_token(); }
+    nnode_identity nseg_identity_of(int handle) const noexcept {
+        return handle ? pool_.identity(handle)
+                      : nnode_identity{pool_.domain_token(), 0, 0};
     }
-    T nseg_aggregate(int handle) const { return handle ? nodes_[size_t(handle)].aggregate : operation_.id(); }
-    int nseg_left(int handle) const noexcept { return handle ? nodes_[size_t(handle)].left : 0; }
-    int nseg_right(int handle) const noexcept { return handle ? nodes_[size_t(handle)].right : 0; }
+    bool nseg_alive(int handle) const noexcept {
+        return pool_.alive(handle);
+    }
+    T nseg_aggregate(int handle) const { return aggregate_of(handle); }
+    int nseg_left(int handle) const noexcept { return handle ? pool_[handle].left : 0; }
+    int nseg_right(int handle) const noexcept { return handle ? pool_[handle].right : 0; }
 };
 
 /**
@@ -7966,12 +8172,18 @@ template <class S, class F, class M, class A> class ndynamic_lazyseg {
         bool pending = false;
     };
 
+  public:
+    // The same resource domain can host disjoint sparse trees for a destructive
+    // pointwise merge.  Copying an owner clones all reachable resources instead.
+    using domain_type = nnode_domain<node>;
+
+  private:
     [[no_unique_address]] M operation_;
     [[no_unique_address]] A action_;
     long long domain_left_ = 0, domain_right_ = 1;
-    vector<node> nodes_;
+    mutable domain_type pool_;
     int root_ = 0;
-    uint64_t epoch_ = 1;
+    int owned_nodes_ = 0;
 
     friend class nseg_node<ndynamic_lazyseg>;
 
@@ -7982,22 +8194,21 @@ template <class S, class F, class M, class A> class ndynamic_lazyseg {
     static long long middle(long long left, long long right) {
         return left + static_cast<long long>((__int128_t(right) - left) / 2);
     }
-    void touch() noexcept {
-        if (!++epoch_)
-            ++epoch_;
-    }
+    void touch() noexcept { pool_.touch(); }
     int make_node() {
-        npre(nodes_.size() < size_t(INT_MAX));
-        nodes_.push_back({operation_.id(), 0, 0, action_.tag_id(), false});
-        return int(nodes_.size() - 1);
+        npre(owned_nodes_ < INT_MAX);
+        int handle = pool_.make(operation_.id(), 0, 0, action_.tag_id(), false);
+        ++owned_nodes_;
+        return handle;
     }
     int ensure(int& handle) {
         if (!handle)
             handle = make_node();
         return handle;
     }
+    S aggregate_of(int handle) const { return handle ? pool_[handle].aggregate : operation_.id(); }
     void put(int handle, long long length, const F& tag) {
-        node& current = nodes_[size_t(handle)];
+        node& current = pool_[handle];
         current.aggregate = action_.apply(move(current.aggregate), tag, ni::nchecked_int(length));
         if (current.pending)
             current.lazy = action_.compose(tag, current.lazy);
@@ -8007,25 +8218,24 @@ template <class S, class F, class M, class A> class ndynamic_lazyseg {
         }
     }
     void push(int handle, long long left, long long right) {
-        if (!nodes_[size_t(handle)].pending || right - left == 1)
+        if (!pool_[handle].pending || right - left == 1)
             return;
         long long mid = middle(left, right);
-        F tag = nodes_[size_t(handle)].lazy;
-        int left_child = nodes_[size_t(handle)].left;
-        int right_child = nodes_[size_t(handle)].right;
+        F tag = pool_[handle].lazy;
+        int left_child = pool_[handle].left;
+        int right_child = pool_[handle].right;
         ensure(left_child);
         ensure(right_child);
-        nodes_[size_t(handle)].left = left_child;
-        nodes_[size_t(handle)].right = right_child;
+        pool_[handle].left = left_child;
+        pool_[handle].right = right_child;
         put(left_child, mid - left, tag);
         put(right_child, right - mid, tag);
-        nodes_[size_t(handle)].lazy = action_.tag_id();
-        nodes_[size_t(handle)].pending = false;
+        pool_[handle].lazy = action_.tag_id();
+        pool_[handle].pending = false;
     }
     void pull(int handle) {
-        node& current = nodes_[size_t(handle)];
-        current.aggregate =
-            operation_(nodes_[size_t(current.left)].aggregate, nodes_[size_t(current.right)].aggregate);
+        node& current = pool_[handle];
+        current.aggregate = operation_(aggregate_of(current.left), aggregate_of(current.right));
     }
     void apply0(int& handle, long long left, long long right, long long query_left,
                 long long query_right, const F& tag) {
@@ -8038,12 +8248,12 @@ template <class S, class F, class M, class A> class ndynamic_lazyseg {
         }
         push(handle, left, right);
         long long mid = middle(left, right);
-        int left_child = nodes_[size_t(handle)].left;
-        int right_child = nodes_[size_t(handle)].right;
+        int left_child = pool_[handle].left;
+        int right_child = pool_[handle].right;
         apply0(left_child, left, mid, query_left, query_right, tag);
         apply0(right_child, mid, right, query_left, query_right, tag);
-        nodes_[size_t(handle)].left = left_child;
-        nodes_[size_t(handle)].right = right_child;
+        pool_[handle].left = left_child;
+        pool_[handle].right = right_child;
         pull(handle);
     }
     S fold0(int handle, long long left, long long right, long long query_left,
@@ -8051,24 +8261,23 @@ template <class S, class F, class M, class A> class ndynamic_lazyseg {
         if (query_right <= left || right <= query_left || (!handle && !carried))
             return operation_.id();
         if (query_left <= left && right <= query_right) {
-            S result = handle ? nodes_[size_t(handle)].aggregate : operation_.id();
+            S result = aggregate_of(handle);
             return carried ? action_.apply(move(result), carry, ni::nchecked_int(right - left))
                            : result;
         }
-        if (handle && nodes_[size_t(handle)].pending) {
-            carry = carried ? action_.compose(carry, nodes_[size_t(handle)].lazy)
-                            : nodes_[size_t(handle)].lazy;
+        if (handle && pool_[handle].pending) {
+            carry = carried ? action_.compose(carry, pool_[handle].lazy) : pool_[handle].lazy;
             carried = true;
         }
         long long mid = middle(left, right);
-        int left_child = handle ? nodes_[size_t(handle)].left : 0;
-        int right_child = handle ? nodes_[size_t(handle)].right : 0;
+        int left_child = handle ? pool_[handle].left : 0;
+        int right_child = handle ? pool_[handle].right : 0;
         return operation_(fold0(left_child, left, mid, query_left, query_right, carry, carried),
                           fold0(right_child, mid, right, query_left, query_right, carry, carried));
     }
     void set0(int handle, long long left, long long right, long long index, S value) {
         if (right - left == 1) {
-            node& current = nodes_[size_t(handle)];
+            node& current = pool_[handle];
             current.aggregate = move(value);
             current.lazy = action_.tag_id();
             current.pending = false;
@@ -8077,17 +8286,58 @@ template <class S, class F, class M, class A> class ndynamic_lazyseg {
         push(handle, left, right);
         long long mid = middle(left, right);
         if (index < mid) {
-            int child = nodes_[size_t(handle)].left;
+            int child = pool_[handle].left;
             ensure(child);
             set0(child, left, mid, index, move(value));
-            nodes_[size_t(handle)].left = child;
+            pool_[handle].left = child;
         } else {
-            int child = nodes_[size_t(handle)].right;
+            int child = pool_[handle].right;
             ensure(child);
             set0(child, mid, right, index, move(value));
-            nodes_[size_t(handle)].right = child;
+            pool_[handle].right = child;
         }
         pull(handle);
+    }
+    void release(int handle) {
+        if (!handle)
+            return;
+        int left = pool_[handle].left, right = pool_[handle].right;
+        release(left);
+        release(right);
+        pool_.erase(handle);
+    }
+    int count_nodes(int handle) const {
+        if (!handle)
+            return 0;
+        return 1 + count_nodes(pool_[handle].left) + count_nodes(pool_[handle].right);
+    }
+
+    // Both pending tags are pushed before descending.  This makes the leaf rule
+    // unambiguous even for non-commutative actions: each aggregate is first put in
+    // its logical state, then corresponding values are merged left before right.
+    int merge0(int left_node, int right_node, long long left, long long right) {
+        if (!left_node)
+            return right_node;
+        if (!right_node)
+            return left_node;
+        if (right - left == 1) {
+            pool_[left_node].aggregate =
+                operation_(move(pool_[left_node].aggregate), pool_[right_node].aggregate);
+            pool_[left_node].lazy = action_.tag_id();
+            pool_[left_node].pending = false;
+            pool_.erase(right_node);
+            return left_node;
+        }
+        push(left_node, left, right);
+        push(right_node, left, right);
+        long long mid = middle(left, right);
+        int merged_left = merge0(pool_[left_node].left, pool_[right_node].left, left, mid);
+        int merged_right = merge0(pool_[left_node].right, pool_[right_node].right, mid, right);
+        pool_[left_node].left = merged_left;
+        pool_[left_node].right = merged_right;
+        pull(left_node);
+        pool_.erase(right_node);
+        return left_node;
     }
 
   public:
@@ -8097,23 +8347,25 @@ template <class S, class F, class M, class A> class ndynamic_lazyseg {
     using nseg_state_type = optional<F>;
     using node_view = nseg_node<ndynamic_lazyseg>;
 
-    ndynamic_lazyseg()
-        : nodes_{{operation_.id(), 0, 0, action_.tag_id(), false}} {}
+    ndynamic_lazyseg() = default;
     explicit ndynamic_lazyseg(long long left, long long right, M operation = {}, A action = {})
+        : ndynamic_lazyseg(domain_type{}, left, right, move(operation), move(action)) {}
+    explicit ndynamic_lazyseg(domain_type domain, long long left, long long right, M operation = {}, A action = {})
         : operation_(move(operation)), action_(move(action)), domain_left_(left), domain_right_(right),
-          nodes_{{operation_.id(), 0, 0, action_.tag_id(), false}} {
+          pool_(move(domain)) {
         check_domain(left, right);
     }
 
     ndynamic_lazyseg(const ndynamic_lazyseg& other)
         : operation_(other.operation_), action_(other.action_), domain_left_(other.domain_left_),
-          domain_right_(other.domain_right_), nodes_(other.nodes_), root_(other.root_) {}
+          domain_right_(other.domain_right_), pool_(other.pool_.clone()), root_(other.root_),
+          owned_nodes_(other.owned_nodes_) {}
     ndynamic_lazyseg(ndynamic_lazyseg&& other) noexcept(
         is_nothrow_move_constructible_v<M> && is_nothrow_move_constructible_v<A> &&
-        is_nothrow_move_constructible_v<vector<node>>)
+        is_nothrow_move_constructible_v<domain_type>)
         : operation_(move(other.operation_)), action_(move(other.action_)),
-          domain_left_(other.domain_left_), domain_right_(other.domain_right_), nodes_(move(other.nodes_)),
-          root_(exchange(other.root_, 0)) {
+          domain_left_(other.domain_left_), domain_right_(other.domain_right_), pool_(move(other.pool_)),
+          root_(exchange(other.root_, 0)), owned_nodes_(exchange(other.owned_nodes_, 0)) {
         other.touch();
     }
     ndynamic_lazyseg& operator=(const ndynamic_lazyseg& other) {
@@ -8122,22 +8374,24 @@ template <class S, class F, class M, class A> class ndynamic_lazyseg {
             action_ = other.action_;
             domain_left_ = other.domain_left_;
             domain_right_ = other.domain_right_;
-            nodes_ = other.nodes_;
+            pool_ = other.pool_.clone();
             root_ = other.root_;
-            touch();
+            owned_nodes_ = other.owned_nodes_;
         }
+        touch();
         return *this;
     }
     ndynamic_lazyseg& operator=(ndynamic_lazyseg&& other) noexcept(
         is_nothrow_move_assignable_v<M> && is_nothrow_move_assignable_v<A> &&
-        is_nothrow_move_assignable_v<vector<node>>) {
+        is_nothrow_move_assignable_v<domain_type>) {
         if (this != addressof(other)) {
             operation_ = move(other.operation_);
             action_ = move(other.action_);
             domain_left_ = other.domain_left_;
             domain_right_ = other.domain_right_;
-            nodes_ = move(other.nodes_);
+            pool_ = move(other.pool_);
             root_ = exchange(other.root_, 0);
+            owned_nodes_ = exchange(other.owned_nodes_, 0);
             touch();
             other.touch();
         }
@@ -8147,21 +8401,21 @@ template <class S, class F, class M, class A> class ndynamic_lazyseg {
     long long left_bound() const noexcept { return domain_left_; }
     long long right_bound() const noexcept { return domain_right_; }
     long long width() const { return domain_right_ - domain_left_; }
-    int nodes() const {
-        npre(nodes_.size() <= size_t(INT_MAX));
-        return int(nodes_.size() - 1);
-    }
+    int nodes() const noexcept { return owned_nodes_; }
     bool empty() const noexcept { return root_ == 0; }
     const M& operation() const noexcept { return operation_; }
     const A& action() const noexcept { return action_; }
+    domain_type domain() const { return pool_; }
+    bool same_domain(const ndynamic_lazyseg& other) const noexcept {
+        return pool_.same_domain(other.pool_);
+    }
     void reserve_nodes(int count) {
         npre(count >= 0);
-        nodes_.reserve(size_t(count) + 1);
+        pool_.reserve(count);
     }
     void clear() {
-        nodes_.clear();
-        nodes_.push_back({operation_.id(), 0, 0, action_.tag_id(), false});
-        root_ = 0;
+        release(exchange(root_, 0));
+        owned_nodes_ = 0;
         touch();
     }
 
@@ -8190,21 +8444,43 @@ template <class S, class F, class M, class A> class ndynamic_lazyseg {
         return fold(index, index + 1);
     }
 
-    node_view root() const { return node_view(this, root_, epoch_, domain_left_, domain_right_); }
+    /**
+     * Destructively combine corresponding leaves of two sparse lazy trees.  The
+     * owners must share a domain, have equal bounds and disjoint roots, and use
+     * equivalent merge/action semantics.  Pending tags are pushed only because
+     * both roots are present on the same interval; a missing subtree transfers
+     * without materializing it.  Thus the cost is O(U), with U the union of the
+     * materialized structure (plus children needed to expose pending tags).
+     */
+    void merge_from(ndynamic_lazyseg&& other) {
+        npre(this != addressof(other));
+        npre(same_domain(other));
+        npre(domain_left_ == other.domain_left_ && domain_right_ == other.domain_right_);
+        npre(!root_ || !other.root_ || root_ != other.root_);
+        root_ = merge0(root_, exchange(other.root_, 0), domain_left_, domain_right_);
+        owned_nodes_ = count_nodes(root_);
+        other.owned_nodes_ = 0;
+        touch();
+    }
+
+    node_view root() const { return node_view(this, root_, pool_.epoch(), domain_left_, domain_right_); }
 
   private:
-    uint64_t nseg_epoch() const noexcept { return epoch_; }
-    bool nseg_alive(int handle) const noexcept {
-        return 0 < handle && size_t(handle) < nodes_.size();
+    uint64_t nseg_epoch() const noexcept { return pool_.epoch(); }
+    const void* nseg_domain_token() const noexcept { return pool_.domain_token(); }
+    nnode_identity nseg_identity_of(int handle) const noexcept {
+        return handle ? pool_.identity(handle)
+                      : nnode_identity{pool_.domain_token(), 0, 0};
     }
-    S nseg_aggregate(int handle) const { return handle ? nodes_[size_t(handle)].aggregate : operation_.id(); }
-    int nseg_left(int handle) const noexcept { return handle ? nodes_[size_t(handle)].left : 0; }
-    int nseg_right(int handle) const noexcept { return handle ? nodes_[size_t(handle)].right : 0; }
+    bool nseg_alive(int handle) const noexcept { return pool_.alive(handle); }
+    S nseg_aggregate(int handle) const { return aggregate_of(handle); }
+    int nseg_left(int handle) const noexcept { return handle ? pool_[handle].left : 0; }
+    int nseg_right(int handle) const noexcept { return handle ? pool_[handle].right : 0; }
     F nseg_tag(int handle) const {
-        return handle && nodes_[size_t(handle)].pending ? nodes_[size_t(handle)].lazy : action_.tag_id();
+        return handle && pool_[handle].pending ? pool_[handle].lazy : action_.tag_id();
     }
     bool nseg_pending(int handle) const noexcept {
-        return handle && nodes_[size_t(handle)].pending;
+        return handle && pool_[handle].pending;
     }
     F nseg_compose(const F& newer, const F& older) const { return action_.compose(newer, older); }
     S nseg_apply(S aggregate, const F& tag, int length) const {

@@ -196,6 +196,26 @@ template <class T, class O = nadd<T>> class nseg {
 
     T fold() const { return size_ ? tree_[1] : operation_.id(); }
 
+    /**
+     * Consume `other` and combine corresponding leaves point by point.  The
+     * operation is `this_value op other_value`, so rebuilding parents preserves
+     * ordered/non-commutative folds; it is not a single operation on the two root
+     * aggregates.  The trees must have equal logical length and equivalent
+     * operation semantics.  Cost is O(bit_ceil(n)) and both owners' old views
+     * expire after the mutation.
+     */
+    void merge_from(nseg&& other) {
+        npre(this != addressof(other));
+        npre(size_ == other.size_);
+        for (int index = 0; index < base_; ++index)
+            tree_[size_t(base_ + index)] = operation_(move(tree_[size_t(base_ + index)]),
+                                                      other.tree_[size_t(other.base_ + index)]);
+        for (int node = base_; --node > 0;)
+            tree_[size_t(node)] = operation_(tree_[size_t(node << 1)], tree_[size_t(node << 1 | 1)]);
+        other.clear();
+        touch();
+    }
+
     node_view root() const { return node_view(this, size_ ? 1 : 0, epoch_, 0, base_); }
 
   private:
