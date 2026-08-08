@@ -10,6 +10,51 @@ struct nnode_identity {
     friend bool operator==(const nnode_identity&, const nnode_identity&) = default;
 };
 
+namespace ni {
+
+/**
+ * Common non-owning lifetime stamp for structural node views.
+ *
+ * `owner` identifies the C++ object being borrowed, `domain` identifies the
+ * resource state, `epoch` identifies the published topology, and `identity`
+ * closes the reusable-slot ABA hole.  The stamp never dereferences an owner and
+ * carries no tree/segment/graph semantics; the specialized view remains
+ * responsible for its own accessors.  A zero handle denotes an empty subtree and
+ * has no generation to compare.  The owner must check that a nonzero handle is
+ * alive before passing its current identity here.
+ */
+class nnode_stamp {
+    const void* owner_ = nullptr;
+    const void* domain_ = nullptr;
+    int handle_ = 0;
+    uint64_t epoch_ = 0;
+    nnode_identity identity_{};
+
+  public:
+    constexpr nnode_stamp() = default;
+    constexpr nnode_stamp(const void* owner, const void* domain, int handle, uint64_t epoch,
+                          nnode_identity identity)
+        : owner_(owner), domain_(domain), handle_(handle), epoch_(epoch), identity_(identity) {}
+
+    bool current(const void* owner, const void* domain, uint64_t epoch,
+                 nnode_identity identity) const noexcept {
+        if (!owner_ || !domain_ || owner_ != owner || domain_ != domain || epoch_ != epoch)
+            return false;
+        return !handle_ || identity_ == identity;
+    }
+    bool same_owner(const nnode_stamp& other) const noexcept { return owner_ == other.owner_; }
+    bool same_domain(const nnode_stamp& other) const noexcept {
+        return domain_ && domain_ == other.domain_;
+    }
+    const void* owner_token() const noexcept { return owner_; }
+    const void* domain_token() const noexcept { return domain_; }
+    int handle() const noexcept { return handle_; }
+    nnode_identity identity() const noexcept { return identity_; }
+    uint64_t epoch() const noexcept { return epoch_; }
+};
+
+} // namespace ni
+
 enum class nbranch : unsigned char { left, take, right };
 
 /**
@@ -24,10 +69,7 @@ template <class S> class nnode_view {
     using info_type = typename S::info_type;
 
   private:
-    const S* owner_ = nullptr;
-    const void* domain_ = nullptr;
-    int handle_ = 0;
-    uint64_t epoch_ = 0;
+    ni::nnode_stamp stamp_;
 
     static const void* domain_token_of(const S* owner) noexcept {
         if (!owner)
@@ -37,67 +79,94 @@ template <class S> class nnode_view {
         return owner;
     }
 
+    static nnode_identity identity_of(const S* owner, int handle, const void* domain) {
+        if (!owner || !handle)
+            return {domain, handle, 0};
+        if constexpr (requires(const S& value, int node) {
+                          value.nnode_identity_of(node);
+                      }) {
+            return owner->nnode_identity_of(handle);
+        } else {
+            return {domain, handle, 1};
+        }
+    }
+
+    static ni::nnode_stamp make_stamp(const S* owner, int handle, uint64_t epoch) {
+        const void* domain = domain_token_of(owner);
+        return {owner, domain, handle, epoch, identity_of(owner, handle, domain)};
+    }
+
+    const S* owner_ptr() const noexcept {
+        return static_cast<const S*>(stamp_.owner_token());
+    }
+
     nnode_view(const S* owner, int handle, uint64_t epoch)
-        : owner_(owner), domain_(domain_token_of(owner)), handle_(handle), epoch_(epoch) {}
+        : stamp_(make_stamp(owner, handle, epoch)) {}
     friend S;
 
   public:
     constexpr nnode_view() = default;
 
     bool current() const {
-        return owner_ && domain_ == domain_token_of(owner_) && epoch_ == owner_->nnode_epoch();
+        const S* owner = owner_ptr();
+        if (!owner)
+            return false;
+        const void* domain = domain_token_of(owner);
+        int handle = stamp_.handle();
+        if (handle && !owner->nnode_alive(handle))
+            return false;
+        return stamp_.current(owner, domain, owner->nnode_epoch(), identity_of(owner, handle, domain));
     }
-    bool ok() const { return current() && handle_ && owner_->nnode_alive(handle_); }
+    bool ok() const {
+        const S* owner = owner_ptr();
+        int handle = stamp_.handle();
+        return current() && handle && owner->nnode_alive(handle);
+    }
     explicit operator bool() const { return ok(); }
 
     const S& owner() const {
         npre(current());
-        return *owner_;
+        return *owner_ptr();
     }
-    bool same_owner(const nnode_view& other) const noexcept { return owner_ == other.owner_; }
+    bool same_owner(const nnode_view& other) const noexcept { return stamp_.same_owner(other.stamp_); }
     bool same_domain(const nnode_view& other) const noexcept {
-        return domain_ && domain_ == other.domain_;
+        return stamp_.same_domain(other.stamp_);
     }
     nnode_identity identity() const {
         npre(current());
-        if constexpr (requires(const S& owner, int handle) {
-                          owner.nnode_identity_of(handle);
-                      }) {
-            return owner_->nnode_identity_of(handle_);
-        } else {
-            return {domain_, handle_, handle_ ? 1u : 0u};
-        }
+        return stamp_.identity();
     }
 
     const value_type& val() const {
         npre(ok());
-        return owner_->nnode_val(handle_);
+        return owner_ptr()->nnode_val(stamp_.handle());
     }
     int count() const {
         npre(current());
-        return owner_->nnode_count(handle_);
+        return owner_ptr()->nnode_count(stamp_.handle());
     }
     int len() const {
         npre(current());
-        return owner_->nnode_len(handle_);
+        return owner_ptr()->nnode_len(stamp_.handle());
     }
     info_type info() const {
         npre(current());
-        return owner_->nnode_info(handle_);
+        return owner_ptr()->nnode_info(stamp_.handle());
     }
     nnode_view left() const {
         npre(current());
-        return {owner_, owner_->nnode_left(handle_), epoch_};
+        return {owner_ptr(), owner_ptr()->nnode_left(stamp_.handle()), stamp_.epoch()};
     }
     nnode_view right() const {
         npre(current());
-        return {owner_, owner_->nnode_right(handle_), epoch_};
+        return {owner_ptr(), owner_ptr()->nnode_right(stamp_.handle()), stamp_.epoch()};
     }
     bool leaf() const {
         npre(current());
-        return handle_ && !owner_->nnode_left(handle_) && !owner_->nnode_right(handle_);
+        return stamp_.handle() && !owner_ptr()->nnode_left(stamp_.handle()) &&
+               !owner_ptr()->nnode_right(stamp_.handle());
     }
-    int handle() const noexcept { return handle_; }
+    int handle() const noexcept { return stamp_.handle(); }
 
     template <class Q = S>
         requires requires(const Q& owner, int handle) {
@@ -105,7 +174,7 @@ template <class S> class nnode_view {
         }
     nnode_view parent() const {
         npre(current());
-        return {owner_, owner_->nnode_parent(handle_), epoch_};
+        return {owner_ptr(), owner_ptr()->nnode_parent(stamp_.handle()), stamp_.epoch()};
     }
 
     template <class Q = S>
@@ -115,7 +184,7 @@ template <class S> class nnode_view {
         }
     typename Q::tag_type tag() const {
         npre(current());
-        return owner_->nnode_tag(handle_);
+        return owner_ptr()->nnode_tag(stamp_.handle());
     }
 
     template <class Q = S>
@@ -125,7 +194,7 @@ template <class S> class nnode_view {
         }
     typename Q::state_type state() const {
         npre(ok());
-        return owner_->nnode_state(handle_);
+        return owner_ptr()->nnode_state(stamp_.handle());
     }
 };
 
@@ -237,10 +306,7 @@ template <class S> class nseg_node {
     using state_type = typename S::nseg_state_type;
 
   private:
-    const S* owner_ = nullptr;
-    const void* domain_ = nullptr;
-    int handle_ = 0;
-    uint64_t epoch_ = 0;
+    ni::nnode_stamp stamp_;
     long long left_ = 0, right_ = 0;
     state_type carry_{};
 
@@ -252,10 +318,30 @@ template <class S> class nseg_node {
         return owner;
     }
 
+    static nnode_identity identity_of(const S* owner, int handle, const void* domain) {
+        if (!owner || !handle)
+            return {domain, handle, 0};
+        if constexpr (requires(const S& value, int node) {
+                          value.nseg_identity_of(node);
+                      }) {
+            return owner->nseg_identity_of(handle);
+        } else {
+            return {domain, handle, 1};
+        }
+    }
+
+    static ni::nnode_stamp make_stamp(const S* owner, int handle, uint64_t epoch) {
+        const void* domain = domain_token_of(owner);
+        return {owner, domain, handle, epoch, identity_of(owner, handle, domain)};
+    }
+
+    const S* owner_ptr() const noexcept {
+        return static_cast<const S*>(stamp_.owner_token());
+    }
+
     nseg_node(const S* owner, int handle, uint64_t epoch, long long left, long long right,
               state_type carry = {})
-        : owner_(owner), domain_(domain_token_of(owner)), handle_(handle), epoch_(epoch), left_(left),
-          right_(right), carry_(move(carry)) {}
+        : stamp_(make_stamp(owner, handle, epoch)), left_(left), right_(right), carry_(move(carry)) {}
     friend S;
 
     static constexpr bool has_lazy_view = requires(const S& owner, int handle,
@@ -271,9 +357,11 @@ template <class S> class nseg_node {
         state_type result = carry_;
         if constexpr (has_lazy_view) {
             using tag_type = typename S::tag_type;
-            if (owner_->nseg_pending(handle_)) {
-                tag_type local = owner_->nseg_tag(handle_);
-                result = result ? state_type(owner_->nseg_compose(*result, local))
+            const S* owner = owner_ptr();
+            int handle = stamp_.handle();
+            if (owner->nseg_pending(handle)) {
+                tag_type local = owner->nseg_tag(handle);
+                result = result ? state_type(owner->nseg_compose(*result, local))
                                 : state_type(move(local));
             }
         }
@@ -284,32 +372,37 @@ template <class S> class nseg_node {
     constexpr nseg_node() = default;
 
     bool current() const {
-        return owner_ && domain_ == domain_token_of(owner_) && epoch_ == owner_->nseg_epoch();
+        const S* owner = owner_ptr();
+        if (!owner)
+            return false;
+        const void* domain = domain_token_of(owner);
+        int handle = stamp_.handle();
+        if (handle && !owner->nseg_alive(handle))
+            return false;
+        return stamp_.current(owner, domain, owner->nseg_epoch(), identity_of(owner, handle, domain));
     }
-    bool ok() const { return current() && handle_ && owner_->nseg_alive(handle_); }
+    bool ok() const {
+        const S* owner = owner_ptr();
+        int handle = stamp_.handle();
+        return current() && handle && owner->nseg_alive(handle);
+    }
     explicit operator bool() const { return ok(); }
 
-    bool same_owner(const nseg_node& other) const noexcept { return owner_ == other.owner_; }
+    bool same_owner(const nseg_node& other) const noexcept { return stamp_.same_owner(other.stamp_); }
     bool same_domain(const nseg_node& other) const noexcept {
-        return domain_ && domain_ == other.domain_;
+        return stamp_.same_domain(other.stamp_);
     }
     nnode_identity identity() const {
         npre(current());
-        if constexpr (requires(const S& owner, int handle) {
-                          owner.nseg_identity_of(handle);
-                      }) {
-            return owner_->nseg_identity_of(handle_);
-        } else {
-            return {domain_, handle_, handle_ ? 1u : 0u};
-        }
+        return stamp_.identity();
     }
 
     aggregate_type aggregate() const {
         npre(current());
-        aggregate_type result = owner_->nseg_aggregate(handle_);
+        aggregate_type result = owner_ptr()->nseg_aggregate(stamp_.handle());
         if constexpr (has_lazy_view) {
             if (carry_)
-                result = owner_->nseg_apply(move(result), *carry_, ni::nchecked_int(width()));
+                result = owner_ptr()->nseg_apply(move(result), *carry_, ni::nchecked_int(width()));
         }
         return result;
     }
@@ -337,15 +430,17 @@ template <class S> class nseg_node {
         npre(current());
         npre(width() > 1);
         long long middle = left_ + (__int128_t(right_) - left_) / 2;
-        return {owner_, owner_->nseg_left(handle_), epoch_, left_, middle, child_carry()};
+        return {owner_ptr(), owner_ptr()->nseg_left(stamp_.handle()), stamp_.epoch(), left_, middle,
+                child_carry()};
     }
     nseg_node right() const {
         npre(current());
         npre(width() > 1);
         long long middle = left_ + (__int128_t(right_) - left_) / 2;
-        return {owner_, owner_->nseg_right(handle_), epoch_, middle, right_, child_carry()};
+        return {owner_ptr(), owner_ptr()->nseg_right(stamp_.handle()), stamp_.epoch(), middle, right_,
+                child_carry()};
     }
-    int handle() const noexcept { return handle_; }
+    int handle() const noexcept { return stamp_.handle(); }
 
     template <class Q = S>
         requires requires(const Q& owner, int handle) {
@@ -354,7 +449,7 @@ template <class S> class nseg_node {
         }
     typename Q::tag_type tag() const {
         npre(current());
-        return owner_->nseg_tag(handle_);
+        return owner_ptr()->nseg_tag(stamp_.handle());
     }
 };
 

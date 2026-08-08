@@ -1619,9 +1619,13 @@ nnode_view<S>       负责从 owner 读取领域字段的借用结构视图
 兼容名字。`nnode<S>` 仍可使用，但它现在是 `nnode_view<S>` 的旧拼写；新代码优先写出
 `nnode_view`，以免把“节点身份”和“节点访问界面”混成一个领域结构。
 
-资源池的 generation 解决槽位 ABA；节点视图还携带 owner/domain 与 epoch，因此跨 owner
-重连后旧视图会失效。共享 domain 的复制只是复制 domain handle，拥有型 DS 的复制构造
-必须显式 `clone()` 出独立资源，不能让两个逻辑容器意外共享同一棵树。
+资源池的 generation 解决槽位 ABA；`nnode_view` 和 `nseg_node` 现在共同使用内部的
+`ni::nnode_stamp`，快照会保存 owner/domain、epoch 和非空 handle 的 generation。因而
+`current()` 必须同时看到同一 owner、同一 domain、同一 epoch 和同一资源身份；即使底层
+调用点尚未推进 epoch，删除后复用槽位也不会让旧视图误认新对象。固定布局线段树没有可
+复用资源槽位，generation 使用稳定的后端标记，结构修改仍由 epoch 负责。共享 domain 的
+复制只是复制 domain handle，拥有型 DS 的复制构造必须显式 `clone()` 出独立资源，不能让
+两个逻辑容器意外共享同一棵树。
 
 隐式 FHQ 已接入这层底座：
 
@@ -1880,11 +1884,12 @@ t.root().tag();               // 当前节点尚未下推的 tag
 两种聚合定位都要求 predicate 随前缀/后缀扩展具有正确单调性；它们只利用子树聚合
 下降，不会替调用者证明“首次为真”之后不会再次变假。
 
-节点快照携带 epoch。任何可能改变拓扑的操作都会令旧快照 `current()==false`；尤其
-splay 的 `has/get/rank/...` 也可能旋转，不能把 `nnode` 跨下一次树操作保存。FHQ 的纯
-查询当前不改拓扑，但公共安全规则仍是“用完即弃”。`nempty_augment<T>` 是默认空信息，
-`nwalk`、`nfirst_prefix` 和 `nlast_suffix` 直接按调用点所需接口实例化，不再额外注册 AST
-concept；因此自定义 owner 可以自由调度节点，但必须自己满足上述接口和聚合单调性。
+节点快照还保存资源 generation；任何可能改变拓扑的操作都会令旧快照
+`current()==false`，删除并复用资源槽位也会令它失效。尤其 splay 的
+`has/get/rank/...` 也可能旋转，不能把 `nnode` 跨下一次树操作保存。FHQ 的纯查询当前不
+改拓扑，但公共安全规则仍是“用完即弃”。`nempty_augment<T>` 是默认空信息，`nwalk`、
+`nfirst_prefix` 和 `nlast_suffix` 直接按调用点所需接口实例化，不再额外注册 AST concept；
+因此自定义 owner 可以自由调度节点，但必须自己满足上述接口和聚合单调性。
 
 #### FHQ、splay 与节点快照怎样选择
 
@@ -2090,7 +2095,8 @@ FHQ 互相承担不属于自己的不变量。
 
 ### 10.0.1 本章统一的节点语言
 
-固定、lazy、persistent、dynamic 线段树都可以暴露一个只读 `nseg_node<S>` 视图：
+固定、lazy、persistent、dynamic 线段树都可以暴露一个只读 `nseg_node<S>` 视图；它和
+`nnode_view<S>` 共用 `ni::nnode_stamp` 的 owner/domain/epoch/identity 检查：
 
 ```text
 区间边界 + 区间宽度 + 聚合信息 + 左右子节点 + 当前句柄/epoch
@@ -2119,8 +2125,9 @@ auto old_found = nseg_walk(p.root(version), decide); // 从指定节点调度
 
 `decide(node)` 返回 `nbranch::left/take/right`。固定树和持久化树的视图区间是内部
 `[0,bit_ceil(n))`，`n` 以后的叶子为单位元；
-动态树的视图区间就是构造时给出的坐标域。普通/lazy/dynamic 树修改后旧视图 epoch 失效；
-持久化节点不可变，所以旧版本视图保持有效。带 lazy 的节点额外有 `tag()`，它返回当前
+动态树的视图区间就是构造时给出的坐标域。普通/lazy/dynamic 树修改后旧视图的 epoch 失效；
+资源槽位删除并复用时 generation 也会使旧视图失效；持久化节点不可变，所以旧版本视图保持
+有效。带 lazy 的节点额外有 `tag()`，它返回当前
 节点尚未下推的表示 tag，而不是从根到节点的累计作用；沿 `left()/right()` 取得的子视图会
 携带祖先未下推作用，因此 `aggregate()` 仍是该区间的逻辑聚合，且不会为动态树的只读视图
 补开缺失节点。
@@ -4480,10 +4487,13 @@ kind(vertex/arc)、from/to、next/prev、public id、edge weight、可选 vertex
 position 到 vertex、vertex 到 payload 的映射分别用 `nview`/`nfunc` 表达，不能用一个高阶
 graph facade 把 position、key、value 混成一个类型。
 
-跨多个 typed domain 时，`nnode_scope`（若窄测试证明确有必要）只提供共享 epoch：
-`same_domain` 仍然必须为真才可转移资源，scope 不能授权跨池 merge。一个 component
-transaction 要么调用各子结构的 `merge_from/split`，要么 clone/rebuild；任何只复制
-`int handle` 的实现都是错误的。
+跨多个 typed domain 时，未来的 `nnode_scope`（若窄测试证明确有必要）只能提供共享
+epoch：`same_domain` 仍然必须为真才可转移资源，scope 不能授权跨池 merge。V3-1 暂不
+引入一个脱离 owner 的空壳 token；当前所有已存在的跨 owner 交易都在同一 typed domain
+内，`ni::nnode_stamp` 已足以统一身份、generation 和 epoch 检查。等图记录与树节点真的
+需要同一笔跨 typed domain transaction 时，再把 scope 接入 owner 并为它补独立失效测试。
+一个 component transaction 要么调用各子结构的 `merge_from/split`，要么 clone/rebuild；
+任何只复制 `int handle` 的实现都是错误的。
 
 #### 19.8.5 分阶段施工与回滚点
 
@@ -4492,7 +4502,7 @@ transaction 要么调用各子结构的 `merge_from/split`，要么 clone/rebuil
 | 阶段 | 施工内容 | 必须新增的证据 |
 |---|---|---|
 | V3-0 | 已完成基线：node domain、FHQ domain、五类 segment merge | 现有全库、audit、两 profile sanitizer |
-| V3-1 | 抽出 `nnode_view`/`nseg_node` 共用的 identity/epoch 检查；评估并实现 scope token | 固定 stale/ABA/move/copy 测试；无公共签名回归 |
+| V3-1 | 抽出 `nnode_view`/`nseg_node` 共用的 identity/epoch/generation 检查；评估 scope token，暂不引入未接入 owner 的空壳 | 固定 stale/ABA/move/copy 测试；无公共签名回归 |
 | V3-2 | 资源化 owning graph topology；先做 node identity、邻接链和只读枚举 | graph topology fixed/property/death；list/forward/CSR differential |
 | V3-3 | 让 `ngraph_forward` 以兼容 facade 接入资源层；锁定 edge id、顺序、权值修改语义 | 旧 graph/compat 全测；随机 add/weight/reverse/narcs 对拍；ASan/UBSan |
 | V3-4 | 把 `ntree_layout` 变成兼容投影并增加 rooted tree/forest owner | 连通/无环/对称/root/order death；LCA/HLD/reroot differential |
