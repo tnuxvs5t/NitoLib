@@ -1,6 +1,4 @@
-template <class T, class O = nadd<T>>
-    requires ncommutative_monoid<O, T>
-class nfenwick {
+template <class T, class O = nadd<T>> class nfenwick {
     [[no_unique_address]] O operation_;
     int size_ = 0;
     vector<T> tree_;
@@ -51,16 +49,12 @@ class nfenwick {
         return result;
     }
 
-    T fold(int left, int right) const
-        requires ngroup<O, T>
-    {
+    T fold(int left, int right) const {
         npre(0 <= left && left <= right && right <= size_);
         return operation_(operation_.inv(prefix(left)), prefix(right));
     }
 
-    T get(int index) const
-        requires ngroup<O, T>
-    {
+    T get(int index) const {
         npre(0 <= index && index < size_);
         return fold(index, index + 1);
     }
@@ -84,9 +78,7 @@ class nfenwick {
     }
 };
 
-template <class T, class O = nadd<T>>
-    requires nmonoid<O, T>
-class nseg {
+template <class T, class O = nadd<T>> class nseg {
     [[no_unique_address]] O operation_;
     int size_ = 0, base_ = 1;
     vector<T> tree_;
@@ -106,6 +98,7 @@ class nseg {
 
   public:
     using aggregate_type = T;
+    using nseg_state_type = monostate;
     using node_view = nseg_node<nseg>;
 
     nseg() : tree_(2, operation_.id()) {}

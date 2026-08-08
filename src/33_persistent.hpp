@@ -1,6 +1,4 @@
-template <class T, class O = nadd<T>>
-    requires nmonoid<O, T> && copyable<T>
-class npersistent_seg {
+template <class T, class O = nadd<T>> class npersistent_seg {
     struct node {
         T aggregate;
         int left = 0, right = 0;
@@ -69,6 +67,7 @@ class npersistent_seg {
 
   public:
     using aggregate_type = T;
+    using nseg_state_type = monostate;
     using node_view = nseg_node<npersistent_seg>;
 
     explicit npersistent_seg(int n = 0, O operation = {})

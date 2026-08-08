@@ -1,6 +1,5 @@
 00_config.hpp
 01_base.hpp
-02_algebra.hpp
 03_ref.hpp
 04_enum.hpp
 05_ast.hpp

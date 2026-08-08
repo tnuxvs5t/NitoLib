@@ -1,23 +1,9 @@
 enum class nbranch : unsigned char { left, take, right };
 
-namespace ni {
-template <class S, class = void> struct nnode_tag_traits {
-    using type = monostate;
-    static constexpr bool available = false;
-};
-
-template <class S>
-struct nnode_tag_traits<S, void_t<typename S::tag_type>> {
-    using type = typename S::tag_type;
-    static constexpr bool available = true;
-};
-} // namespace ni
-
 template <class S> class nnode {
   public:
     using value_type = typename S::value_type;
     using info_type = typename S::info_type;
-    using tag_type = typename ni::nnode_tag_traits<S>::type;
 
   private:
     const S* owner_ = nullptr;
@@ -72,12 +58,7 @@ template <class S> class nnode {
     }
 };
 
-template <class S>
-concept nnode_tree = requires(const S& tree) {
-    { tree.root() } -> same_as<nnode<S>>;
-};
-
-template <nnode_tree S, class F> nnode<S> nwalk(const S& tree, F&& decide) {
+template <class S, class F> nnode<S> nwalk(const S& tree, F&& decide) {
     auto node = tree.root();
     while (node) {
         nbranch branch = invoke(decide, node);
@@ -92,15 +73,6 @@ template <nnode_tree S, class F> nnode<S> nwalk(const S& tree, F&& decide) {
     }
     return node;
 }
-
-template <class A, class T>
-concept naugment = copyable<typename A::info_type> &&
-                   requires(const A& augment, const T& value, int count,
-                            typename A::info_type info) {
-                       { augment.id() } -> convertible_to<typename A::info_type>;
-                       { augment.one(value, count) } -> convertible_to<typename A::info_type>;
-                       { augment.op(info, info) } -> convertible_to<typename A::info_type>;
-                   };
 
 template <class T> struct nempty_augment {
     using info_type = monostate;
@@ -119,30 +91,7 @@ template <class T, class I> struct nempty_tag {
     constexpr I apply_info(I info, const tag_type&, int) const { return info; }
 };
 
-template <class L, class T, class I>
-inline constexpr bool nnode_action_laws = false;
-
-template <class T, class I>
-inline constexpr bool nnode_action_laws<nempty_tag<T, I>, T, I> = true;
-
-template <class L, class T, class I>
-concept nnode_action = copyable<typename L::tag_type> &&
-                       nnode_action_laws<remove_cvref_t<L>, T, I> &&
-                       requires(const L& action, T value, I info,
-                                const typename L::tag_type& tag) {
-                           { action.tag_id() } -> convertible_to<typename L::tag_type>;
-                           { action.compose(tag, tag) } -> convertible_to<typename L::tag_type>;
-                           { action.apply_value(move(value), tag, 1) } -> convertible_to<T>;
-                           { action.apply_info(move(info), tag, 1) } -> convertible_to<I>;
-                       };
-
-template <class S>
-concept naugmented_tree = nnode_tree<S> && requires(const S& tree) {
-    typename S::augment_type;
-    { tree.augment() } -> same_as<const typename S::augment_type&>;
-};
-
-template <naugmented_tree S, class P> nnode<S> nfirst_prefix(const S& tree, P&& predicate) {
+template <class S, class P> nnode<S> nfirst_prefix(const S& tree, P&& predicate) {
     const auto& augment = tree.augment();
     auto node = tree.root();
     auto prefix = augment.id();
@@ -161,7 +110,7 @@ template <naugmented_tree S, class P> nnode<S> nfirst_prefix(const S& tree, P&& 
     return node;
 }
 
-template <naugmented_tree S, class P> nnode<S> nlast_suffix(const S& tree, P&& predicate) {
+template <class S, class P> nnode<S> nlast_suffix(const S& tree, P&& predicate) {
     const auto& augment = tree.augment();
     auto node = tree.root();
     auto suffix = augment.id();
@@ -187,37 +136,38 @@ template <naugmented_tree S, class P> nnode<S> nlast_suffix(const S& tree, P&& p
 template <class S> class nseg_node {
   public:
     using aggregate_type = typename S::aggregate_type;
-    using tag_type = typename ni::nnode_tag_traits<S>::type;
+    using state_type = typename S::nseg_state_type;
 
   private:
     const S* owner_ = nullptr;
     int handle_ = 0;
     uint64_t epoch_ = 0;
     long long left_ = 0, right_ = 0;
-    optional<tag_type> carry_;
+    state_type carry_{};
 
     constexpr nseg_node(const S* owner, int handle, uint64_t epoch, long long left,
-                        long long right, optional<tag_type> carry = nullopt)
+                        long long right, state_type carry = {})
         : owner_(owner), handle_(handle), epoch_(epoch), left_(left), right_(right),
           carry_(move(carry)) {}
     friend S;
 
     static constexpr bool has_lazy_view = requires(const S& owner, int handle,
                                                    aggregate_type aggregate,
-                                                   const tag_type& tag, int length) {
+                                                   const typename S::tag_type& tag, int length) {
         { owner.nseg_pending(handle) } -> convertible_to<bool>;
-        { owner.nseg_tag(handle) } -> convertible_to<tag_type>;
-        { owner.nseg_compose(tag, tag) } -> convertible_to<tag_type>;
+        { owner.nseg_tag(handle) } -> convertible_to<typename S::tag_type>;
+        { owner.nseg_compose(tag, tag) } -> convertible_to<typename S::tag_type>;
         { owner.nseg_apply(move(aggregate), tag, length) } -> convertible_to<aggregate_type>;
     };
 
-    optional<tag_type> child_carry() const {
-        optional<tag_type> result = carry_;
+    state_type child_carry() const {
+        state_type result = carry_;
         if constexpr (has_lazy_view) {
+            using tag_type = typename S::tag_type;
             if (owner_->nseg_pending(handle_)) {
                 tag_type local = owner_->nseg_tag(handle_);
-                result = result ? optional<tag_type>(owner_->nseg_compose(*result, local))
-                                : optional<tag_type>(move(local));
+                result = result ? state_type(owner_->nseg_compose(*result, local))
+                                : state_type(move(local));
             }
         }
         return result;
@@ -284,11 +234,6 @@ template <class S> class nseg_node {
     }
 };
 
-template <class S>
-concept nseg_tree = requires(const S& tree) {
-    { tree.root() } -> same_as<nseg_node<S>>;
-};
-
 template <class S, class F> nseg_node<S> nseg_walk(nseg_node<S> node, F&& decide) {
     while (node) {
         nbranch branch = invoke(decide, node);
@@ -304,6 +249,6 @@ template <class S, class F> nseg_node<S> nseg_walk(nseg_node<S> node, F&& decide
     return node;
 }
 
-template <nseg_tree S, class F> nseg_node<S> nseg_walk(const S& tree, F&& decide) {
+template <class S, class F> nseg_node<S> nseg_walk(const S& tree, F&& decide) {
     return nseg_walk(tree.root(), forward<F>(decide));
 }

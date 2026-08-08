@@ -1,7 +1,6 @@
 #include "common.hpp"
 
 struct nconcat_words {
-    static constexpr nlaw laws = nlaw::associative | nlaw::identity;
     string id() const { return {}; }
     string operator()(string left, const string& right) const { return left += right; }
 };

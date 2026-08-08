@@ -19,11 +19,6 @@ struct string_augment {
 using sum_fhq = nset_fhq<int, nless<int>, true, sum_augment>;
 using sum_splay = nset_splay<int, nless<int>, true, sum_augment>;
 
-static_assert(naugment<sum_augment, int>);
-static_assert(nnode_tree<sum_fhq> && nnode_tree<sum_splay>);
-static_assert(naugmented_tree<sum_fhq> && naugmented_tree<sum_splay>);
-static_assert(!nnode_tree<nset_stl<int>>);
-
 template <class S> int check_ast() {
     S tree(nless<int>{}, sum_augment{3});
     auto empty = tree.root();

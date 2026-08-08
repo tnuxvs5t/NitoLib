@@ -1,5 +1,31 @@
+template <class T, class O = nmul<T>>
+constexpr T npow(T base, long long exponent, O operation = {}) {
+    uint64_t remaining;
+    if (exponent < 0) {
+        if constexpr (requires { operation.inv(move(base)); }) {
+            base = operation.inv(move(base));
+            remaining = uint64_t{} - uint64_t(exponent);
+        } else {
+            npre(exponent >= 0);
+            return operation.id();
+        }
+    } else {
+        remaining = uint64_t(exponent);
+    }
+    T result = operation.id();
+    while (remaining) {
+        if (remaining & 1)
+            result = operation(move(result), base);
+        remaining >>= 1;
+        if (remaining) {
+            T copy = base;
+            base = operation(move(copy), base);
+        }
+    }
+    return result;
+}
+
 template <class A, class O = nadd<nindex_value_t<const A>>>
-    requires nmonoid<O, nindex_value_t<const A>>
 auto nscan(const A& a, O op = {}) {
     using T = nindex_value_t<const A>;
     npre(nlen(a) < INT_MAX);
@@ -12,7 +38,6 @@ auto nscan(const A& a, O op = {}) {
 }
 
 template <class A, class O = nadd<nindex_value_t<const A>>>
-    requires nmonoid<O, nindex_value_t<const A>>
 auto nsuffix_scan(const A& a, O op = {}) {
     using T = nindex_value_t<const A>;
     npre(nlen(a) < INT_MAX);

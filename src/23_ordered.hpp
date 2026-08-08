@@ -70,7 +70,6 @@ template <class S> bool nordered_equal(const S& left, const S& right) {
 
 template <class T, class C = nless<T>, bool Multi = false, class A = nempty_augment<T>,
           class L = nempty_tag<T, typename A::info_type>>
-    requires naugment<A, T> && nnode_action<L, T, typename A::info_type>
 class nset_fhq {
     struct node {
         T value;
@@ -582,7 +581,6 @@ class nset_fhq {
 };
 
 template <class T, class C = nless<T>, bool Multi = false, class A = nempty_augment<T>>
-    requires naugment<A, T>
 class nset_splay {
     struct node {
         T value;

@@ -1,18 +1,6 @@
 #include "common.hpp"
 
-template <class T>
-concept nhas_determinant = requires(nmatrix<T> matrix) { ndeterminant(matrix); };
-
-template <class T>
-concept nhas_default_matmul = requires(nmatrix<T> matrix) { nmatmul(matrix, matrix); };
-
 int main() {
-    static_assert(!nexact_field<int> && !nhas_determinant<int>);
-    static_assert(nexact_field<nmodint<101>> && nhas_determinant<nmodint<101>>);
-    static_assert(!nexact_field<nmodint<100>> && !nhas_determinant<nmodint<100>>);
-    static_assert(nhas_default_matmul<long long> && nhas_default_matmul<nmodint<100>>);
-    static_assert(!nhas_default_matmul<double>);
-
     nmatrix<int> matrix{{9, 2, 7, 4}, {6, 8, 3, 5}, {1, 0, 11, 10}};
     auto column = matrix.column(1);
     nsort(column);

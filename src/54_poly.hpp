@@ -104,10 +104,10 @@ template <nindexed A, nindexed B> auto nconv_naive(const A& a, const B& b) {
 
 template <nindexed A, nindexed B>
     requires ni::nstatic_modular<nindex_value_t<const A>> &&
-             nexact_field<nindex_value_t<const A>> &&
              same_as<nindex_value_t<const A>, nindex_value_t<const B>>
 auto nconv_ntt(const A& a, const B& b) {
     using mint = nindex_value_t<const A>;
+    npre(nisprime(mint::mod()));
     if (!nlen(a) || !nlen(b))
         return nvector<mint>{};
     npre(nlen(a) <= INT_MAX - nlen(b) + 1);
@@ -130,7 +130,7 @@ auto nconv_ntt(const A& a, const B& b) {
 template <nindexed A, nindexed B> auto nconv_auto(const A& a, const B& b) {
     using T = nindex_value_t<const A>;
     static_assert(same_as<T, nindex_value_t<const B>>);
-    if constexpr (ni::nstatic_modular<T> && nexact_field<T>) {
+    if constexpr (ni::nstatic_modular<T>) {
         if (nlen(a) && nlen(b) && min(nlen(a), nlen(b)) >= 32) {
             npre(nlen(a) <= INT_MAX - nlen(b) + 1);
             long long size = 1LL * nlen(a) + nlen(b) - 1;
@@ -155,9 +155,7 @@ template <nindexed A> auto npoly_derivative(const A& polynomial) {
     return result;
 }
 
-template <nindexed A>
-    requires floating_point<nindex_value_t<const A>> || nexact_field_element<nindex_value_t<const A>>
-auto npoly_integral(const A& polynomial) {
+template <nindexed A> auto npoly_integral(const A& polynomial) {
     using T = nindex_value_t<const A>;
     npre(nlen(polynomial) < INT_MAX);
     nvector<T> result(nlen(polynomial) + 1);
@@ -174,9 +172,7 @@ template <nindexed A, class X> auto npoly_evaluate(const A& polynomial, const X&
     return result;
 }
 
-template <nindexed A>
-    requires floating_point<nindex_value_t<const A>> || nexact_field_element<nindex_value_t<const A>>
-auto nfps_inverse(const A& series, int terms) {
+template <nindexed A> auto nfps_inverse(const A& series, int terms) {
     using T = nindex_value_t<const A>;
     npre(terms >= 0);
     if (!terms)
@@ -265,9 +261,7 @@ template <class T> class npoly {
             result[index - 1] = a[index] * T(index);
         return npoly(move(result));
     }
-    npoly integral() const
-        requires floating_point<T> || nexact_field_element<T>
-    {
+    npoly integral() const {
         npre(len() < INT_MAX);
         nvector<T> result(len() + 1, T{});
         for (int index = 0; index < len(); ++index)
@@ -281,27 +275,21 @@ template <class T> class npoly {
             result[index] = a[index];
         return npoly(move(result));
     }
-    npoly inv(int terms) const
-        requires floating_point<T> || nexact_field_element<T>
-    {
+    npoly inv(int terms) const {
         npre(terms >= 0);
         if (!terms)
             return {};
         npre(!empty() && a[0] != T{});
         return npoly(nfps_inverse(a, terms));
     }
-    npoly log(int terms) const
-        requires floating_point<T> || nexact_field_element<T>
-    {
+    npoly log(int terms) const {
         npre(terms >= 0);
         if (!terms)
             return {};
         npre((*this)[0] == T{1});
         return (deriv() * inv(terms)).cut(terms - 1).integral().cut(terms);
     }
-    npoly exp(int terms) const
-        requires floating_point<T> || nexact_field_element<T>
-    {
+    npoly exp(int terms) const {
         npre(terms >= 0);
         if (!terms)
             return {};

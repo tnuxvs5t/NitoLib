@@ -244,6 +244,47 @@ struct nidentity {
     }
 };
 
+template <class T> struct nadd {
+    constexpr T id() const { return T{}; }
+    constexpr T operator()(T left, const T& right) const { return left += right; }
+    constexpr T inv(T value) const { return -value; }
+};
+
+template <class T> struct nmul {
+    constexpr T id() const { return T{1}; }
+    constexpr T operator()(T left, const T& right) const { return left *= right; }
+};
+
+template <class T> struct nxor {
+    constexpr T id() const { return T{}; }
+    constexpr T operator()(T left, const T& right) const { return left ^= right; }
+    constexpr T inv(T value) const { return value; }
+};
+
+template <class T> struct nmin {
+    constexpr T id() const {
+        if constexpr (numeric_limits<T>::has_infinity)
+            return numeric_limits<T>::infinity();
+        else
+            return numeric_limits<T>::max();
+    }
+    constexpr T operator()(const T& left, const T& right) const {
+        return right < left ? right : left;
+    }
+};
+
+template <class T> struct nmax {
+    constexpr T id() const {
+        if constexpr (numeric_limits<T>::has_infinity)
+            return -numeric_limits<T>::infinity();
+        else
+            return numeric_limits<T>::lowest();
+    }
+    constexpr T operator()(const T& left, const T& right) const {
+        return left < right ? right : left;
+    }
+};
+
 class nrng {
     uint64_t state_;
 
@@ -314,220 +355,6 @@ template <class A, class B> struct nhash<pair<A, B>> {
         return size_t(nrng::mix(left ^ (right + 0x9e3779b97f4a7c15ULL)));
     }
 };
-
-// ---- 02_algebra.hpp ----
-enum class nlaw : unsigned {
-    none = 0,
-    associative = 1U << 0,
-    identity = 1U << 1,
-    inverse = 1U << 2,
-    commutative = 1U << 3,
-    idempotent = 1U << 4,
-};
-
-constexpr nlaw operator|(nlaw a, nlaw b) {
-    return nlaw(unsigned(a) | unsigned(b));
-}
-
-constexpr bool nhas_law(nlaw laws, nlaw law) {
-    return (unsigned(laws) & unsigned(law)) == unsigned(law);
-}
-
-template <class O, nlaw Law>
-concept ndeclares = requires {
-    { O::laws } -> convertible_to<nlaw>;
-} && nhas_law(O::laws, Law);
-
-template <class O, class T>
-concept nsemigroup = requires(const O& op, T a, const T& b) {
-    { op(move(a), b) } -> convertible_to<T>;
-} && ndeclares<O, nlaw::associative>;
-
-template <class O, class T>
-concept nmonoid = nsemigroup<O, T> && requires(const O& op) {
-    { op.id() } -> convertible_to<T>;
-} && ndeclares<O, nlaw::identity>;
-
-template <class O, class T>
-concept ngroup = nmonoid<O, T> && requires(const O& op, T a) {
-    { op.inv(move(a)) } -> convertible_to<T>;
-} && ndeclares<O, nlaw::inverse>;
-
-template <class O, class T>
-concept ncommutative_monoid = nmonoid<O, T> && ndeclares<O, nlaw::commutative>;
-
-template <class Add, class Multiply, class T>
-inline constexpr bool nsemiring_laws = false;
-
-template <class Add, class Multiply, class T>
-concept nsemiring = ncommutative_monoid<Add, T> && nmonoid<Multiply, T> &&
-                    nsemiring_laws<remove_cvref_t<Add>, remove_cvref_t<Multiply>, T>;
-
-template <class T>
-inline constexpr bool nadd_group = is_arithmetic_v<T> && (!same_as<remove_cv_t<T>, bool>);
-
-template <class T> inline constexpr bool nexact_field = false;
-
-template <class T>
-concept nexact_field_element = nexact_field<remove_cvref_t<T>> && copyable<remove_cvref_t<T>> &&
-                               requires(remove_cvref_t<T> a, const remove_cvref_t<T>& b) {
-                                   remove_cvref_t<T>{};
-                                   remove_cvref_t<T>{1};
-                                   { a == b } -> convertible_to<bool>;
-                                   { a != b } -> convertible_to<bool>;
-                                   { a * b } -> convertible_to<remove_cvref_t<T>>;
-                                   { a *= b } -> same_as<remove_cvref_t<T>&>;
-                                   { a -= b } -> same_as<remove_cvref_t<T>&>;
-                                   { a / b } -> convertible_to<remove_cvref_t<T>>;
-                                   { -a } -> convertible_to<remove_cvref_t<T>>;
-                               };
-
-template <class A, class S, class F>
-inline constexpr bool naction_laws = false;
-
-template <class A, class S, class F>
-concept naction = copyable<F> && naction_laws<remove_cvref_t<A>, S, F> &&
-                  requires(const A& action, S aggregate, const F& tag, int length) {
-    { action.tag_id() } -> convertible_to<F>;
-    { action.compose(tag, tag) } -> convertible_to<F>;
-    { action.apply(move(aggregate), tag, length) } -> convertible_to<S>;
-};
-
-template <class T> struct nadd {
-    static constexpr nlaw laws = nlaw::associative | nlaw::identity |
-                                 (nadd_group<T> ? nlaw::inverse | nlaw::commutative : nlaw::none);
-    constexpr T id() const
-        requires default_initializable<T>
-    {
-        return T{};
-    }
-    constexpr T operator()(T a, const T& b) const
-        requires requires(T x, const T& y) {
-            { x += y } -> same_as<T&>;
-        }
-    {
-        return a += b;
-    }
-    constexpr T inv(T a) const
-        requires requires(T x) {
-            { -x } -> convertible_to<T>;
-        }
-    {
-        return -a;
-    }
-};
-
-template <class T> struct nmul {
-    static constexpr nlaw laws = nlaw::associative | nlaw::identity;
-    constexpr T id() const
-        requires requires { T{1}; }
-    {
-        return T{1};
-    }
-    constexpr T operator()(T a, const T& b) const
-        requires requires(T x, const T& y) {
-            { x *= y } -> same_as<T&>;
-        }
-    {
-        return a *= b;
-    }
-};
-
-template <class T> struct nxor {
-    static constexpr nlaw laws =
-        nlaw::associative | nlaw::identity | nlaw::inverse | nlaw::commutative;
-    constexpr T id() const
-        requires default_initializable<T>
-    {
-        return T{};
-    }
-    constexpr T operator()(T a, const T& b) const
-        requires requires(T x, const T& y) {
-            { x ^= y } -> same_as<T&>;
-        }
-    {
-        return a ^= b;
-    }
-    constexpr T inv(T a) const { return a; }
-};
-
-template <class T> struct nmin {
-    static constexpr nlaw laws =
-        nlaw::associative | nlaw::identity | nlaw::commutative | nlaw::idempotent;
-    constexpr T id() const
-        requires numeric_limits<T>::is_specialized
-    {
-        if constexpr (numeric_limits<T>::has_infinity)
-            return numeric_limits<T>::infinity();
-        else
-            return numeric_limits<T>::max();
-    }
-    constexpr T operator()(const T& a, const T& b) const
-        requires requires { b < a; }
-    {
-        return b < a ? b : a;
-    }
-};
-
-template <class T> struct nmax {
-    static constexpr nlaw laws =
-        nlaw::associative | nlaw::identity | nlaw::commutative | nlaw::idempotent;
-    constexpr T id() const
-        requires numeric_limits<T>::is_specialized
-    {
-        if constexpr (numeric_limits<T>::has_infinity)
-            return -numeric_limits<T>::infinity();
-        else
-            return numeric_limits<T>::lowest();
-    }
-    constexpr T operator()(const T& a, const T& b) const
-        requires requires { a < b; }
-    {
-        return a < b ? b : a;
-    }
-};
-
-template <class T> struct naddsum_action {
-    constexpr T tag_id() const { return T{}; }
-    constexpr T compose(const T& newer, const T& older) const { return older + newer; }
-    constexpr T apply(T sum, const T& delta, int length) const { return sum + delta * T(length); }
-};
-
-template <integral T>
-    requires(!same_as<remove_cv_t<T>, bool>)
-inline constexpr bool naction_laws<naddsum_action<T>, T, T> = true;
-
-template <integral T>
-    requires(!same_as<remove_cv_t<T>, bool>)
-inline constexpr bool nsemiring_laws<nadd<T>, nmul<T>, T> = true;
-
-template <class T, class O = nmul<T>>
-    requires nmonoid<O, T> && copy_constructible<T>
-constexpr T npow(T base, long long exponent, O operation = {}) {
-    uint64_t remaining;
-    if (exponent < 0) {
-        if constexpr (ngroup<O, T>) {
-            base = operation.inv(move(base));
-            remaining = uint64_t{} - uint64_t(exponent);
-        } else {
-            npre(exponent >= 0);
-            return operation.id();
-        }
-    } else {
-        remaining = uint64_t(exponent);
-    }
-    T result = operation.id();
-    while (remaining) {
-        if (remaining & 1)
-            result = operation(move(result), base);
-        remaining >>= 1;
-        if (remaining) {
-            T copy = base;
-            base = operation(move(copy), base);
-        }
-    }
-    return result;
-}
 
 // ---- 03_ref.hpp ----
 namespace ni {
@@ -1419,24 +1246,10 @@ constexpr auto nwindows(A&& owner, int width, int step = 1) {
 // ---- 05_ast.hpp ----
 enum class nbranch : unsigned char { left, take, right };
 
-namespace ni {
-template <class S, class = void> struct nnode_tag_traits {
-    using type = monostate;
-    static constexpr bool available = false;
-};
-
-template <class S>
-struct nnode_tag_traits<S, void_t<typename S::tag_type>> {
-    using type = typename S::tag_type;
-    static constexpr bool available = true;
-};
-} // namespace ni
-
 template <class S> class nnode {
   public:
     using value_type = typename S::value_type;
     using info_type = typename S::info_type;
-    using tag_type = typename ni::nnode_tag_traits<S>::type;
 
   private:
     const S* owner_ = nullptr;
@@ -1491,12 +1304,7 @@ template <class S> class nnode {
     }
 };
 
-template <class S>
-concept nnode_tree = requires(const S& tree) {
-    { tree.root() } -> same_as<nnode<S>>;
-};
-
-template <nnode_tree S, class F> nnode<S> nwalk(const S& tree, F&& decide) {
+template <class S, class F> nnode<S> nwalk(const S& tree, F&& decide) {
     auto node = tree.root();
     while (node) {
         nbranch branch = invoke(decide, node);
@@ -1511,15 +1319,6 @@ template <nnode_tree S, class F> nnode<S> nwalk(const S& tree, F&& decide) {
     }
     return node;
 }
-
-template <class A, class T>
-concept naugment = copyable<typename A::info_type> &&
-                   requires(const A& augment, const T& value, int count,
-                            typename A::info_type info) {
-                       { augment.id() } -> convertible_to<typename A::info_type>;
-                       { augment.one(value, count) } -> convertible_to<typename A::info_type>;
-                       { augment.op(info, info) } -> convertible_to<typename A::info_type>;
-                   };
 
 template <class T> struct nempty_augment {
     using info_type = monostate;
@@ -1538,30 +1337,7 @@ template <class T, class I> struct nempty_tag {
     constexpr I apply_info(I info, const tag_type&, int) const { return info; }
 };
 
-template <class L, class T, class I>
-inline constexpr bool nnode_action_laws = false;
-
-template <class T, class I>
-inline constexpr bool nnode_action_laws<nempty_tag<T, I>, T, I> = true;
-
-template <class L, class T, class I>
-concept nnode_action = copyable<typename L::tag_type> &&
-                       nnode_action_laws<remove_cvref_t<L>, T, I> &&
-                       requires(const L& action, T value, I info,
-                                const typename L::tag_type& tag) {
-                           { action.tag_id() } -> convertible_to<typename L::tag_type>;
-                           { action.compose(tag, tag) } -> convertible_to<typename L::tag_type>;
-                           { action.apply_value(move(value), tag, 1) } -> convertible_to<T>;
-                           { action.apply_info(move(info), tag, 1) } -> convertible_to<I>;
-                       };
-
-template <class S>
-concept naugmented_tree = nnode_tree<S> && requires(const S& tree) {
-    typename S::augment_type;
-    { tree.augment() } -> same_as<const typename S::augment_type&>;
-};
-
-template <naugmented_tree S, class P> nnode<S> nfirst_prefix(const S& tree, P&& predicate) {
+template <class S, class P> nnode<S> nfirst_prefix(const S& tree, P&& predicate) {
     const auto& augment = tree.augment();
     auto node = tree.root();
     auto prefix = augment.id();
@@ -1580,7 +1356,7 @@ template <naugmented_tree S, class P> nnode<S> nfirst_prefix(const S& tree, P&& 
     return node;
 }
 
-template <naugmented_tree S, class P> nnode<S> nlast_suffix(const S& tree, P&& predicate) {
+template <class S, class P> nnode<S> nlast_suffix(const S& tree, P&& predicate) {
     const auto& augment = tree.augment();
     auto node = tree.root();
     auto suffix = augment.id();
@@ -1606,37 +1382,38 @@ template <naugmented_tree S, class P> nnode<S> nlast_suffix(const S& tree, P&& p
 template <class S> class nseg_node {
   public:
     using aggregate_type = typename S::aggregate_type;
-    using tag_type = typename ni::nnode_tag_traits<S>::type;
+    using state_type = typename S::nseg_state_type;
 
   private:
     const S* owner_ = nullptr;
     int handle_ = 0;
     uint64_t epoch_ = 0;
     long long left_ = 0, right_ = 0;
-    optional<tag_type> carry_;
+    state_type carry_{};
 
     constexpr nseg_node(const S* owner, int handle, uint64_t epoch, long long left,
-                        long long right, optional<tag_type> carry = nullopt)
+                        long long right, state_type carry = {})
         : owner_(owner), handle_(handle), epoch_(epoch), left_(left), right_(right),
           carry_(move(carry)) {}
     friend S;
 
     static constexpr bool has_lazy_view = requires(const S& owner, int handle,
                                                    aggregate_type aggregate,
-                                                   const tag_type& tag, int length) {
+                                                   const typename S::tag_type& tag, int length) {
         { owner.nseg_pending(handle) } -> convertible_to<bool>;
-        { owner.nseg_tag(handle) } -> convertible_to<tag_type>;
-        { owner.nseg_compose(tag, tag) } -> convertible_to<tag_type>;
+        { owner.nseg_tag(handle) } -> convertible_to<typename S::tag_type>;
+        { owner.nseg_compose(tag, tag) } -> convertible_to<typename S::tag_type>;
         { owner.nseg_apply(move(aggregate), tag, length) } -> convertible_to<aggregate_type>;
     };
 
-    optional<tag_type> child_carry() const {
-        optional<tag_type> result = carry_;
+    state_type child_carry() const {
+        state_type result = carry_;
         if constexpr (has_lazy_view) {
+            using tag_type = typename S::tag_type;
             if (owner_->nseg_pending(handle_)) {
                 tag_type local = owner_->nseg_tag(handle_);
-                result = result ? optional<tag_type>(owner_->nseg_compose(*result, local))
-                                : optional<tag_type>(move(local));
+                result = result ? state_type(owner_->nseg_compose(*result, local))
+                                : state_type(move(local));
             }
         }
         return result;
@@ -1703,11 +1480,6 @@ template <class S> class nseg_node {
     }
 };
 
-template <class S>
-concept nseg_tree = requires(const S& tree) {
-    { tree.root() } -> same_as<nseg_node<S>>;
-};
-
 template <class S, class F> nseg_node<S> nseg_walk(nseg_node<S> node, F&& decide) {
     while (node) {
         nbranch branch = invoke(decide, node);
@@ -1723,7 +1495,7 @@ template <class S, class F> nseg_node<S> nseg_walk(nseg_node<S> node, F&& decide
     return node;
 }
 
-template <nseg_tree S, class F> nseg_node<S> nseg_walk(const S& tree, F&& decide) {
+template <class S, class F> nseg_node<S> nseg_walk(const S& tree, F&& decide) {
     return nseg_walk(tree.root(), forward<F>(decide));
 }
 
@@ -3291,8 +3063,7 @@ int nfind_sorted(const A& a, const X& value, C compare, int fallback) {
 
 template <class A, class P = nidentity,
           class O = nadd<ni::nprojected_value_t<const A, P>>>
-    requires nindexed<A> &&
-             nmonoid<O, ni::nprojected_value_t<const A, P>>
+    requires nindexed<A>
 auto nfold(const A& a, int l, int r, O op = {}, P projection = {}) {
     using T = ni::nprojected_value_t<const A, P>;
     npre(0 <= l && l <= r && r <= nlen(a));
@@ -3304,8 +3075,7 @@ auto nfold(const A& a, int l, int r, O op = {}, P projection = {}) {
 
 template <class A, class P = nidentity,
           class O = nadd<ni::nprojected_value_t<const A, P>>>
-    requires nindexed<A> &&
-             nmonoid<O, ni::nprojected_value_t<const A, P>>
+    requires nindexed<A>
 auto nfold(const A& a, O op = {}, P projection = {}) {
     return nfold(a, 0, nlen(a), move(op), move(projection));
 }
@@ -3345,8 +3115,34 @@ int nsort_unique(A&& a, C compare = {}, E equal = {}, P projection = {}) {
 }
 
 // ---- 20_mechanism.hpp ----
+template <class T, class O = nmul<T>>
+constexpr T npow(T base, long long exponent, O operation = {}) {
+    uint64_t remaining;
+    if (exponent < 0) {
+        if constexpr (requires { operation.inv(move(base)); }) {
+            base = operation.inv(move(base));
+            remaining = uint64_t{} - uint64_t(exponent);
+        } else {
+            npre(exponent >= 0);
+            return operation.id();
+        }
+    } else {
+        remaining = uint64_t(exponent);
+    }
+    T result = operation.id();
+    while (remaining) {
+        if (remaining & 1)
+            result = operation(move(result), base);
+        remaining >>= 1;
+        if (remaining) {
+            T copy = base;
+            base = operation(move(copy), base);
+        }
+    }
+    return result;
+}
+
 template <class A, class O = nadd<nindex_value_t<const A>>>
-    requires nmonoid<O, nindex_value_t<const A>>
 auto nscan(const A& a, O op = {}) {
     using T = nindex_value_t<const A>;
     npre(nlen(a) < INT_MAX);
@@ -3359,7 +3155,6 @@ auto nscan(const A& a, O op = {}) {
 }
 
 template <class A, class O = nadd<nindex_value_t<const A>>>
-    requires nmonoid<O, nindex_value_t<const A>>
 auto nsuffix_scan(const A& a, O op = {}) {
     using T = nindex_value_t<const A>;
     npre(nlen(a) < INT_MAX);
@@ -3765,7 +3560,6 @@ template <class S> bool nordered_equal(const S& left, const S& right) {
 
 template <class T, class C = nless<T>, bool Multi = false, class A = nempty_augment<T>,
           class L = nempty_tag<T, typename A::info_type>>
-    requires naugment<A, T> && nnode_action<L, T, typename A::info_type>
 class nset_fhq {
     struct node {
         T value;
@@ -4277,7 +4071,6 @@ class nset_fhq {
 };
 
 template <class T, class C = nless<T>, bool Multi = false, class A = nempty_augment<T>>
-    requires naugment<A, T>
 class nset_splay {
     struct node {
         T value;
@@ -6093,9 +5886,7 @@ auto nruns(A&& source, P together = {}) {
 }
 
 // ---- 30_ds.hpp ----
-template <class T, class O = nadd<T>>
-    requires ncommutative_monoid<O, T>
-class nfenwick {
+template <class T, class O = nadd<T>> class nfenwick {
     [[no_unique_address]] O operation_;
     int size_ = 0;
     vector<T> tree_;
@@ -6146,16 +5937,12 @@ class nfenwick {
         return result;
     }
 
-    T fold(int left, int right) const
-        requires ngroup<O, T>
-    {
+    T fold(int left, int right) const {
         npre(0 <= left && left <= right && right <= size_);
         return operation_(operation_.inv(prefix(left)), prefix(right));
     }
 
-    T get(int index) const
-        requires ngroup<O, T>
-    {
+    T get(int index) const {
         npre(0 <= index && index < size_);
         return fold(index, index + 1);
     }
@@ -6179,9 +5966,7 @@ class nfenwick {
     }
 };
 
-template <class T, class O = nadd<T>>
-    requires nmonoid<O, T>
-class nseg {
+template <class T, class O = nadd<T>> class nseg {
     [[no_unique_address]] O operation_;
     int size_ = 0, base_ = 1;
     vector<T> tree_;
@@ -6201,6 +5986,7 @@ class nseg {
 
   public:
     using aggregate_type = T;
+    using nseg_state_type = monostate;
     using node_view = nseg_node<nseg>;
 
     nseg() : tree_(2, operation_.id()) {}
@@ -6308,8 +6094,13 @@ class nseg {
 template <class T, class O = nadd<T>> using nseg_iter = nseg<T, O>;
 
 // ---- 31_lazy.hpp ----
+template <class T> struct naddsum_action {
+    constexpr T tag_id() const { return T{}; }
+    constexpr T compose(const T& newer, const T& older) const { return older + newer; }
+    constexpr T apply(T sum, const T& delta, int length) const { return sum + delta * T(length); }
+};
+
 template <class S, class F, class M, class A>
-    requires nmonoid<M, S> && naction<A, S, F>
 class nlazyseg {
     [[no_unique_address]] M operation_;
     [[no_unique_address]] A action_;
@@ -6406,6 +6197,7 @@ class nlazyseg {
   public:
     using aggregate_type = S;
     using tag_type = F;
+    using nseg_state_type = optional<F>;
     using node_view = nseg_node<nlazyseg>;
 
     nlazyseg()
@@ -6535,9 +6327,7 @@ class nlazyseg {
 template <class T> using nlazy_addsum = nlazyseg<T, T, nadd<T>, naddsum_action<T>>;
 
 // ---- 32_dsu_queue.hpp ----
-template <class T, class O = nadd<T>>
-    requires nmonoid<O, T> && copyable<T>
-class nqueue_agg {
+template <class T, class O = nadd<T>> class nqueue_agg {
     struct node {
         T value;
         T aggregate;
@@ -6709,9 +6499,7 @@ class nrollback_dsu {
 using ndsu_rollback = nrollback_dsu;
 
 // ---- 33_persistent.hpp ----
-template <class T, class O = nadd<T>>
-    requires nmonoid<O, T> && copyable<T>
-class npersistent_seg {
+template <class T, class O = nadd<T>> class npersistent_seg {
     struct node {
         T aggregate;
         int left = 0, right = 0;
@@ -6780,6 +6568,7 @@ class npersistent_seg {
 
   public:
     using aggregate_type = T;
+    using nseg_state_type = monostate;
     using node_view = nseg_node<npersistent_seg>;
 
     explicit npersistent_seg(int n = 0, O operation = {})
@@ -6892,9 +6681,7 @@ class npersistent_seg {
 // Dynamic (open-point) segment trees.  Nodes are allocated only on paths that
 // are written; absent children represent the operation identity.
 
-template <class T, class O = nadd<T>>
-    requires nmonoid<O, T>
-class ndynamic_seg {
+template <class T, class O = nadd<T>> class ndynamic_seg {
     struct node {
         T aggregate;
         int left = 0, right = 0;
@@ -6986,6 +6773,7 @@ class ndynamic_seg {
   public:
     using value_type = T;
     using aggregate_type = T;
+    using nseg_state_type = monostate;
     using node_view = nseg_node<ndynamic_seg>;
 
     ndynamic_seg() = default;
@@ -7081,9 +6869,7 @@ class ndynamic_seg {
     int nseg_right(int handle) const noexcept { return handle ? nodes_[size_t(handle)].right : 0; }
 };
 
-template <class S, class F, class M, class A>
-    requires nmonoid<M, S> && naction<A, S, F>
-class ndynamic_lazyseg {
+template <class S, class F, class M, class A> class ndynamic_lazyseg {
     struct node {
         S aggregate;
         int left = 0, right = 0;
@@ -7219,6 +7005,7 @@ class ndynamic_lazyseg {
     using value_type = S;
     using aggregate_type = S;
     using tag_type = F;
+    using nseg_state_type = optional<F>;
     using node_view = nseg_node<ndynamic_lazyseg>;
 
     ndynamic_lazyseg()
@@ -7521,9 +7308,7 @@ void nrun_mo(const Q& queries, int universe, Add&& add, Remove&& remove, Answer&
 }
 
 // ---- 36_classic.hpp ----
-template <class T, class O = nmin<T>>
-    requires nmonoid<O, T> && copyable<T>
-class nsparse {
+template <class T, class O = nmin<T>> class nsparse {
     nvector<T> values_;
     nvector<nvector<T>> table_;
     [[no_unique_address]] O operation_{};
@@ -10284,23 +10069,6 @@ template <uint64_t Modulus> using nmod_static = nmodint<Modulus>;
 template <uint64_t Modulus> using nmod = nmodint<Modulus>;
 template <int Tag = 0> using ndmod = nmod_dynamic<Tag>;
 
-template <int Tag> inline constexpr bool nadd_group<nmod_dynamic<Tag>> = true;
-template <int Tag>
-inline constexpr bool nsemiring_laws<nadd<nmod_dynamic<Tag>>, nmul<nmod_dynamic<Tag>>,
-                                     nmod_dynamic<Tag>> = true;
-template <int Tag>
-inline constexpr bool naction_laws<naddsum_action<nmod_dynamic<Tag>>, nmod_dynamic<Tag>,
-                                   nmod_dynamic<Tag>> = true;
-
-template <uint64_t Modulus> inline constexpr bool nadd_group<nmodint<Modulus>> = true;
-template <uint64_t Modulus> inline constexpr bool nexact_field<nmodint<Modulus>> = nisprime(Modulus);
-template <uint64_t Modulus>
-inline constexpr bool nsemiring_laws<nadd<nmodint<Modulus>>, nmul<nmodint<Modulus>>,
-                                     nmodint<Modulus>> = true;
-template <uint64_t Modulus>
-inline constexpr bool naction_laws<naddsum_action<nmodint<Modulus>>, nmodint<Modulus>,
-                                   nmodint<Modulus>> = true;
-
 template <class Mint> class ncomb {
     nvector<Mint> factorial_, inverse_factorial_;
 
@@ -10578,7 +10346,6 @@ concept nmatrix_like = requires(const A& matrix, int row, int column) {
 };
 
 template <class T, class Add = nadd<T>, class Mul = nmul<T>>
-    requires nsemiring<Add, Mul, T>
 nmatrix<T> nmatrix_identity(int n, Add add = {}, Mul multiply = {}) {
     npre(n >= 0);
     nmatrix<T> result(n, n, add.id());
@@ -10589,8 +10356,7 @@ nmatrix<T> nmatrix_identity(int n, Add add = {}, Mul multiply = {}) {
 
 template <nmatrix_like A, nmatrix_like B, class Add = nadd<remove_cvref_t<decltype(declval<const A&>()(0, 0))>>,
           class Mul = nmul<remove_cvref_t<decltype(declval<const A&>()(0, 0))>>>
-    requires nsemiring<Add, Mul, remove_cvref_t<decltype(declval<const A&>()(0, 0))>> &&
-             same_as<remove_cvref_t<decltype(declval<const A&>()(0, 0))>,
+    requires same_as<remove_cvref_t<decltype(declval<const A&>()(0, 0))>,
                      remove_cvref_t<decltype(declval<const B&>()(0, 0))>>
 auto nmatmul(const A& a, const B& b, Add add = {}, Mul multiply = {}) {
     using T = remove_cvref_t<decltype(a(0, 0))>;
@@ -10604,7 +10370,6 @@ auto nmatmul(const A& a, const B& b, Add add = {}, Mul multiply = {}) {
 }
 
 template <class T, class Add = nadd<T>, class Mul = nmul<T>>
-    requires nsemiring<Add, Mul, T>
 nmatrix<T> nmatpow(nmatrix<T> base, uint64_t exponent, Add add = {}, Mul multiply = {}) {
     npre(base.rows() == base.cols());
     auto result = nmatrix_identity<T>(base.rows(), add, multiply);
@@ -10618,9 +10383,7 @@ nmatrix<T> nmatpow(nmatrix<T> base, uint64_t exponent, Add add = {}, Mul multipl
     return result;
 }
 
-template <class T, class Add = nadd<T>, class Mul = nmul<T>>
-    requires nmonoid<Add, T> && nmonoid<Mul, T>
-class nmat : public nmatrix<T> {
+template <class T, class Add = nadd<T>, class Mul = nmul<T>> class nmat : public nmatrix<T> {
     using base = nmatrix<T>;
 
   public:
@@ -10690,7 +10453,7 @@ class nmat : public nmatrix<T> {
     }
 };
 
-template <nexact_field_element T> int nrref(nmatrix<T>& matrix, nvector<int>* pivot_columns = nullptr) {
+template <class T> int nrref(nmatrix<T>& matrix, nvector<int>* pivot_columns = nullptr) {
     if (pivot_columns)
         pivot_columns->clear();
     int row = 0;
@@ -10719,7 +10482,7 @@ template <nexact_field_element T> int nrref(nmatrix<T>& matrix, nvector<int>* pi
     return row;
 }
 
-template <nexact_field_element T> T ndeterminant(nmatrix<T> matrix) {
+template <class T> T ndeterminant(nmatrix<T> matrix) {
     npre(matrix.rows() == matrix.cols());
     T determinant{1};
     for (int column = 0; column < matrix.cols(); ++column) {
@@ -10744,11 +10507,11 @@ template <nexact_field_element T> T ndeterminant(nmatrix<T> matrix) {
     return determinant;
 }
 
-template <nexact_field_element T> T ndet(nmatrix<T> matrix) {
+template <class T> T ndet(nmatrix<T> matrix) {
     return ndeterminant(move(matrix));
 }
 
-template <nexact_field_element T> nmaybe<nmatrix<T>> ninverse(nmatrix<T> matrix) {
+template <class T> nmaybe<nmatrix<T>> ninverse(nmatrix<T> matrix) {
     npre(matrix.rows() == matrix.cols());
     int size = matrix.rows();
     nmatrix<T> inverse(size, size, T{});
@@ -10782,19 +10545,19 @@ template <nexact_field_element T> nmaybe<nmatrix<T>> ninverse(nmatrix<T> matrix)
     return inverse;
 }
 
-template <nexact_field_element T>
+template <class T>
 nmatrix<T> ninverse(nmatrix<T> matrix, nmatrix<T> fallback) {
     auto result = ninverse(move(matrix));
     return result ? move(result.val()) : move(fallback);
 }
 
-template <nexact_field_element T, class Add, class Mul>
+template <class T, class Add, class Mul>
 T ndet(nmat<T, Add, Mul> matrix) {
     nmatrix<T> storage = move(matrix);
     return ndeterminant(move(storage));
 }
 
-template <nexact_field_element T, class Add, class Mul>
+template <class T, class Add, class Mul>
 nmaybe<nmat<T, Add, Mul>> ninverse(nmat<T, Add, Mul> matrix) {
     nmatrix<T> storage = move(matrix);
     auto result = ninverse(move(storage));
@@ -10803,7 +10566,7 @@ nmaybe<nmat<T, Add, Mul>> ninverse(nmat<T, Add, Mul> matrix) {
     return nmat<T, Add, Mul>(move(result.val()));
 }
 
-template <nexact_field_element T, class Add, class Mul>
+template <class T, class Add, class Mul>
 nmat<T, Add, Mul> ninverse(nmat<T, Add, Mul> matrix, nmat<T, Add, Mul> fallback) {
     auto result = ninverse(move(matrix));
     return result ? move(result.val()) : move(fallback);
@@ -10817,7 +10580,7 @@ template <class T> struct nlinear_solution {
     nvector<nvector<T>> basis;
 };
 
-template <nexact_field_element T, nindexed B>
+template <class T, nindexed B>
 nmaybe<nlinear_solution<T>> nlinear_solve(nmatrix<T> coefficients, const B& values) {
     npre(coefficients.rows() == nlen(values));
     int equations = coefficients.rows(), variables = coefficients.cols();
@@ -10859,7 +10622,7 @@ nmaybe<nlinear_solution<T>> nlinear_solve(nmatrix<T> coefficients, const B& valu
     return result;
 }
 
-template <nexact_field_element T, nindexed B>
+template <class T, nindexed B>
 nlinear_solution<T> ngauss(nmatrix<T> coefficients, const B& values) {
     npre(coefficients.rows() == nlen(values));
     int equations = coefficients.rows(), variables = coefficients.cols(), row = 0;
@@ -10918,7 +10681,7 @@ nlinear_solution<T> ngauss(nmatrix<T> coefficients, const B& values) {
     return result;
 }
 
-template <nexact_field_element T, class Add, class Mul, nindexed B>
+template <class T, class Add, class Mul, nindexed B>
 nlinear_solution<T> ngauss(nmat<T, Add, Mul> coefficients, const B& values) {
     nmatrix<T> storage = move(coefficients);
     return ngauss(move(storage), values);
@@ -11031,10 +10794,10 @@ template <nindexed A, nindexed B> auto nconv_naive(const A& a, const B& b) {
 
 template <nindexed A, nindexed B>
     requires ni::nstatic_modular<nindex_value_t<const A>> &&
-             nexact_field<nindex_value_t<const A>> &&
              same_as<nindex_value_t<const A>, nindex_value_t<const B>>
 auto nconv_ntt(const A& a, const B& b) {
     using mint = nindex_value_t<const A>;
+    npre(nisprime(mint::mod()));
     if (!nlen(a) || !nlen(b))
         return nvector<mint>{};
     npre(nlen(a) <= INT_MAX - nlen(b) + 1);
@@ -11057,7 +10820,7 @@ auto nconv_ntt(const A& a, const B& b) {
 template <nindexed A, nindexed B> auto nconv_auto(const A& a, const B& b) {
     using T = nindex_value_t<const A>;
     static_assert(same_as<T, nindex_value_t<const B>>);
-    if constexpr (ni::nstatic_modular<T> && nexact_field<T>) {
+    if constexpr (ni::nstatic_modular<T>) {
         if (nlen(a) && nlen(b) && min(nlen(a), nlen(b)) >= 32) {
             npre(nlen(a) <= INT_MAX - nlen(b) + 1);
             long long size = 1LL * nlen(a) + nlen(b) - 1;
@@ -11082,9 +10845,7 @@ template <nindexed A> auto npoly_derivative(const A& polynomial) {
     return result;
 }
 
-template <nindexed A>
-    requires floating_point<nindex_value_t<const A>> || nexact_field_element<nindex_value_t<const A>>
-auto npoly_integral(const A& polynomial) {
+template <nindexed A> auto npoly_integral(const A& polynomial) {
     using T = nindex_value_t<const A>;
     npre(nlen(polynomial) < INT_MAX);
     nvector<T> result(nlen(polynomial) + 1);
@@ -11101,9 +10862,7 @@ template <nindexed A, class X> auto npoly_evaluate(const A& polynomial, const X&
     return result;
 }
 
-template <nindexed A>
-    requires floating_point<nindex_value_t<const A>> || nexact_field_element<nindex_value_t<const A>>
-auto nfps_inverse(const A& series, int terms) {
+template <nindexed A> auto nfps_inverse(const A& series, int terms) {
     using T = nindex_value_t<const A>;
     npre(terms >= 0);
     if (!terms)
@@ -11192,9 +10951,7 @@ template <class T> class npoly {
             result[index - 1] = a[index] * T(index);
         return npoly(move(result));
     }
-    npoly integral() const
-        requires floating_point<T> || nexact_field_element<T>
-    {
+    npoly integral() const {
         npre(len() < INT_MAX);
         nvector<T> result(len() + 1, T{});
         for (int index = 0; index < len(); ++index)
@@ -11208,27 +10965,21 @@ template <class T> class npoly {
             result[index] = a[index];
         return npoly(move(result));
     }
-    npoly inv(int terms) const
-        requires floating_point<T> || nexact_field_element<T>
-    {
+    npoly inv(int terms) const {
         npre(terms >= 0);
         if (!terms)
             return {};
         npre(!empty() && a[0] != T{});
         return npoly(nfps_inverse(a, terms));
     }
-    npoly log(int terms) const
-        requires floating_point<T> || nexact_field_element<T>
-    {
+    npoly log(int terms) const {
         npre(terms >= 0);
         if (!terms)
             return {};
         npre((*this)[0] == T{1});
         return (deriv() * inv(terms)).cut(terms - 1).integral().cut(terms);
     }
-    npoly exp(int terms) const
-        requires floating_point<T> || nexact_field_element<T>
-    {
+    npoly exp(int terms) const {
         npre(terms >= 0);
         if (!terms)
             return {};

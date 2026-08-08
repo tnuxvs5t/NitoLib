@@ -28,7 +28,7 @@ another Nitori reference document or header snapshot.
 2. Owning containers own storage. Views map an integer position to a real reference.
 3. Reject immediate dangling borrows from temporary owners.
 4. Algorithms depend on the minimum capability, not a concrete backend or STL iterator.
-5. Declare algebraic laws explicitly; syntax cannot prove laws.
+5. Put algebraic/action laws in local contract comments; syntax cannot prove them.
 6. Preserve ordered noncommutative folds and action composition order.
 7. checked and unsafe have identical semantics on valid inputs.
 8. Invalid input is never silently clamped into a different operation.
@@ -39,7 +39,7 @@ another Nitori reference document or header snapshot.
 ## Dependency direction
 
 ```text
-contract/base → algebra → borrowed reference topology → owning storage
+contract/base/operations → borrowed reference topology → owning storage
 → generic mechanisms → data structures/domain algorithms → I/O
 ```
 
@@ -79,7 +79,7 @@ Tests compile through Linux `memfd`; do not leave build binaries in the reposito
 [ ] owner/view lifetime is valid
 [ ] [l,r), empty range and npos behavior are explicit
 [ ] integer width and sentinel arithmetic are safe
-[ ] algebra/action laws are true, not merely declared
+[ ] local algebra/action contracts are stated and true
 [ ] ordered operations preserve left-to-right meaning
 [ ] complexity matches the implementation and total constraints
 [ ] fixed and randomized tests cover the failure mode

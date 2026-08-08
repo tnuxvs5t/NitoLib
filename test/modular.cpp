@@ -2,8 +2,6 @@
 
 int main() {
     using mint = nmodint<1000000007>;
-    static_assert(ncommutative_monoid<nadd<mint>, mint>);
-    static_assert(naction<naddsum_action<mint>, mint, mint>);
     mint a = -2, b = 5;
     ntest(a.val() == 1000000005 && (a + b).val() == 3);
     ntest((b - a).val() == 7 && (a * b).val() == 999999997);

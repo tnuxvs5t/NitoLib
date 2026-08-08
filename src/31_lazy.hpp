@@ -1,5 +1,10 @@
+template <class T> struct naddsum_action {
+    constexpr T tag_id() const { return T{}; }
+    constexpr T compose(const T& newer, const T& older) const { return older + newer; }
+    constexpr T apply(T sum, const T& delta, int length) const { return sum + delta * T(length); }
+};
+
 template <class S, class F, class M, class A>
-    requires nmonoid<M, S> && naction<A, S, F>
 class nlazyseg {
     [[no_unique_address]] M operation_;
     [[no_unique_address]] A action_;
@@ -96,6 +101,7 @@ class nlazyseg {
   public:
     using aggregate_type = S;
     using tag_type = F;
+    using nseg_state_type = optional<F>;
     using node_view = nseg_node<nlazyseg>;
 
     nlazyseg()

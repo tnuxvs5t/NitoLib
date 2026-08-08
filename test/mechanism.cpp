@@ -1,7 +1,6 @@
 #include "common.hpp"
 
 struct nconcat_mechanism {
-    static constexpr nlaw laws = nlaw::associative | nlaw::identity;
     string id() const { return {}; }
     string operator()(string a, const string& b) const { return a += b; }
 };

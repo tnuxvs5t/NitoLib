@@ -17,9 +17,6 @@ struct ntag_add_action {
     }
 };
 
-template <>
-inline constexpr bool nnode_action_laws<ntag_add_action, int, long long> = true;
-
 using tagged_tree =
     nset_fhq<int, nless<int>, true, ntag_sum_augment, ntag_add_action>;
 

@@ -1,6 +1,4 @@
-template <class T, class O = nadd<T>>
-    requires nmonoid<O, T> && copyable<T>
-class nqueue_agg {
+template <class T, class O = nadd<T>> class nqueue_agg {
     struct node {
         T value;
         T aggregate;

@@ -53,7 +53,7 @@ reference 中复制本文或头文件。公共签名与真实行为以 checked �
 
 ### 开发 Nitori：再读这些
 
-第 3、5、9、18、19、20、21 章面向 profile、代数定律、AST、测试、扩展、迁移和
+第 3、5、9、18、19、20、21 章面向 profile、操作契约、AST、测试、扩展、迁移和
 公共符号审计。普通做题不需要先读完。
 
 ---
@@ -64,7 +64,7 @@ reference 中复制本文或头文件。公共签名与真实行为以 checked �
 2. [不可违反的全局约定](#2-不可违反的全局约定)
 3. [checked 与 unsafe](#3-checked-与-unsafe)
 4. [基础值、哨兵和可选结果](#4-基础值哨兵和可选结果)
-5. [代数操作包与定律](#5-代数操作包与定律)
+5. [操作对象与隐形契约](#5-操作对象与隐形契约)
 6. [统一 Range/View/Projection 与离散函数](#6-统一-rangeviewprojection-与离散函数)
 7. [枚举协议与组合视图](#7-枚举协议与组合视图)
 8. [拥有型序列与通用算法](#8-拥有型序列与通用算法)
@@ -613,57 +613,21 @@ nseed(seed);           // 同时重置 nrng_global 和默认 nhash salt
 
 ---
 
-## 5. 代数操作包与定律
+## 5. 操作对象与隐形契约
 
-### 5.1 定律位
+Nitori 不再维护注册数学定律的 `concept/trait` 系统。模板只保留真正影响接口选择、
+生命周期和存储布局的能力检查；结合、单位、交换、可逆、分配和数值域等性质由调用者
+在使用点负责。这样可以减少“声明通过但证明仍在库外”的双重维护负担。
 
-```cpp
-enum class nlaw {
-    none, associative, identity, inverse, commutative, idempotent
-};
-```
+### 5.1 内建操作
 
-使用 `operator|` 组合，使用 `nhas_law(laws, law)` 查询。
-
-概念：
-
-| Concept | 必要接口与声明 |
-|---|---|
-| `ndeclares<O,Law>` | `O::laws` 包含 `Law` |
-| `nsemigroup<O,T>` | 结合律；`op(T,const T&) -> T` |
-| `nmonoid<O,T>` | 半群 + `op.id() -> T` |
-| `ngroup<O,T>` | 幺半群 + `op.inv(T) -> T` |
-| `ncommutative_monoid<O,T>` | 幺半群 + 交换律声明 |
-| `nsemiring<Add,Mul,T>` | 两个接口合格的幺半群 + 显式 `nsemiring_laws` 声明 |
-| `nexact_field_element<T>` | `nexact_field<T>` 显式为真，且具备精确域运算接口 |
-| `naction<A,S,F>` | action 接口 + 显式 `naction_laws<A,S,F>` 声明 |
-
-`nexact_field<T>` 默认是 `false`。素数模 `nmodint<M>` 自动声明为真；合数模和普通
-整数不会冒充域。自定义有理数等精确域类型可显式特化：
-
-```cpp
-template<> inline constexpr bool nexact_field<rational> = true;
-```
-
-这仍是调用者的数学声明：concept 能检查运算接口，不能替你证明域公理。
-
-`nsemiring_laws<Add,Mul,T>` 显式声明加法交换、乘法结合、分配律与加法零吸收。
-内建非 bool 整数 `nadd/nmul`（在调用者保证不发生有符号溢出的域内）和所有
-`nmodint<M>` 默认声明；浮点与自定义操作默认不声明。自定义 min-plus 等半环应特化：
-
-```cpp
-template<> inline constexpr bool nsemiring_laws<my_add, my_multiply, state> = true;
-```
-
-### 5.2 内建操作
-
-| 操作包 | 单位元 | 声明的定律 |
+| 操作包 | 单位元 | 适用约定 |
 |---|---|---|
-| `nadd<T>` | `T{}` | 结合、单位；当 `nadd_group<T>` 为真时再声明逆与交换（`bool` 排除） |
-| `nmul<T>` | `T{1}` | 结合、单位 |
-| `nxor<T>` | `T{}` | 结合、单位、逆、交换 |
-| `nmin<T>` | 类型的真实上界；浮点为 `+infinity` | 结合、单位、交换、幂等 |
-| `nmax<T>` | 类型的真实下界；浮点为 `-infinity` | 结合、单位、交换、幂等 |
+| `nadd<T>` | `T{}` | 加法应结合；需要逆元的接口还要提供 `inv` |
+| `nmul<T>` | `T{1}` | 乘法应结合且单位为 `T{1}` |
+| `nxor<T>` | `T{}` | 异或的单位和自逆性质 |
+| `nmin<T>` | 类型的真实上界；浮点为 `+infinity` | 需要全序、幂等和单位元 |
+| `nmax<T>` | 类型的真实下界；浮点为 `-infinity` | 需要全序、幂等和单位元 |
 
 `ninf/nninf` 是为安全加减保留余量的算法哨兵，不能充当 `nmin/nmax` 的数学单位元；
 两者故意是不同概念。
@@ -676,15 +640,12 @@ compose(newer, older)          // older 后执行 newer
 apply(sum, delta, length)      // sum + delta*length
 ```
 
-内建 action 定律只为非 `bool` 整数和 `nmodint<M>` 声明；有符号整数仍要求调用者
-保证运算不溢出。其他标量即使接口可编译，也必须由调用者显式声明
-`naction_laws`，不能从运算符长相推断代数定律。
+有符号整数仍要求调用者保证运算不溢出；其他标量也必须在使用点确认这些等式。
 
-### 5.3 自定义非交换幺半群
+### 5.2 自定义非交换操作
 
 ```cpp
 struct nconcat {
-    static constexpr nlaw laws = nlaw::associative | nlaw::identity;
     string id() const { return {}; }
     string operator()(string a, const string& b) const { return a += b; }
 };
@@ -693,7 +654,8 @@ nseg<string, nconcat> seg(nvector<string>{"a", "bc", "d"});
 assert(seg.fold(0, 3) == "abcd");
 ```
 
-`nseg` 和 `nfold` 保持顺序，不假设交换。谎报定律会使算法错误；concept 不会替你证明。
+`nseg` 和 `nfold` 保持顺序，不假设交换。`id()` 必须是真正的空区间值，二元操作必须
+结合；这些是实现无法从 C++ 类型系统恢复的隐形契约。
 
 通用幺半群快速幂：
 
@@ -704,7 +666,7 @@ auto x = npow(base, exponent, operation);
 非负指数只要求幺半群；负指数要求 `operation` 另外声明并实现群逆元。复杂度
 `O(log |exponent|)` 次合并，`LLONG_MIN` 也不会因取负溢出。
 
-### 5.4 自定义 lazy action
+### 5.3 自定义 lazy action
 
 作用协议固定为：
 
@@ -715,12 +677,11 @@ struct action {
     S apply(S aggregate, const F& tag, int length) const;
 };
 
-template<> inline constexpr bool naction_laws<action, S, F> = true;
 ```
 
 `compose(newer, older)` 表示原有 `older` 后再追加 `newer`。顺序错误是 lazy segment
-tree 最常见的隐蔽 WA。`naction_laws` 声明 tag 单位、compose 结合与单位，以及
-`apply` 对聚合和区间拼接的兼容性；concept 只能检查声明和接口，不能证明这些等式。
+tree 最常见的隐蔽 WA。调用者必须保证 tag 单位、compose 的结合与单位，以及 `apply`
+对聚合和区间拼接的兼容性；接口检查不能证明这些等式。
 
 ---
 
@@ -1687,7 +1648,7 @@ auto root = t.root();
 root.info(); root.len(); root.left(); root.right();
 ```
 
-`naugment<A,T>` 检查 `id/one/op` 接口；`nnode<S>` 是只读快照，暴露 `val/count/len/info`
+`A` 需要提供 `info_type`、`id/one/op`；`nnode<S>` 是只读快照，暴露 `val/count/len/info`
 和左右子树。`nwalk(tree,decide)` 以 `nbranch::left/take/right` 实现自定义下降；
 `nfirst_prefix`/`nlast_suffix` 依赖 augmentation 做前缀/后缀单调定位。对应成员
 `walk/first_prefix/last_suffix` 只是短桥。
@@ -1705,9 +1666,6 @@ struct add_tag {
     }
 };
 
-template<>
-inline constexpr bool nnode_action_laws<add_tag, int, long long> = true;
-
 using tagged_bag = nset_fhq<int, nless<int>, true, sum_augment, add_tag>;
 tagged_bag t(nless<int>{}, sum_augment{}, add_tag{});
 t.apply(tag);                 // 整棵树
@@ -1716,12 +1674,11 @@ t.apply(node, tag);           // AST 选中的子树
 t.root().tag();               // 当前节点尚未下推的 tag
 ```
 
-`nnode_action<L,T,I>` 检查 `tag_id/compose/apply_value/apply_info` 以及显式的
-`nnode_action_laws<L,T,I>` 定律声明；
-`nempty_tag<T,I>` 是默认 no-op action。`compose(newer,older)` 仍表示先 `older` 后 `newer`。
+`L` 需要提供 `tag_type`、`tag_id/compose/apply_value/apply_info`；`nempty_tag<T,I>` 是
+默认 no-op action。`compose(newer,older)` 仍表示先 `older` 后 `newer`。
 `apply_value` 的第三个参数是当前键的重数，`apply_info` 的第三个参数是整棵子树长度。
-该定律位声明 tag 单位、compose 结合，以及逐键作用与整棵子树信息作用相容；concept
-只能要求声明存在，不能替调用者证明这些等式。
+调用者必须保证 tag 单位、compose 结合，以及逐键作用与整棵子树信息作用相容；这些
+等式不能从接口形状推出。
 
 这是 **FHQ 有序树** 的 lazy action，不是隐式序列 treap。调用者必须保证把 tag 作用于所选
 子树后，比较器下的中序顺序和等价类仍然合法；整树平移是典型合法例子，对任意局部子树
@@ -1734,7 +1691,8 @@ t.root().tag();               // 当前节点尚未下推的 tag
 节点快照携带 epoch。任何可能改变拓扑的操作都会令旧快照 `current()==false`；尤其
 splay 的 `has/get/rank/...` 也可能旋转，不能把 `nnode` 跨下一次树操作保存。FHQ 的纯
 查询当前不改拓扑，但公共安全规则仍是“用完即弃”。`nempty_augment<T>` 是默认空信息，
-`nnode_tree`/`naugmented_tree` 则允许上层算法约束这套 AST 能力，而不绑定某个树后端。
+`nwalk`、`nfirst_prefix` 和 `nlast_suffix` 直接按调用点所需接口实例化，不再额外注册 AST
+concept；因此自定义 owner 可以自由调度节点，但必须自己满足上述接口和聚合单调性。
 
 ---
 
@@ -1753,8 +1711,8 @@ auto found = nseg_walk(seg, decide);             // 从 root() 调度
 auto old_found = nseg_walk(p.root(version), decide); // 从指定节点调度
 ```
 
-`decide(node)` 返回 `nbranch::left/take/right`。`nseg_tree<S>` 表示具有默认 `root()` 的
-区间树能力。固定树和持久化树的视图区间是内部 `[0,bit_ceil(n))`，`n` 以后的叶子为单位元；
+`decide(node)` 返回 `nbranch::left/take/right`。固定树和持久化树的视图区间是内部
+`[0,bit_ceil(n))`，`n` 以后的叶子为单位元；
 动态树的视图区间就是构造时给出的坐标域。普通/lazy/dynamic 树修改后旧视图 epoch 失效；
 持久化节点不可变，所以旧版本视图保持有效。带 lazy 的节点额外有 `tag()`，它返回当前
 节点尚未下推的表示 tag，而不是从根到节点的累计作用；沿 `left()/right()` 取得的子视图会
@@ -1763,7 +1721,7 @@ auto old_found = nseg_walk(p.root(version), decide); // 从指定节点调度
 
 ### 10.1 Fenwick：`nfenwick<T,O>`
 
-要求 `O` 声明交换幺半群；区间查询和单点读取另要求群。
+`O` 应满足交换结合和单位元；区间查询和单点读取还要求 `O::inv` 存在并实现真正的逆。
 
 ```cpp
 nfenwick<long long> f(n);
@@ -1882,7 +1840,7 @@ ndynamic_addsum<long long> sum(lo, hi); // 区间加、区间和
 ```
 
 更新、查询均为 `O(log W)`；查询通过携带未下推 tag 计算，不为缺失子树开点。更新在下推
-已有 tag 时可能建立两个孩子，总空间仍为 `O(q log W)`。由于统一 `naction` 的 length 是
+已有 tag 时可能建立两个孩子，总空间仍为 `O(q log W)`。由于统一 action 的 length 是
 `int`，lazy 动态树要求 `hi-lo <= INT_MAX`；坐标本身仍可为 `long long`。
 
 ### 10.8 Wavelet Matrix：`nwavelet<T>`
@@ -2250,7 +2208,7 @@ mint::mod();
 ```
 
 除法要求被除数存在乘法逆元；模数不必为质数，但 composite modulus 下并非每个非零值
-都可逆。加法群定律已向 `nadd` 声明。
+都可逆。`nadd` 的逆元实现只在模数或值域允许时有意义；调用者必须确认实际运算不会溢出。
 
 别名：
 
@@ -2264,8 +2222,8 @@ ndmod<Tag>::setmod(modulus);
 ```
 
 每个动态 `Tag` 拥有独立的进程内模数，所有该类型对象共享它；`setmod` 要求正模数且
-不应在已有对象仍参与计算时改模。动态模无法在编译期证明模数为质数，因此不会声明
-`nexact_field`，不能进入要求精确域的高斯消元/NTT 接口。
+不应在已有对象仍参与计算时改模。动态模的质数性只能在运行时确认；需要域运算的算法
+必须由调用者先检查模数和可逆性。
 
 ### 12.3 阶乘组合表 `ncomb<Mint>`
 
@@ -2400,8 +2358,8 @@ auto p = nmatpow(square, exponent, add, multiply);
 ```
 
 默认使用 `nadd<T>` 与 `nmul<T>`。乘法要求维度相容；朴素乘法 `O(r*k*c)`，快速幂
-为 `O(n^3 log exponent)`。操作包必须满足 `nsemiring`，包括显式的跨操作定律声明；
-concept 仍不能替调用者证明声明为真。
+为 `O(n^3 log exponent)`。操作包必须满足矩阵乘法所需的单位、结合、分配和零吸收等
+跨操作定律；库不再要求额外的命名 concept 或 trait 声明。
 
 `nmat<T,Add,Mul>` 是建立在同一 `nmatrix` 存储上的代数绑定 facade，恢复 v1 的短代码：
 
@@ -2416,9 +2374,7 @@ a.get(row, col, fallback);
 ```
 
 `nmatrix` 负责拥有与 view 拓扑，`nmat` 负责把固定 `Add/Mul` 绑定进运算符；两者不是
-互相替代的重复矩阵。`nmat` 的 concept 只要求两个幺半群，调用者仍必须保证矩阵乘法
-真正需要的分配律、零吸收等跨操作定律；需要编译期显式审计时使用
-`nmatmul/nmatpow` 的 `nsemiring` 接口。
+互相替代的重复矩阵。调用者仍必须保证矩阵乘法真正需要的分配律、零吸收等跨操作定律。
 
 ### 13.3 RREF、行列式与线性方程
 
@@ -2442,10 +2398,9 @@ auto legacy = ngauss(A, b);        // 总返回 result，以 consistent 标记�
 `ngauss` 返回同一个 `nlinear_solution<T>` 形状，但无解时 `consistent == false`；
 `nlinear_solve` 则用空 `nmaybe` 表示无解。新代码优先后者，迁移旧模板时可保留前者。
 
-这些算法要求 `nexact_field_element<T>`：`T{}` 是零、`T{1}` 是一、非零 pivot 可除。
-素数模 `nmodint` 自动满足；普通整数、合数模和浮点数默认在编译期拒绝。整数行列式
-不能把截断除法塞进高斯消元，应另用 Bareiss 等整环算法；浮点线性代数应另行设计
-带 eps 与选主元策略的数值接口。复杂度为三次量级。
+这些算法要求 `T{}` 是零、`T{1}` 是一、非零 pivot 可除。普通整数的除法可能截断，
+合数模的非零元素可能不可逆，浮点数还需要 eps 与选主元策略；调用者必须在进入算法前
+确认域性质。整数行列式应另用 Bareiss 等整环算法。复杂度为三次量级。
 
 ### 13.4 卷积
 
@@ -2456,7 +2411,7 @@ auto c = nconv_auto(a, b);  // 根据真实 NTT 前提选择
 auto c = nconv(a, b);       // 当前默认转发到 auto
 ```
 
-NTT 前提（素数模由 `nexact_field` 在编译期约束）：
+NTT 前提（由 `nconv_ntt` 在运行时检查）：
 
 - 系数类型是 `nmodint<M>`。
 - `M` 为不超过 `UINT32_MAX` 的质数。
@@ -2489,8 +2444,8 @@ auto y = npoly_evaluate(a, x);    // Horner
 auto inv = nfps_inverse(a, terms);// a[0] 非零且可逆
 ```
 
-`npoly_integral` 与 `nfps_inverse` 接受浮点或 `nexact_field_element`，不会让普通整数
-静默执行截断除法；合数模即使个别元素可逆，也不冒充全域。
+`npoly_integral` 与 `nfps_inverse` 现在按接口实例化；调用者必须确保除数和常数项可逆，
+避免普通整数的截断除法或合数模的不可逆元素。
 FPS 逆使用 Newton 迭代，复杂度由 `nconv` 后端决定；NTT 可用时约为 `O(M(n)log n)`。
 
 拥有型 facade `npoly<T>` 会自动删除尾部零系数，零多项式表示为空：
@@ -2991,8 +2946,9 @@ python3 tools/audit.py
 
 ### 19.5 代数结构必须写出定律
 
-新增操作包写 `static constexpr nlaw laws`，单位元和逆元必须与运算一致。新增 lazy
-action 必须测试非交换 tag 组合；新增 segment 聚合必须用字符串拼接等非交换对象测试顺序。
+新增操作包必须在注释中写明单位元、结合/交换/逆元和溢出边界，且与运算一致。新增
+lazy action 必须测试非交换 tag 组合；新增 segment 聚合必须用字符串拼接等非交换对象
+测试顺序。
 
 ### 19.6 每个新算法的证据包
 
@@ -3028,7 +2984,7 @@ Nitori X 不以“删掉旧能力换一个小而美的壳”为目标。它复�
 | 稀疏函数/部分函数 | `nfunc_hash` / `npartial` | 哈希绑定表，不与新 `nfunc` 混义 |
 | `nbije` / `ninj` | 同名 | 双向哈希实现 `nbije_hash` |
 | rank 双射/压缩 | `nbije_rank` / `ncompress` | STL 输入另用 `ncompress_stl` |
-| 可扩展有序树 AST | `nnode` + `naugment` | FHQ/splay 都实现，带 epoch 快照诊断 |
+| 可扩展有序树 AST | `nnode` + augmentation 对象 | FHQ/splay 都实现，带 epoch 快照诊断 |
 | `npool` | `npool` | 1-based 可删除复用 handle；与 `narena` 分离 |
 | `nsparse` | `nsparse` | 升级为任意有序幺半群的 disjoint sparse table |
 | 势能并查集 | `npotential_dsu` | 差值约束与一致性检查 |
@@ -3123,12 +3079,9 @@ nless ngreater nequal nidentity
 nrng nseed_value nrng_global nhash_seed nseed nhash
 ```
 
-### 代数
+### 操作对象
 
 ```text
-nlaw nhas_law ndeclares nsemigroup nmonoid ngroup ncommutative_monoid
-nsemiring_laws nsemiring nexact_field nexact_field_element
-naction_laws naction nadd_group
 nadd nmul nxor nmin nmax naddsum_action npow
 ```
 
@@ -3174,9 +3127,8 @@ nunique_compact nunique nsort_unique
 nscan nsuffix_scan nfirst_true nlast_true nrollback
 nscratch narena npool_dynamic npool
 npartition npart npart_dense nperm
-nbranch nnode nnode_tree nwalk naugment nempty_augment nempty_tag nnode_action_laws nnode_action
-naugmented_tree nfirst_prefix nlast_suffix
-nseg_node nseg_tree nseg_walk
+nbranch nnode nwalk nempty_augment nempty_tag nfirst_prefix nlast_suffix
+nseg_node nseg_walk
 nset_fhq nset_splay nset_stl nset nbag
 nmap_flat nmap_hash nmap_stl nmap
 nrel_scan nrel npartial_hash nfunc_hash npartial

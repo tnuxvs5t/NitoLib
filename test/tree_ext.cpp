@@ -15,13 +15,9 @@ struct naffine_action_ext {
 };
 
 struct nstring_concat {
-    static constexpr nlaw laws = nlaw::associative | nlaw::identity;
     string id() const { return {}; }
     string operator()(string left, const string& right) const { return left += right; }
 };
-
-template <>
-inline constexpr bool naction_laws<naffine_action_ext, long long, naffine_tag_ext> = true;
 
 struct nsum_augment {
     using info_type = long long;
@@ -39,15 +35,6 @@ struct nfhq_add_tag {
         return info + 1LL * tag * length;
     }
 };
-
-template <>
-inline constexpr bool nnode_action_laws<nfhq_add_tag, long long, long long> = true;
-
-static_assert(nseg_tree<nseg<int>>);
-static_assert(nseg_tree<nlazy_addsum<long long>>);
-static_assert(nseg_tree<ndynamic_seg<long long>>);
-static_assert(nseg_tree<ndynamic_addsum<long long>>);
-static_assert(nseg_tree<npersistent_seg<int>>);
 
 int main() {
     ndynamic_seg<long long> point(-1000000000000LL, 1000000000000LL);

@@ -838,8 +838,7 @@ int nfind_sorted(const A& a, const X& value, C compare, int fallback) {
 
 template <class A, class P = nidentity,
           class O = nadd<ni::nprojected_value_t<const A, P>>>
-    requires nindexed<A> &&
-             nmonoid<O, ni::nprojected_value_t<const A, P>>
+    requires nindexed<A>
 auto nfold(const A& a, int l, int r, O op = {}, P projection = {}) {
     using T = ni::nprojected_value_t<const A, P>;
     npre(0 <= l && l <= r && r <= nlen(a));
@@ -851,8 +850,7 @@ auto nfold(const A& a, int l, int r, O op = {}, P projection = {}) {
 
 template <class A, class P = nidentity,
           class O = nadd<ni::nprojected_value_t<const A, P>>>
-    requires nindexed<A> &&
-             nmonoid<O, ni::nprojected_value_t<const A, P>>
+    requires nindexed<A>
 auto nfold(const A& a, O op = {}, P projection = {}) {
     return nfold(a, 0, nlen(a), move(op), move(projection));
 }

@@ -1,9 +1,7 @@
 // Dynamic (open-point) segment trees.  Nodes are allocated only on paths that
 // are written; absent children represent the operation identity.
 
-template <class T, class O = nadd<T>>
-    requires nmonoid<O, T>
-class ndynamic_seg {
+template <class T, class O = nadd<T>> class ndynamic_seg {
     struct node {
         T aggregate;
         int left = 0, right = 0;
@@ -95,6 +93,7 @@ class ndynamic_seg {
   public:
     using value_type = T;
     using aggregate_type = T;
+    using nseg_state_type = monostate;
     using node_view = nseg_node<ndynamic_seg>;
 
     ndynamic_seg() = default;
@@ -190,9 +189,7 @@ class ndynamic_seg {
     int nseg_right(int handle) const noexcept { return handle ? nodes_[size_t(handle)].right : 0; }
 };
 
-template <class S, class F, class M, class A>
-    requires nmonoid<M, S> && naction<A, S, F>
-class ndynamic_lazyseg {
+template <class S, class F, class M, class A> class ndynamic_lazyseg {
     struct node {
         S aggregate;
         int left = 0, right = 0;
@@ -328,6 +325,7 @@ class ndynamic_lazyseg {
     using value_type = S;
     using aggregate_type = S;
     using tag_type = F;
+    using nseg_state_type = optional<F>;
     using node_view = nseg_node<ndynamic_lazyseg>;
 
     ndynamic_lazyseg()

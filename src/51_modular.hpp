@@ -220,23 +220,6 @@ template <uint64_t Modulus> using nmod_static = nmodint<Modulus>;
 template <uint64_t Modulus> using nmod = nmodint<Modulus>;
 template <int Tag = 0> using ndmod = nmod_dynamic<Tag>;
 
-template <int Tag> inline constexpr bool nadd_group<nmod_dynamic<Tag>> = true;
-template <int Tag>
-inline constexpr bool nsemiring_laws<nadd<nmod_dynamic<Tag>>, nmul<nmod_dynamic<Tag>>,
-                                     nmod_dynamic<Tag>> = true;
-template <int Tag>
-inline constexpr bool naction_laws<naddsum_action<nmod_dynamic<Tag>>, nmod_dynamic<Tag>,
-                                   nmod_dynamic<Tag>> = true;
-
-template <uint64_t Modulus> inline constexpr bool nadd_group<nmodint<Modulus>> = true;
-template <uint64_t Modulus> inline constexpr bool nexact_field<nmodint<Modulus>> = nisprime(Modulus);
-template <uint64_t Modulus>
-inline constexpr bool nsemiring_laws<nadd<nmodint<Modulus>>, nmul<nmodint<Modulus>>,
-                                     nmodint<Modulus>> = true;
-template <uint64_t Modulus>
-inline constexpr bool naction_laws<naddsum_action<nmodint<Modulus>>, nmodint<Modulus>,
-                                   nmodint<Modulus>> = true;
-
 template <class Mint> class ncomb {
     nvector<Mint> factorial_, inverse_factorial_;
 

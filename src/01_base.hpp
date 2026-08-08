@@ -197,6 +197,47 @@ struct nidentity {
     }
 };
 
+template <class T> struct nadd {
+    constexpr T id() const { return T{}; }
+    constexpr T operator()(T left, const T& right) const { return left += right; }
+    constexpr T inv(T value) const { return -value; }
+};
+
+template <class T> struct nmul {
+    constexpr T id() const { return T{1}; }
+    constexpr T operator()(T left, const T& right) const { return left *= right; }
+};
+
+template <class T> struct nxor {
+    constexpr T id() const { return T{}; }
+    constexpr T operator()(T left, const T& right) const { return left ^= right; }
+    constexpr T inv(T value) const { return value; }
+};
+
+template <class T> struct nmin {
+    constexpr T id() const {
+        if constexpr (numeric_limits<T>::has_infinity)
+            return numeric_limits<T>::infinity();
+        else
+            return numeric_limits<T>::max();
+    }
+    constexpr T operator()(const T& left, const T& right) const {
+        return right < left ? right : left;
+    }
+};
+
+template <class T> struct nmax {
+    constexpr T id() const {
+        if constexpr (numeric_limits<T>::has_infinity)
+            return -numeric_limits<T>::infinity();
+        else
+            return numeric_limits<T>::lowest();
+    }
+    constexpr T operator()(const T& left, const T& right) const {
+        return left < right ? right : left;
+    }
+};
+
 class nrng {
     uint64_t state_;
 

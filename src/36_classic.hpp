@@ -1,6 +1,4 @@
-template <class T, class O = nmin<T>>
-    requires nmonoid<O, T> && copyable<T>
-class nsparse {
+template <class T, class O = nmin<T>> class nsparse {
     nvector<T> values_;
     nvector<nvector<T>> table_;
     [[no_unique_address]] O operation_{};

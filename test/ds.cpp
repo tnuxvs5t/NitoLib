@@ -1,26 +1,18 @@
 #include "common.hpp"
 
 struct nconcat_ds {
-    static constexpr nlaw laws = nlaw::associative | nlaw::identity;
     string id() const { return {}; }
     string operator()(string a, const string& b) const { return a += b; }
 };
 
 struct nmod_group {
-    static constexpr nlaw laws =
-        nlaw::associative | nlaw::identity | nlaw::inverse | nlaw::commutative;
     int mod;
     int id() const { return 0; }
     int operator()(int a, int b) const { return (a + b) % mod; }
     int inv(int a) const { return a ? mod - a : 0; }
 };
 
-template <class O>
-concept nstring_fenwick_available = requires { typename nfenwick<string, O>; };
-
 int main() {
-    static_assert(!nstring_fenwick_available<nconcat_ds>);
-
     nvector<long long> values{2, -1, 5, 3};
     nfenwick<long long> fenwick(values);
     ntest(fenwick.prefix(0) == 0 && fenwick.prefix(3) == 6);

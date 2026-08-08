@@ -5,7 +5,6 @@ struct naffine {
 };
 
 struct nmod_sum {
-    static constexpr nlaw laws = nlaw::associative | nlaw::identity | nlaw::commutative;
     long long mod;
     long long id() const { return 0; }
     long long operator()(long long a, long long b) const { return (a + b) % mod; }
@@ -22,9 +21,6 @@ struct naffine_sum_action {
         return (tag.multiply * sum + tag.add * length) % mod;
     }
 };
-
-template <>
-inline constexpr bool naction_laws<naffine_sum_action, long long, naffine> = true;
 
 int main() {
     nvector<long long> values{1, 2, 3, 4, 5};

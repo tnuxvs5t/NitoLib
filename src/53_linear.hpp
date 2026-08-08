@@ -84,7 +84,6 @@ concept nmatrix_like = requires(const A& matrix, int row, int column) {
 };
 
 template <class T, class Add = nadd<T>, class Mul = nmul<T>>
-    requires nsemiring<Add, Mul, T>
 nmatrix<T> nmatrix_identity(int n, Add add = {}, Mul multiply = {}) {
     npre(n >= 0);
     nmatrix<T> result(n, n, add.id());
@@ -95,8 +94,7 @@ nmatrix<T> nmatrix_identity(int n, Add add = {}, Mul multiply = {}) {
 
 template <nmatrix_like A, nmatrix_like B, class Add = nadd<remove_cvref_t<decltype(declval<const A&>()(0, 0))>>,
           class Mul = nmul<remove_cvref_t<decltype(declval<const A&>()(0, 0))>>>
-    requires nsemiring<Add, Mul, remove_cvref_t<decltype(declval<const A&>()(0, 0))>> &&
-             same_as<remove_cvref_t<decltype(declval<const A&>()(0, 0))>,
+    requires same_as<remove_cvref_t<decltype(declval<const A&>()(0, 0))>,
                      remove_cvref_t<decltype(declval<const B&>()(0, 0))>>
 auto nmatmul(const A& a, const B& b, Add add = {}, Mul multiply = {}) {
     using T = remove_cvref_t<decltype(a(0, 0))>;
@@ -110,7 +108,6 @@ auto nmatmul(const A& a, const B& b, Add add = {}, Mul multiply = {}) {
 }
 
 template <class T, class Add = nadd<T>, class Mul = nmul<T>>
-    requires nsemiring<Add, Mul, T>
 nmatrix<T> nmatpow(nmatrix<T> base, uint64_t exponent, Add add = {}, Mul multiply = {}) {
     npre(base.rows() == base.cols());
     auto result = nmatrix_identity<T>(base.rows(), add, multiply);
@@ -124,9 +121,7 @@ nmatrix<T> nmatpow(nmatrix<T> base, uint64_t exponent, Add add = {}, Mul multipl
     return result;
 }
 
-template <class T, class Add = nadd<T>, class Mul = nmul<T>>
-    requires nmonoid<Add, T> && nmonoid<Mul, T>
-class nmat : public nmatrix<T> {
+template <class T, class Add = nadd<T>, class Mul = nmul<T>> class nmat : public nmatrix<T> {
     using base = nmatrix<T>;
 
   public:
@@ -196,7 +191,7 @@ class nmat : public nmatrix<T> {
     }
 };
 
-template <nexact_field_element T> int nrref(nmatrix<T>& matrix, nvector<int>* pivot_columns = nullptr) {
+template <class T> int nrref(nmatrix<T>& matrix, nvector<int>* pivot_columns = nullptr) {
     if (pivot_columns)
         pivot_columns->clear();
     int row = 0;
@@ -225,7 +220,7 @@ template <nexact_field_element T> int nrref(nmatrix<T>& matrix, nvector<int>* pi
     return row;
 }
 
-template <nexact_field_element T> T ndeterminant(nmatrix<T> matrix) {
+template <class T> T ndeterminant(nmatrix<T> matrix) {
     npre(matrix.rows() == matrix.cols());
     T determinant{1};
     for (int column = 0; column < matrix.cols(); ++column) {
@@ -250,11 +245,11 @@ template <nexact_field_element T> T ndeterminant(nmatrix<T> matrix) {
     return determinant;
 }
 
-template <nexact_field_element T> T ndet(nmatrix<T> matrix) {
+template <class T> T ndet(nmatrix<T> matrix) {
     return ndeterminant(move(matrix));
 }
 
-template <nexact_field_element T> nmaybe<nmatrix<T>> ninverse(nmatrix<T> matrix) {
+template <class T> nmaybe<nmatrix<T>> ninverse(nmatrix<T> matrix) {
     npre(matrix.rows() == matrix.cols());
     int size = matrix.rows();
     nmatrix<T> inverse(size, size, T{});
@@ -288,19 +283,19 @@ template <nexact_field_element T> nmaybe<nmatrix<T>> ninverse(nmatrix<T> matrix)
     return inverse;
 }
 
-template <nexact_field_element T>
+template <class T>
 nmatrix<T> ninverse(nmatrix<T> matrix, nmatrix<T> fallback) {
     auto result = ninverse(move(matrix));
     return result ? move(result.val()) : move(fallback);
 }
 
-template <nexact_field_element T, class Add, class Mul>
+template <class T, class Add, class Mul>
 T ndet(nmat<T, Add, Mul> matrix) {
     nmatrix<T> storage = move(matrix);
     return ndeterminant(move(storage));
 }
 
-template <nexact_field_element T, class Add, class Mul>
+template <class T, class Add, class Mul>
 nmaybe<nmat<T, Add, Mul>> ninverse(nmat<T, Add, Mul> matrix) {
     nmatrix<T> storage = move(matrix);
     auto result = ninverse(move(storage));
@@ -309,7 +304,7 @@ nmaybe<nmat<T, Add, Mul>> ninverse(nmat<T, Add, Mul> matrix) {
     return nmat<T, Add, Mul>(move(result.val()));
 }
 
-template <nexact_field_element T, class Add, class Mul>
+template <class T, class Add, class Mul>
 nmat<T, Add, Mul> ninverse(nmat<T, Add, Mul> matrix, nmat<T, Add, Mul> fallback) {
     auto result = ninverse(move(matrix));
     return result ? move(result.val()) : move(fallback);
@@ -323,7 +318,7 @@ template <class T> struct nlinear_solution {
     nvector<nvector<T>> basis;
 };
 
-template <nexact_field_element T, nindexed B>
+template <class T, nindexed B>
 nmaybe<nlinear_solution<T>> nlinear_solve(nmatrix<T> coefficients, const B& values) {
     npre(coefficients.rows() == nlen(values));
     int equations = coefficients.rows(), variables = coefficients.cols();
@@ -365,7 +360,7 @@ nmaybe<nlinear_solution<T>> nlinear_solve(nmatrix<T> coefficients, const B& valu
     return result;
 }
 
-template <nexact_field_element T, nindexed B>
+template <class T, nindexed B>
 nlinear_solution<T> ngauss(nmatrix<T> coefficients, const B& values) {
     npre(coefficients.rows() == nlen(values));
     int equations = coefficients.rows(), variables = coefficients.cols(), row = 0;
@@ -424,7 +419,7 @@ nlinear_solution<T> ngauss(nmatrix<T> coefficients, const B& values) {
     return result;
 }
 
-template <nexact_field_element T, class Add, class Mul, nindexed B>
+template <class T, class Add, class Mul, nindexed B>
 nlinear_solution<T> ngauss(nmat<T, Add, Mul> coefficients, const B& values) {
     nmatrix<T> storage = move(coefficients);
     return ngauss(move(storage), values);
