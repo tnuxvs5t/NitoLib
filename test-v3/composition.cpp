@@ -1,4 +1,5 @@
 #include "../src-v3/automata.hpp"
+#include "../src-v3/discrete.hpp"
 #include "../src-v3/dynamic_tree.hpp"
 #include "../src-v3/flow.hpp"
 #include "../src-v3/geom.hpp"
@@ -26,6 +27,10 @@ int main() {
     auto doubled = nmap_values(nfunc_bind(nall(values)), [](int value) { return 2 * value; });
     auto grid = nproduct(nrange(2), nrange(3));
     require(doubled[4] == 22 && grid.len() == 6 && grid[4] == pair(1, 1));
+    auto descending = norder(nall(values), greater<>{});
+    require(descending[0] == 13 && descending[5] == 2);
+    require((nprefix(nall(values)) == vector<int>{0, 2, 5, 10, 17, 28, 41}));
+    require((nsuffix(nall(values)) == vector<int>{41, 39, 36, 31, 24, 13, 0}));
 
     nfhq<int> sequence;
     int root = sequence.build(nall(values));

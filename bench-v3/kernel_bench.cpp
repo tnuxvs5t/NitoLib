@@ -1,3 +1,4 @@
+#include "../src-v3/discrete.hpp"
 #include "../src-v3/fhq.hpp"
 #include "../src-v3/graph.hpp"
 #include "../src-v3/graph_store.hpp"
@@ -30,6 +31,27 @@ int main() {
     uint64_t checksum = 0;
     vector<int> values(n);
     iota(values.begin(), values.end(), 1);
+
+    vector<int> shuffled(n);
+    for (int i = 0; i < n; ++i) shuffled[i] = int(1LL * i * 48271 % n);
+    vector<int> direct_sorted = shuffled, projected_sorted = shuffled;
+    auto direct_sort = timed([&] { ranges::sort(direct_sorted); });
+    auto projected_sort = timed([&] { nsort(nall(projected_sorted)); });
+    if (direct_sorted != projected_sorted) return 3;
+    auto structural_order = timed([&] {
+        auto ordered = norder(nall(shuffled));
+        for (int i = 0; i < n; i += 97) checksum += ordered[i];
+    });
+    vector<int> run_values(n);
+    for (int i = 0; i < n; ++i) run_values[i] = i / 4 % 137;
+    auto run_projection = timed([&] {
+        for (int repeat = 0; repeat < 20; ++repeat) {
+            auto runs = nruns(nall(run_values));
+            checksum += runs.len();
+            for (int i = 0; i < runs.len(); i += 31)
+                checksum += runs.key(i).second - runs.key(i).first + runs[i][0];
+        }
+    });
 
     nfhq<int> sequence;
     sequence.reserve(n);
@@ -146,6 +168,8 @@ int main() {
     });
 
     cout << "n=" << n << " edges=" << 4LL * n << '\n';
+    cout << "direct_sort_ms=" << direct_sort << " projected_sort_ms=" << projected_sort
+         << " structural_order_ms=" << structural_order << " runs_20x_ms=" << run_projection << '\n';
     cout << "fhq_node_bytes=" << sizeof(nfhq<int>::node)
          << " build_ms=" << fhq_build << " split_merge_ms=" << fhq_transactions << '\n';
     cout << "fixed_seg_build_ms=" << seg_build << " workload_ms=" << seg_work << '\n';

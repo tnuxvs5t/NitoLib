@@ -9,6 +9,9 @@ int main() {
 
     auto f = nfunc_bind(nall(keys), nall(values),
                         [&](const string& key) { return locate.at(key); });
+    static_assert(same_as<decltype(nkeys(f)), decltype(f.domain)&>);
+    static_assert(same_as<decltype(nkeys(as_const(f))), const decltype(f.domain)&>);
+    static_assert(same_as<decltype(nkeys(move(as_const(f)))), decltype(f.domain)>);
     CHECK(f.len() == 5 && f.key(0) == "gamma");
     CHECK(f[0] == 30 && f[1] == 10 && f("beta") == 20 && f[4] == 10);
 
@@ -47,10 +50,41 @@ int main() {
     auto dense = nfunc_bind(nall(values));
     CHECK(dense.key(3) == 3 && dense(3) == 42 && dense[1] == 22);
 
+    vector<string> anchor_keys{"north", "east", "south", "west"};
+    vector<int> anchor_values{2, 3, 5, 7};
+    auto anchored = nanchors(nall(anchor_keys), nall(anchor_values));
+    static_assert(same_as<decltype(anchored(string("north"))), int&>);
+    CHECK(anchored.len() == 4 && anchored.key(2) == "south");
+    CHECK(anchored[1] == 3 && anchored("west") == 7);
+    anchored("south") = 50;
+    CHECK(anchor_values[2] == 50 && nvalues(anchored)[2] == 50);
+    vector<string> reordered_keys{"west", "north", "west"};
+    auto reordered = nredomain(anchored, nall(reordered_keys));
+    CHECK(reordered[0] == 7 && reordered[1] == 2 && reordered[2] == 7);
+
+    vector<string> no_keys;
+    vector<int> no_values;
+    auto empty_anchors = nanchors(nall(no_keys), nall(no_values));
+    CHECK(empty_anchors.len() == 0);
+
     auto move_only = nfunc{nrange(5),
                            [p = make_unique<int>(6)](int key) { return *p * key; }};
+    auto borrowed_move_values = nvalues(move_only);
+    auto borrowed_move_entries = nentries(move_only);
+    CHECK(borrowed_move_values[3] == 18);
+    CHECK(borrowed_move_entries[4].first == 4 && borrowed_move_entries[4].second == 24);
+    CHECK(move_only(2) == 12);
     auto composed = ncompose([](int x) { return x + 1; }, move(move_only));
     CHECK(composed.len() == 5 && composed[0] == 1 && composed(4) == 25);
+
+    auto borrowed_state = nfunc{nrange(1), [calls = 0](int) mutable { return calls++; }};
+    auto borrowed_state_values = nvalues(borrowed_state);
+    CHECK(borrowed_state_values[0] == 0);
+    CHECK(borrowed_state[0] == 1);
+
+    auto owned_entries = nentries(nfunc{
+        nrange(2), [p = make_unique<int>(9)](int key) { return *p + key; }});
+    CHECK(owned_entries[0].second == 9 && owned_entries[1].second == 10);
 
     int calls = 0;
     auto stateful = nfunc{nrange(3), [calls](int x) mutable { return x + calls++; }};

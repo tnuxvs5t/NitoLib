@@ -10,7 +10,7 @@ int main() {
         for (int& value : sequence) value = int(rng() % 5);
         for (int& value : pattern) value = int(rng() % 5);
 
-        auto prefix = nprefix(nall(sequence));
+        auto prefix = nprefix_function(nall(sequence));
         auto z = nz(nall(sequence));
         for (int i = 0; i < n; ++i) {
             int expected_prefix = 0;

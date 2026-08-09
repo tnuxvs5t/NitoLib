@@ -2,7 +2,7 @@
 #include "view.hpp"
 
 template <class V>
-vector<int> nprefix(V sequence) {
+vector<int> nprefix_function(V sequence) {
     vector<int> prefix(sequence.len());
     for (int i = 1; i < sequence.len(); ++i) {
         int border = prefix[i - 1];
@@ -35,7 +35,7 @@ vector<int> nkmp(T text, P pattern) {
         iota(answer.begin(), answer.end(), 0);
         return answer;
     }
-    auto prefix = nprefix(pattern);
+    auto prefix = nprefix_function(pattern);
     for (int i = 0, matched = 0; i < text.len(); ++i) {
         while (matched && !(text[i] == pattern[matched])) matched = prefix[matched - 1];
         if (text[i] == pattern[matched]) ++matched;

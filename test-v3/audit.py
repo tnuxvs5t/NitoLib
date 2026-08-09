@@ -2,6 +2,7 @@
 """Structural V3 audit: authority, independence, abstraction pressure and headers."""
 
 from pathlib import Path
+import hashlib
 import os
 import re
 import subprocess
@@ -10,6 +11,8 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = sorted((ROOT / "src-v3").glob("*.hpp"))
 TESTS = sorted((ROOT / "test-v3").glob("*.cpp"))
+ARCHIVE = ROOT / "archive/nitori-legacy-pre-v3.tar.gz"
+ARCHIVE_SHA256 = "95a6121575016e3b16444a391463256a50e666cd81f469b8a93b9047b4d4d913"
 
 
 def require(condition: bool, message: str) -> None:
@@ -46,8 +49,15 @@ def code_only(text: str) -> str:
 
 
 require((ROOT / "v3-Tutorial-Comprehensive.md").is_file(), "missing V3 tutorial")
-require(not (ROOT / "NITORI_DOCUMENT.md").exists(), "obsolete V2 Document survived")
-require(not (ROOT / "tools/audit_authority.py").exists(), "obsolete authority audit survived")
+for legacy in ("NITORI_DOCUMENT.md", "Nitori.h", "Nitori_unsafe.h", "src", "test",
+               "bench", "examples", "tools", "v2-c", "v2-nano"):
+    require(not (ROOT / legacy).exists(), f"legacy path returned to active tree: {legacy}")
+require(ARCHIVE.is_file(), "missing legacy archive")
+require(hashlib.sha256(ARCHIVE.read_bytes()).hexdigest() == ARCHIVE_SHA256,
+        "legacy archive checksum changed")
+archive_allowed = {ARCHIVE, ROOT / "archive/README.md"}
+require(all(path in archive_allowed for path in (ROOT / "archive").rglob("*")),
+        "legacy archive was extracted or archive directory contains an unknown entry")
 require(SOURCE, "src-v3 has no headers")
 require(TESTS, "test-v3 has no C++ tests")
 

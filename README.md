@@ -20,12 +20,16 @@ V3 暂时没有统一 `Nitori.h`。直接包含需要的模块：
 
 ```cpp
 #include "src-v3/view.hpp"
+#include "src-v3/discrete.hpp"
 #include "src-v3/segment.hpp"
 ```
 
 ```bash
 g++ -std=c++23 -O2 -I/path/to/NitoriSTL solution.cpp
 ```
+
+`discrete.hpp` 用位置计划统一装配 `nview/nfunc`，并提供结构排序、值排序、序列折叠与
+区间键 chunks；它不引入 holder、locator 或 concept/trait 登记层。
 
 ## 施工原则
 
@@ -51,9 +55,9 @@ python3 test-v3/measure.py
 
 ## V2 状态
 
-仓库中的 `Nitori.h`、`Nitori_unsafe.h`、`src/`、`test/`、`bench/` 与旧工具属于 V2/X
-历史实现，只用于能力审计和迁移参考，不定义 V3，也不会被 V3 测试调用。新代码不得从中
-复制实现或测试。
+V2/X、v2-c 与 v2-nano 已从活动工作树移除，以确定性压缩包保存。完整性、
+来源和恢复边界见 [`archive/README.md`](./archive/README.md)。它只用于用户明确要求的历史
+考古，普通 V3 开发、调试和迁移不得搜索或解包该归档。
 
 ## License
 

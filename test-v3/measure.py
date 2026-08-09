@@ -63,6 +63,9 @@ files = sorted(p for p in (ROOT / "src-v3").rglob("*") if p.suffix in {".hpp", "
 counts = [(p, semantic_bytes(p.read_text())) for p in files]
 for path, count in counts:
     print(f"{count:6}  {path.relative_to(ROOT)}")
+discrete = next((count for path, count in counts if path.name == "discrete.hpp"), 0)
+if discrete > 10 * 1024:
+    raise SystemExit(f"discrete.hpp exceeded 10 KiB semantic cap: {discrete}")
 used = sum(count for _, count in counts)
 print(f"{used:6} / {LIMIT} semantic bytes ({used / LIMIT:.1%})")
 sys.exit(used > LIMIT)

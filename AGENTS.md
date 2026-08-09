@@ -9,8 +9,10 @@ Independent tests:            /home/tnuzy/NitoriSTL/test-v3/
 Deterministic benchmark:      /home/tnuzy/NitoriSTL/bench-v3/
 ```
 
-`Nitori.h`, `Nitori_unsafe.h`, `src/`, `test/` and the old tools are V2/X audit material.
-They are not V3 authorities and must not be copied into V3 implementation or tests.
+V2/X 及更早实现已从活动工作树移除，只保存在
+`archive/nitori-legacy-pre-v3.tar.gz` 中。压缩包不是权威：普通开发、调试、
+迁移和解题不得搜索、解包或复制其内容。只有用户明确要求历史考古时，
+才可在仓库外的临时目录查看。
 
 ## Design laws
 
@@ -47,7 +49,7 @@ python3 test-v3/measure.py
 ## Review gate
 
 ```text
-[ ] no V2 implementation/test was copied
+[ ] legacy archive was not used or extracted
 [ ] no unnecessary concept/trait/owner facade appeared
 [ ] owner/view lifetime and root consumption are explicit
 [ ] algebraic laws and action order are visible

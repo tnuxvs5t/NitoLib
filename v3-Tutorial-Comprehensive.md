@@ -1,7 +1,7 @@
 # Nitori v3 Tutorial Comprehensive
 
 > 状态：从零重建中。本文只描述 `src-v3/` 当前已经存在并经过独立测试的能力。
-> V2 的 `Nitori.h`、`src/` 与 `test/` 不定义 V3；V3 暂时没有统一头文件。
+> V2/X 及更早代码已离开活动工作树；V3 暂时没有统一头文件。
 
 ## 0. V3 到底在改革什么
 
@@ -38,7 +38,8 @@ V3 使用 C++23，直接包含需要的模块：
 ```text
 core
 ├── view
-│   ├── func ── graph ── graph_algo / graph_store / tree
+│   ├── func ─┬─ discrete
+│   │          └─ graph ── graph_algo / graph_store / tree
 │   ├── ds ── flow
 │   └── string / automata / wavelet / linear / geom
 ├── arena
@@ -174,7 +175,44 @@ assert(f("alice") == 80);      // 按 key
 auto dense = nfunc_bind(nall(score));  // key 就是 0..n-1
 ```
 
-### 4.1 组合接口
+### 4.1 `nanchors`：无工作记忆地锚定两组枚举
+
+当 `keys[i]` 就应映射到 `values[i]`，但调用者不想另外声明和维护 locator 时：
+
+```cpp
+vector<string> names{"alice", "bob"};
+vector<int> score{80, 95};
+
+auto f = nanchors(nall(names), nall(score));
+assert(f[1] == 95);
+assert(f("alice") == 80);
+```
+
+`nanchors` 在构造时物化并拥有一个 `key -> position` 的 `unordered_map`，返回值仍是普通
+`nfunc`，因此可以直接继续使用 `nvalues`、`nentries`、`nredomain` 和 `nmap_values`。
+构造期望 `O(n)`，按 position 或 key 求值期望 `O(1)`，完整枚举期望 `O(n)`，索引额外占用
+`O(n)` 空间；它不会退化成逐次线性扫描。
+
+默认入口使用 `std::hash<Key>` 和 `std::equal_to<Key>`。无标准哈希的 key 可以显式给出
+规则：
+
+```cpp
+auto f = nanchors(nall(keys), nall(values), key_hash, key_equal);
+```
+
+调用者保证：两组序列等长、key 唯一、哈希与相等关系一致、查询的 key 存在。descriptor
+借用的 owner 必须活得足够久，而且建表后 key 的长度、次序和值不可改变；payload value 可以修改。
+这些是注释契约，不会生成 concept/trait 或非法输入恢复层。
+
+如果题目已经有更紧凑的数组 inverse、坐标压缩结果或其他 locator，继续使用
+`nfunc_bind(keys,values,locate)`，避免重复建哈希表。两者的分工是：
+
+```text
+nanchors    自动拥有索引，消除调用者的 locator 工作记忆
+nfunc_bind  接入已有 locator，保留题目特定的时间与空间结构
+```
+
+### 4.2 组合接口
 
 ```text
 nkeys(f)                       domain
@@ -187,10 +225,141 @@ ncompose(outer,inner)          outer(inner(key))
 nselect_positions(f,positions) 按原 position 选择新 domain
 ```
 
+`nkeys/nvalues/nentries` 对左值 `nfunc` 只借用，对右值 `nfunc` 则移入并由返回的
+descriptor 拥有。因此 move-only 或内部有状态的 evaluator 不会因为遍历左值而被暗中
+复制。借用结果不得比原 `nfunc` 活得更久。
+
 `nredomain` 和 `nrestrict` 不检查新 key 是否能被 evaluator 处理。`nmap_values` 保留 transform
 的返回类别；这也是 V3 保留该名字而不把它降级成普通 `nmap` 的原因。
 
 `nproduct` 与 `nmap_values` 是稳定的公共名字，不会因为底层实现缩小而消失。
+
+### 4.3 `discrete.hpp`：用位置计划打通 view 与 func
+
+V2 的问题不是 `nruns/nsort` 这些需求不存在，而是它们曾经被 holder、
+locator、trait 和结果稳定化协议包得太重。`src-v3/discrete.hpp` 只增加一个内核：
+
+```text
+位置列表是结构计划
+nview + 计划  -> 重排位置的 nview
+nfunc + 计划  -> 重排 domain、保留 evaluator 的 nfunc
+```
+
+```cpp
+#include "src-v3/discrete.hpp"
+
+vector<int> a{40, 10, 30, 20};
+auto picked = nselect(nall(a), vector<int>{3, 1, 3}); // 20,10,20
+auto odd = nfilter(nall(a), [](int x) { return x & 1; });
+auto sorted_view = norder(nall(a));                  // 懒重排，a 未变
+auto materialized = ncollect(sorted_view);           // vector<int>{10,20,30,40}
+```
+
+`vector<int>` 位置计划会被移入返回的 descriptor，所以 `nfilter/norder` 不会借用已销毁的
+局部下标容器。重复位置是合法的；若 source 产生左值，它们会别名到同一元素。
+`ncollect` 是明确物化边界，会递归移除 `nzip/nproduct` 所产生 pair/tuple 内部的引用。
+
+`nindexed` 只是 `nrange + nzip` 的命名结构内核，不分配也不物化：
+
+```cpp
+for (auto&& value : nvalues(f)) {}
+for (auto&& [key, value] : nentries(f)) {}
+for (auto&& [position, value] : nindexed(nvalues(f))) {}
+for (auto&& [position, entry] : nindexed(nentries(f))) {
+    auto&& [key, value] = entry;
+}
+```
+
+`nfunc` 本身不定义含糊的默认 `begin/end`：调用者要显式选择 key、value 或 entry。
+
+结构投影：
+
+```text
+nselect(source,positions)             按位置选择/重排
+nslice(source,left,right)             [left,right)
+nstride(source,first,last,step)       非零步长
+nstride(source,step)                  正数从左，负数从右
+nfilter(source,predicate)             稳定保留命中位置
+nindexed(source)                      (position,value) 惰性 view
+nargsort(source,compare,projection)   vector<int> 排序计划
+norder(source,compare,projection)     应用计划，不移动值
+```
+
+值操作与基础序列内核：
+
+```text
+nprefix(source,identity={},operation=plus<>)  含 ID 的左扫描
+nsuffix(source,identity={},operation=plus<>)  含 ID 的右扫描
+nsort(source,compare,projection)      原地排序 source[position] 左值
+nreverse_inplace(source)              原地反转值
+naccumulate(source,initial,operation) 从左到右折叠
+neach(source,action)                  按序调用并返回 action
+nfind_if / ncount_if                  返回位置（未找到为 len）/数量
+nall_of / nany_of / nnone_of         量词
+nargmin / nargmax                     极值位置（空序列为 len）
+nlower / nupper                       已排序位置序列的插入位置
+```
+
+`nprefix/nsuffix` 不是切片别名，而是物化全部前后缀折叠值。默认 accumulator 是 source
+元素的去引用值类型，默认 ID 为该类型的 `{}`，默认 OP 为 `plus<>`：
+
+```cpp
+vector<int> a{2, 3, 5};
+auto prefix = nprefix(nall(a)); // {0,2,5,10}
+auto suffix = nsuffix(nall(a)); // {10,8,5,0}
+```
+
+二者都返回 `n+1` 个值，严格顺序为：
+
+```text
+prefix[0]   = ID
+prefix[i+1] = OP(prefix[i], source[i])
+
+suffix[n] = ID
+suffix[i] = OP(source[i], suffix[i+1])
+```
+
+因此非交换 OP 不会被偷偷倒序。显式 ID 同时决定 accumulator 类型，OP 可以任意自定义：
+
+```cpp
+auto prefix = nprefix(nall(a), 7LL, operation);
+auto suffix = nsuffix(nall(a), string("I"), operation);
+```
+
+OP 根据保存的 accumulator 构造一个新值，不应修改旧 accumulator；ID、OP 及其返回类型
+满足上述表达式即可。两者时间和空间均为 `O(n)`。只想取得一段序列时使用 `nslice`，不再
+为 `source[0,count)` 和 `source[n-count,n)` 维护重复名字。
+
+`nsort(nfunc)` 只交换按 domain 枚举到的值，key 和 domain 顺序不变。这与
+`norder(nfunc)` 正好相反：后者重排 domain，但 evaluator 与底层值都不变。原地操作要求
+source 产生可交换左值；对重复别名位置排序没有有用的排列语义，调用者应避免它。
+
+分块不伪造“起点 key”，而是返回以完整 `[left,right)` 为 domain key 的 `nfunc`：
+
+```cpp
+auto blocks = nblocks(nall(a), 3);       // 最后一块可较短
+auto interval = blocks.key(0);           // pair{0,3}
+auto first = blocks[0];                  // nslice(a,0,3)
+
+auto windows = nwindows(nall(a), 2, 1);  // 只产生完整窗口
+auto runs = nruns(nall(a));              // 相邻相等的极大段
+```
+
+```text
+nchunks(source,intervals)       通用区间键分块
+nblock(source,width,index)      一个定宽块
+nblocks(source,width)           覆盖整序列，尾块可短
+nwindows(source,width,step=1)   width/step > 0，只枚举完整窗口
+nruns(source,together={})       together(previous,current) 定义相邻归并
+```
+
+chunk 的每次求值都会复制普通 source descriptor，这使取出的子块可与外层
+chunk function 分离，代价是 descriptor 必须可复制。owner 的寿命仍然不会被延长：
+普通容器应传 `nall(owner)`，不应把 owner 本身作为 source 期待隐式共享。
+
+主要复杂度：已有计划的 select/slice/stride 构造 `O(1)`；filter/runs 构造 `O(n)`；
+argsort/order/sort 为 `O(n log n)`；blocks/windows 的 interval domain 是惰性
+`O(1)` 描述，但枚举全部子块当然与子块数成正比。
 
 ## 5. `narena` 与根代数
 
@@ -600,7 +769,7 @@ nlinear_solve            particular + nullspace basis，或 inconsistent
 所有算法直接依赖 `.len()` 和 `operator[]`，因此传普通 string 时先 `nall(string_lvalue)`。
 
 ```text
-nprefix          前缀函数
+nprefix_function 前缀函数
 nz               Z 函数，非空时 z[0]=n
 nkmp             所有匹配位置；空模式匹配每个边界
 nmanacher        odd/even 回文半径
@@ -702,7 +871,8 @@ V3 不以“恢复全部 V2 公共符号”为目标。当前取舍如下。
 
 ```text
 位置投影：nview、range/sub/reverse/project/map/gather/zip/product
-离散函数：nfunc、bind/keys/values/entries/redomain/restrict/map_values/compose
+离散函数：nfunc、bind/anchors/keys/values/entries/redomain/restrict/map_values/compose
+离散算法：select/slice/stride/filter/collect/order/sort、序列折叠、区间键 chunks/blocks/windows/runs
 节点内核：narena、隐式 FHQ、多根 destructive split/merge
 区间结构：Fenwick、迭代/懒/稀疏/持久根线段树、聚合队列、Sparse Table、Wavelet Matrix
 并查集：普通、带势能与 rollback
@@ -719,7 +889,7 @@ V3 不以“恢复全部 V2 公共符号”为目标。当前取舍如下。
 ```text
 checked/unsafe 双实现与 npre 恢复链
 nmaybe、nvector、ndeque、nheap 等 STL 同义包装
-nfill/nsort/nfind 等标准算法改名层
+覆盖整个 STL 的 nfill/ncopy/nreplace 等同义改名层
 nenumerable 游标森林与循环宏
 nresource_pool/nnode_domain/generation/epoch 的全局身份体系
 nset/nmap/nbije/nrel 等大规模关联容器包装族
@@ -742,7 +912,7 @@ nset/nmap/nbije/nrel 等大规模关联容器包装族
 
 ## 18. 测试、benchmark 与预算
 
-V3 不复用 V2 测试。独立入口：
+V3 不复用 V2 测试，历史归档也不参与 include、搜索或测试发现。独立入口：
 
 ```bash
 cd /home/tnuzy/NitoriSTL
@@ -766,12 +936,14 @@ ASan + UBSan
 边界。测试通过只证明已经覆盖的契约内行为，不等于所有模板实例都天然正确。
 
 `measure.py` 通过词法扫描排除注释和布局空白，同时保留字符串/raw string 内的内容，并有
-自测试保护计量规则。预算上限是 `131072` 语义字节。
+自测试保护计量规则。总预算上限是 `131072` 语义字节；`discrete.hpp` 另有
+`10240` 语义字节的局部闸门，防止它再长成包装森林。
 
-`audit.py` 检查 V2 include 泄漏、过时 authority、会在 `NDEBUG` 消失的 assert 测试、
-concept/domain 压力回流、文档本地链接以及每个头文件能否独立 include。
+`audit.py` 检查旧源码是否回流到活动路径、历史归档校验和是否被解包、V2 include
+泄漏、会在 `NDEBUG` 消失的 assert 测试、concept/domain 压力回流、文档本地链接以及
+每个头文件能否独立 include。
 
-benchmark 是 deterministic workload，用于观察 FHQ 节点大小、split/merge、线段树、
+benchmark 是 deterministic workload，用于观察直接排序与投影排序、结构 order/runs、FHQ 节点大小、split/merge、线段树、
 Wavelet Matrix、LCT 路径、直接邻接与 graph port、CSR 构造/BFS、rooted projection、
 稀疏节点数和峰值 RSS。时间值受机器波动影响，checksum 与规模必须稳定。
 
@@ -807,7 +979,11 @@ V3 的完成标准不是符号数量，而是：核心结构短、组合路径�
 core:       nlen
 view:       nview nall ntabulate nrange nsub nreverse nproject nmap ngather nzip nproduct
 func:       nfunc nkeys nvalues nentries nredomain nrestrict nmap_values ncompose
-            nselect_positions nfunc_bind
+            nselect_positions nfunc_bind nanchors
+discrete:   nselect nslice nstride nfilter nindexed ncollect nprefix nsuffix
+            naccumulate neach nfind_if ncount_if nall_of nany_of nnone_of
+            nargmin nargmax nlower nupper nargsort norder nsort nreverse_inplace
+            nchunks nblock nblocks nwindows nruns
 memory:     narena
 fhq:        nfhq nfhq_noop nmake_fhq
 segment:    nadd nseg nlazyseg naddsum_action nlazy_addsum nsparse_seg
@@ -822,7 +998,7 @@ number:     nmulmod64 npowmod64 nisprime nsplitmix64 npollard nfactor
 poly:       nntt nconvolution npoly_derivative npoly_integral npoly_inverse
 linear:     nmatrix nmatmul nmatpow nrref_result nrref ndeterminant ninverse
             nlinear_solution nlinear_solve
-string:     nprefix nz nkmp npalindrome_radii nmanacher nsuffix_array nlcp
+string:     nprefix_function nz nkmp npalindrome_radii nmanacher nsuffix_array nlcp
 automata:   nlowercase nac
 geom:       npoint ndot ncross non_segment nsegment_intersect npolygon_area2
             nconvex_hull nline_intersection
