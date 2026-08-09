@@ -1,91 +1,60 @@
-# Nitori X contributor contract
+# Nitori v3 contributor contract
 
-Nitori X is a GNU++20 single-header competitive-programming system. Before changing the
-library, read the canonical artifacts:
+Nitori v3 is a from-scratch C++23 competitive-programming library. Its current authority is:
 
 ```text
-Public checked implementation: /home/tnuzy/NitoriSTL/Nitori.h
-Canonical user document:       /home/tnuzy/NitoriSTL/NITORI_DOCUMENT.md
-Semantic source order:          /home/tnuzy/NitoriSTL/src/manifest.txt
+Tutorial and public contract: /home/tnuzy/NitoriSTL/v3-Tutorial-Comprehensive.md
+Semantic source:              /home/tnuzy/NitoriSTL/src-v3/
+Independent tests:            /home/tnuzy/NitoriSTL/test-v3/
+Deterministic benchmark:      /home/tnuzy/NitoriSTL/bench-v3/
 ```
 
-No skill, asset, contest directory, report or cache is an API authority. Do not create
-another Nitori reference document or header snapshot.
-
-## Product boundary
-
-- `Nitori.h` is the checked generated header and canonical public implementation.
-- `Nitori_unsafe.h` is the optimizer-assumption generated header.
-- Both come from the same ordered `src/*.hpp` modules.
-- `test/` is the independent valid-input, death and property test suite.
-- `bench/` and `tools/` belong to the maintained Nitori X evidence bench.
-- Legacy implementations, reports, build artifacts and copied headers do not belong in
-  this repository.
+`Nitori.h`, `Nitori_unsafe.h`, `src/`, `test/` and the old tools are V2/X audit material.
+They are not V3 authorities and must not be copied into V3 implementation or tests.
 
 ## Design laws
 
-1. Use signed `int` indices and lengths; intervals are `[l,r)`.
-2. Owning containers own storage. Views map an integer position to a real reference.
-3. Reject immediate dangling borrows from temporary owners.
-4. Algorithms depend on the minimum capability, not a concrete backend or STL iterator.
-5. Put algebraic/action laws in local contract comments; syntax cannot prove them.
-6. Preserve ordered noncommutative folds and action composition order.
-7. checked and unsafe have identical semantics on valid inputs.
-8. Invalid input is never silently clamped into a different operation.
-9. Keep representations private when they protect an invariant.
-10. Prefer short contest code, but never hide the invariant, precondition or overflow
-    boundary that makes it correct.
-11. Put hidden mathematical, lifetime, ordering and complexity contracts beside the
-    class/struct/algorithm that relies on them; do not replace local explanation with
-    a registry-only concept or trait.
-
-## Dependency direction
-
-```text
-contract/base/operations → borrowed reference topology → owning storage
-→ generic mechanisms → data structures/domain algorithms → I/O
-```
-
-High modules must not create reverse or cyclic dependencies. New generic dimensions must
-represent real mathematical differences: value type, comparison, algebra, action,
-storage backend, static capacity, persistence or rollback.
+1. The semantic-source budget is 131072 bytes, excluding comments and layout whitespace.
+2. Use signed `int` positions and half-open `[left,right)` intervals.
+3. Prefer expression-based templates. Do not build a concept/trait/npre registry.
+4. Put mathematical, lifetime, invalidation, ownership and complexity contracts beside code.
+5. Algorithms depend on the smallest callable/data port, never a mandatory backend.
+6. Reuse mechanisms, not wrappers: views, functions, root algebra, graph ports and operations.
+7. Do not unify objects with different semantics merely because all can be represented by integers.
+8. Preserve ordered noncommutative folds and action composition order.
+9. Make destructive consumption, persistent sharing and migration costs explicit.
+10. Prefer short contest code, but never hide the invariant that makes it correct.
 
 ## Change workflow
 
-1. Search `Nitori.h`, the canonical Document and the nearest test for the exact symbol.
-2. Identify the public contract, mathematical invariant, failure boundary and complexity.
-3. Edit semantic modules in `src/`; never edit generated headers independently.
-4. Use `apply_patch` for every repository file creation, change, move or deletion.
-5. Add the smallest fixed regression test and an independent brute/property test when
-   the algorithm is subtle.
-6. Run the narrow checked/unsafe test before any wider gate.
-7. Update `NITORI_DOCUMENT.md` whenever public API, semantics, laws, complexity or recipes
-   change. Do not add another reference file.
+1. Read the exact `src-v3` module, its local contracts and the closest `test-v3` test.
+2. State the useful operation set, brute oracle, algebraic laws and failure boundary.
+3. Edit every repository file only through `apply_patch`.
+4. Add a fixed regression and an independent randomized/property test for subtle behavior.
+5. Run a narrow three-mode gate, then the full gate only at milestones.
+6. Run deterministic benchmark and semantic-size audit at structural milestones.
+7. Update `v3-Tutorial-Comprehensive.md` when public behavior or contracts change.
 
 ```bash
 cd /home/tnuzy/NitoriSTL
-python3 tools/amalgamate.py
-python3 tools/amalgamate.py --check
-python3 tools/test.py TEST_STEM
-python3 tools/test.py
-python3 tools/audit.py
+python3 test-v3/run.py TEST_STEM
+python3 test-v3/run.py
+python3 test-v3/audit.py
+python3 bench-v3/run.py
+python3 test-v3/measure.py
 ```
 
-Full tests and sanitizer audits are milestone gates, not a reflex after every local edit.
-Tests compile through Linux `memfd`; do not leave build binaries in the repository.
-
-## Review checklist
+## Review gate
 
 ```text
-[ ] exact checked-header signature searched
-[ ] Document contract remains accurate
-[ ] owner/view lifetime is valid
-[ ] [l,r), empty range and npos behavior are explicit
-[ ] integer width and sentinel arithmetic are safe
-[ ] local algebra/action contracts are stated and true
-[ ] ordered operations preserve left-to-right meaning
-[ ] complexity matches the implementation and total constraints
-[ ] fixed and randomized tests cover the failure mode
-[ ] both profiles pass the validation budget selected for this change
-[ ] no duplicate authority or legacy artifact was created
+[ ] no V2 implementation/test was copied
+[ ] no unnecessary concept/trait/owner facade appeared
+[ ] owner/view lifetime and root consumption are explicit
+[ ] algebraic laws and action order are visible
+[ ] noncommutative order is preserved where promised
+[ ] complexity matches loops, allocations and historical-node growth
+[ ] fixed and independent random tests attack the dangerous boundary
+[ ] debug, optimized and sanitizer modes pass
+[ ] deterministic checksum and source budget remain controlled
+[ ] Tutorial matches the exact public implementation
 ```
