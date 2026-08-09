@@ -2667,6 +2667,40 @@ h.each(a,b, callback, edge_mode);
 环边。新代码需要拓扑诊断时优先 `nlca`，需要带权距离或多棵树时可用
 `nlca_binary<W>` 并显式承担森林前提。
 
+#### 11.4.1 资源化 rooted forest
+
+当题目需要的不只是一次 LCA，而是要同时持有顶点资源、父子投影、组件和后续可变结构
+的入口时，使用新增的 `nrooted_forest<V>`：
+
+```cpp
+nrooted_forest<int> tree(parent);        // parent[v] == v 表示组件根
+nrooted_forest<int> forest(graph, root); // 图可为父到子单向弧
+
+forest.parent(v);
+forest.root(v); forest.component(v); forest.depth(v);
+forest.children(v); forest.subtree_size(v);
+forest.position(v); forest.vertex(position);
+forest.roots(); forest.order();
+auto node = forest.vertex_node(v);       // 既有 nnode_view，不是图专用 view
+```
+
+parent 构造会按根编号顺序建立组件；图构造只接受严格森林：每条树边必须恰好出现一次
+父到子弧，或恰好出现一对反向弧。`require_symmetric=true` 强制所有边都是后者；为
+`false` 时允许不同组件分别采用两种表示，但一个组件不能混用。指定的 `root` 只固定它
+所在组件的根，其他单向组件必须能推断唯一入度为零的根；对称组件则选择该组件最小编号
+顶点。缺失反向弧会在资源拓扑中补成 canonical symmetric adjacency，因此单树可以直接
+复用 `nlca`、`nhld` 和 `nreroot`；多组件应使用 `nlca_binary` 或先按组件处理，不能把
+森林伪装成 `nlca` 所要求的连通树。
+
+owner 当前只允许修改 vertex payload，不允许绕过 rooted metadata 直接改边。构造是
+`O(V+E)`，`parent/root/component/depth/position/subtree_size` 是 `O(1)`，`children(v)`
+创建和枚举为 `O(degree(v))`，`layout()` 物化旧 `ntree_layout` 投影为 `O(V+E)`、额外
+`O(V+E)` 空间。`domain()` 可与既有 topology/节点域共享资源；共享域的结构交易会使
+旧 `nnode_view` 失效，复制会 clone 独立资源，移动会使源 owner 的快照失效。V3-4 故意
+只交付这个可验证的静态投影；FHQ Euler、动态 link/cut 以及跨树 merge/split 会在 V3-5
+通过现有 implicit FHQ 和 segment family 的交易协议接入，不新增 graph-specific
+`nview`/`nfunc`，也不替换旧的 `ntree_layout`、`nlca`、`nhld`、`nreroot` 能力。
+
 树上路径题的选择信号是：只问祖先关系或距离，LCA 足够；路径上还要反复区间修改/聚合，
 才把树映射到 HLD 的位置区间。`nhld_segment.rev` 不是附加装饰：如果路径聚合非交换，
 反向段必须先翻转，再按原路径方向合并。
@@ -4528,7 +4562,7 @@ epoch：`same_domain` 仍然必须为真才可转移资源，scope 不能授权�
 | V3-1 | 抽出 `nnode_view`/`nseg_node` 共用的 identity/epoch/generation 检查；评估 scope token，暂不引入未接入 owner 的空壳 | 固定 stale/ABA/move/copy 测试；无公共签名回归 |
 | V3-2 | 资源化 owning graph topology；先做 node identity、邻接链和只读枚举 | `graph_topology` fixed/property/death；list/forward/CSR differential |
 | V3-3 | 让 `ngraph_forward` 以兼容 facade 接入资源层；锁定 edge id、顺序、权值修改语义 | 旧 graph/compat 全测；`graph_forward_facade` 随机 add/weight/reverse/narcs 对拍；ASan/UBSan |
-| V3-4 | 把 `ntree_layout` 变成兼容投影并增加 rooted tree/forest owner | 连通/无环/对称/root/order death；LCA/HLD/reroot differential |
+| V3-4 | **已完成**：把 `ntree_layout` 变成兼容投影并增加资源化 `nrooted_forest` owner；静态 rooted metadata 复用 topology 与既有 `nnode_view` | `rooted_forest` fixed/property/death；checked/unsafe；LCA/HLD/reroot 与 `nlca_binary` differential |
 | V3-5 | 组件拆并与动态森林底座：FHQ Euler 序列 + 既有 segment family；先实现可验证 link/cut 子集 | vector oracle、字符串非交换聚合、跨组件 merge/split、stale view death |
 | V3-6 | 算法层适配：遍历/最短路/topo/SCC/MST、LCA/HLD/reroot、flow/matching 的资源入口 | 各后端结果等价；流/匹配独立 oracle；递归深度与容量边界测试 |
 | V3-7 | 性能和提交体验收口；只在 benchmark 证明不退化时替换更多后端 | deterministic benchmark、checksum、内存/节点计数、两 profile valid-input 等价 |
@@ -4759,7 +4793,7 @@ ngraph_view ngraph_like ngraph_list ngraph_forward ngraph_csr ngraph
 nvertices ngraph_arcs_view narcs ngraph_where_view ngraph_where
 npath_result nbfs_path ndijkstra_path nbfs ndijkstra n01bfs
 ntoposort ntopo nscc nscc_kosaraju nscc_tarjan
-nlca nhld_segment nhld nlca_binary nreroot
+nlca nhld_segment nhld nlca_binary nrooted_forest nreroot
 nmst_result nprim nkruskal
 nmaxflow nflow_dinic nflow
 nbipartite_matching nhopcroft_karp nbicover nbimatch_hopcroft nbimatch
