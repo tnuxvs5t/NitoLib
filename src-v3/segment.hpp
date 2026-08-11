@@ -8,6 +8,71 @@ struct nadd {
     constexpr T operator()(T left, const T& right) const { return left += right; }
 };
 
+namespace nsegment_detail {
+template <class F, class I>
+constexpr void emit(F& visit, int node, I left, I right) {
+    if constexpr (requires { invoke(visit, node, left, right); })
+        invoke(visit, node, left, right);
+    else
+        invoke(visit, node);
+}
+}
+
+/*
+Pure segment-topology walks.  root < 0 is absent; child(node,side) returns the existing
+or newly opened child and may return a negative handle to stop.  trace visits root to
+leaf.  cover visits the left-to-right canonical partition of [query_left,query_right).
+The visitor may accept node alone or (node,left,right).  Coordinates and the query are
+valid half-open intervals; no aggregate, tag, push, pull or storage policy is implied.
+*/
+template <class I, class C, class F>
+constexpr void nsegment_trace(int root, I left, I right, I position,
+                              C&& child, F&& visit) {
+    for (int node = root; node >= 0;) {
+        nsegment_detail::emit(visit, node, left, right);
+        if (left + 1 == right) break;
+        I middle = midpoint(left, right);
+        int side = position < middle ? 0 : 1;
+        node = invoke(child, node, side);
+        if (side) left = middle;
+        else right = middle;
+    }
+}
+
+template <class I, class C, class F>
+constexpr void nsegment_cover(int root, I left, I right, I query_left, I query_right,
+                              C&& child, F&& visit) {
+    if (root < 0 || query_left == query_right) return;
+    auto walk = [&](auto&& self, int node, I node_left, I node_right) -> void {
+        if (node < 0 || query_right <= node_left || node_right <= query_left) return;
+        if (query_left <= node_left && node_right <= query_right) {
+            nsegment_detail::emit(visit, node, node_left, node_right);
+            return;
+        }
+        I middle = midpoint(node_left, node_right);
+        if (query_left < middle)
+            self(self, invoke(child, node, 0), node_left, middle);
+        if (middle < query_right)
+            self(self, invoke(child, node, 1), middle, node_right);
+    };
+    walk(walk, root, left, right);
+}
+
+/* Static heap topology: root 1 covers [0,base), children are node*2+side. */
+template <class F>
+constexpr void nsegment_trace(int base, int position, F&& visit) {
+    nsegment_trace(1, 0, base, position,
+                   [](int node, int side) { return node * 2 + side; },
+                   forward<F>(visit));
+}
+
+template <class F>
+constexpr void nsegment_cover(int base, int left, int right, F&& visit) {
+    nsegment_cover(1, 0, base, left, right,
+                   [](int node, int side) { return node * 2 + side; },
+                   forward<F>(visit));
+}
+
 /* M supplies id() and associative M(left,right); order is never assumed commutative. */
 template <class T, class M = nadd<T>>
 struct nseg {
@@ -188,17 +253,26 @@ struct nsparse_seg {
 
     int nodes() const { return pool.len(); }
     void reserve(int n) { pool.reserve(n); }
-    T aggregate(int root) const { return root < 0 ? merge_values.id() : pool[root].aggregate; }
+    node& operator[](int root) { return pool[root]; }
+    const node& operator[](int root) const { return pool[root]; }
 
-  private:
+    /*
+    Structural escape hatch.  If aggregate operations remain in use, value and children
+    already satisfy their aggregate invariant.  A later make may invalidate references,
+    never integer handles.  The zero-argument form creates an identity aggregate.
+    */
     int make(T value, int left = -1, int right = -1) {
         return pool.make(node{move(value), left, right});
     }
 
+    int make() { return make(merge_values.id()); }
+    T aggregate(int root) const { return root < 0 ? merge_values.id() : pool[root].aggregate; }
     void pull(int root) {
         pool[root].aggregate = invoke(merge_values, aggregate(pool[root].left),
                                      aggregate(pool[root].right));
     }
+
+  private:
 
     int set0(int root, long long left, long long right, long long position, T value) {
         if (root < 0) root = make(merge_values.id());

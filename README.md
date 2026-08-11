@@ -15,6 +15,7 @@ V3 不复用 V2 的实现、测试、checked/unsafe 双体系或单头文件组�
 - 语义源码：[`src-v3/`](./src-v3/)
 - 独立测试：[`test-v3/`](./test-v3/)
 - deterministic benchmark：[`bench-v3/`](./bench-v3/)
+- 已验证装配：[`examples-v3/`](./examples-v3/)
 
 V3 暂时没有统一 `Nitori.h`。直接包含需要的模块：
 

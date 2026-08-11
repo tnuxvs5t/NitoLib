@@ -58,6 +58,7 @@ core
 - 长度、位置和稠密顶点编号使用 `int`。
 - 区间统一为半开区间 `[left,right)`。
 - `len()` 是 V3 有限对象的长度接口；`nlen(x)` 也能读取普通容器的 `size()`。
+- `nchmin(target,candidate)` / `nchmax(target,candidate)` 在严格序更优时原地赋值，并返回是否发生更新。
 - V3 默认不做边界检查、溢出检查和契约恢复。
 - view、func、graph descriptor 都可能只是借用；owner 移动、销毁或结构修改后，旧投影可能失效。
 - 操作对象通常用 `id()` 给单位元，用 `operator()(left,right)` 合并。
@@ -418,7 +419,96 @@ sequence(root)               按中序访问 payload 的 nview
 
 头文件：`src-v3/segment.hpp`
 
-### 7.1 `nseg`
+### 7.1 只走拓扑：`nsegment_trace / nsegment_cover`
+
+这两个函数不理解 aggregate、tag、pushup 或 pushdown，只把二叉线段拓扑交给 callback：
+
+```cpp
+nsegment_trace(root, lo, hi, position, child, visit);
+nsegment_cover(root, lo, hi, left, right, child, visit);
+```
+
+`child(node,side)` 返回现存孩子、动态创建的孩子，或用负 handle 表示不存在。`trace` 按
+root 到 leaf 的顺序访问包含 position 的路径；`cover` 按从左到右的顺序访问
+`[left,right)` 的规范分解节点。visit 可以只接收 `node`，也可以接收完整
+`(node,node_left,node_right)`。
+
+静态 heap topology 有直接重载，base 是覆盖长度的二次幂：
+
+```cpp
+vector<multiset<int>> tags(2 * base);
+
+nsegment_trace(base, position, [&](int node) {
+    tags[node].insert(value);               // 点插入写入所有祖先
+});
+
+nsegment_cover(base, left, right, [&](int node) {
+    answer += query(tags[node]);             // 区间查询规范分解
+});
+```
+
+动态开点只需更换 child callable，同一份 walk 不变：
+
+```cpp
+using outer_tree = nsparse_seg<multiset<int>, monostate>;
+outer_tree outer(lo, hi);
+int root = outer.make(multiset<int>{});
+
+auto open_child = [&](int node, int side) {
+    int next = side ? outer[node].right : outer[node].left;
+    if (next < 0) {
+        next = outer.make(multiset<int>{});
+        if (side) outer[node].right = next;
+        else outer[node].left = next;
+    }
+    return next;
+};
+
+nsegment_trace(root, lo, hi, x, open_child, [&](int node) {
+    outer[node].aggregate.insert(y);
+});
+```
+
+内层并不需要是 STL 容器。对于**强制在线**的动态区间次序统计，应把两个维度反过来：
+`nsparse_seg<int,monostate>` 划分固定值域，每个 aggregate 保存一棵维护数组位置的 FHQ
+root，所有内层根共同使用一个 `nfhq<int>` kernel：
+
+```cpp
+int insert_position(int root, int position) {
+    auto [a, b] = positions.split_by(root, [&](int y) { return y < position; });
+    return positions.merge(positions.merge(a, positions.make(position)), b);
+}
+
+nsegment_trace(root, value_lo, value_hi, value, open_child, [&](int node) {
+    outer[node].aggregate = insert_position(outer[node].aggregate, position);
+});
+```
+
+FHQ 对位置做 `count_less(right)-count_less(left)`，即可判断某个值域节点中有多少元素落在
+查询位置区间。排名用 `nsegment_cover` 分解值域前缀；第 k 小则从值域根向下，每层查询
+左孩子的位置计数并选择分支。修改只需沿旧值路径删除 position，再沿新值路径插入。
+整个过程逐条读取并回答操作，不预读修改值，也不做离散化。
+
+每个数组元素在每个值域祖先中拥有不同的 FHQ 节点，因此挂在不同外层节点上的活动根
+互不共享，满足 destructive merge 的契约；整数 root 只是交易句柄，不需要 owner facade。
+设值域高度为 `B`，排名、第 k 小、前驱、后继和单点修改都是期望
+`O(B log n)`。示例把删除后已经脱离所有根的单节点 handle 放进 problem-local free list，
+经 `operator[]` 重置后再插入，因此 FHQ 池为 `O(nB)`；这是整数 handle 与公开结构接口带来
+的自由，而不是 kernel 暗中管理所有权。外层拓扑仍会保留历史出现过的值路径。完整可提交装配见
+[`examples-v3/dynamic_interval_order_statistics.cpp`](./examples-v3/dynamic_interval_order_statistics.cpp)。
+
+这同时覆盖树套树的两组对偶装配：
+
+```text
+点更新、区间查询：trace 写沿途节点，cover 读取规范节点
+区间更新、单点查询：cover 写规范节点，trace 读取沿途节点
+```
+
+静态 trace/cover 为 `O(log n)`；动态版本为 `O(log(hi-lo))`，空间只由 child 是否开点
+决定。动态 child 在 `make` 后必须重新用 handle 索引 parent，不能跨 arena 扩容保存 node
+引用。
+
+### 7.2 `nseg`
 
 `nseg<T,M>` 是迭代线段树。`M` 只需单位元和结合律，合并保持左到右顺序，允许非交换。
 
@@ -432,7 +522,7 @@ seg.set(2, 10);
 `pointwise(other)` 对同位置叶子逐点 destructive merge，再重建内部节点。两棵树必须长度
 相同，且操作对象具有同样的数学意义。复杂度 `O(n)`，不是伪装成 `O(log n)` 的根合并。
 
-### 7.2 `nlazyseg`
+### 7.3 `nlazyseg`
 
 ```cpp
 nlazy_addsum<long long> seg(nall(a));
@@ -452,7 +542,7 @@ Action.apply(aggregate,tag,length)   对区间聚合施加 tag
 
 `apply` 必须对 Merge 可分配。查询会 push lazy，因此逻辑上是查询、物理上可能修改内部缓存。
 
-### 7.3 `nsparse_seg`
+### 7.4 `nsparse_seg`
 
 一个 append-only kernel 同时承载 destructive 与 persistent 根：
 
@@ -471,7 +561,16 @@ merge                     destructive 物化节点 union
 merge_copy                persistent union，可共享空侧子树
 clone                     深拷贝为独占根
 fold / get / aggregate    查询
+make(value,left,right)    公开创建任意节点
+make()                    创建单位聚合节点
+operator[](handle)        直接访问节点
+pull(handle)              从两个孩子重算 aggregate
 ```
+
+`make/operator[]` 是刻意保留的结构逃生口。若之后还调用内建 fold/merge，调用者创建的
+value、left、right 必须已经满足 aggregate 不变量；若只把它用作拓扑和 tag storage，可以
+像上例一样用 `monostate` 架空 merge，并只操作公开节点。`make` 可能令 node 引用失效，整数
+handle 始终稳定。
 
 destructive 根必须独占且互不重叠；persistent 根可能共享节点，不能直接送进 destructive
 操作，除非先 `clone`。这不是一种“万能 merge”，而是同一节点内核上的四种明确交易。
@@ -976,7 +1075,7 @@ V3 的完成标准不是符号数量，而是：核心结构短、组合路径�
 ## 20. 当前公共符号速查
 
 ```text
-core:       nlen
+core:       nlen nchmin nchmax
 view:       nview nall ntabulate nrange nsub nreverse nproject nmap ngather nzip nproduct
 func:       nfunc nkeys nvalues nentries nredomain nrestrict nmap_values ncompose
             nselect_positions nfunc_bind nanchors
@@ -986,7 +1085,8 @@ discrete:   nselect nslice nstride nfilter nindexed ncollect nprefix nsuffix
             nchunks nblock nblocks nwindows nruns
 memory:     narena
 fhq:        nfhq nfhq_noop nmake_fhq
-segment:    nadd nseg nlazyseg naddsum_action nlazy_addsum nsparse_seg
+segment:    nsegment_trace nsegment_cover nadd nseg nlazyseg naddsum_action
+            nlazy_addsum nsparse_seg
 ds:         nsum_group nfenwick ndsu npotential_dsu nrollback_dsu nqueue_agg
             nsparse_table nwavelet
 graph:      ngraph nto_self nordinal nbfs nbfs_many nrooted nroot ncsr nmake_csr
