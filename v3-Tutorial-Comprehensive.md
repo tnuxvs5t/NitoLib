@@ -805,6 +805,7 @@ path_size(a,b)          路径点数
 ### 13.1 `math.hpp`
 
 ```text
+ndiv_floor / ndiv_ceil   任意单一整数类型的数学向下/向上整除
 npow                 泛型快速幂
 next_gcd             扩展 gcd，返回 {gcd,x,y}
 ninv_mod             可选模逆
@@ -813,6 +814,10 @@ nmodint<MOD>         静态模整数
 ncomb<Mint>          阶乘/逆阶乘、排列数和组合数
 nsieve               线性筛、最小质因子、范围内分解与 phi
 ```
+
+`ndiv_floor(a,b)` / `ndiv_ceil(a,b)` 要求 `b != 0`，返回数学意义上的
+`floor(a / b)` / `ceil(a / b)`，同时处理负数除数和无符号整数。模板参数 `I` 是同一个
+内建整数类型；带符号最小值除以 `-1` 不在契约内，因为普通 C++ 除法本身无法表示该商。
 
 `ncrt` 要求最终 lcm 放进 `long long`。`nmodint::inv()` 和除法要求逆元存在；实现不会把
 不可逆除法改写成别的运算。`ncomb` 要求阶乘中用到的每个分母可逆。
@@ -1093,7 +1098,7 @@ graph:      ngraph nto_self nordinal nbfs nbfs_many nrooted nroot ncsr nmake_csr
 graph alg:  n01bfs ndijkstra ntoposort nscc nscc_result
 tree:       npath_piece nhld_layout nhld nreroot nett_forest nlct
 flow:       ndinic nmatching nhopcroft_karp nmst_result nkruskal
-math:       npow negcd_result next_gcd ninv_mod ncrt nmodint ncomb nsieve
+math:       ndiv_floor ndiv_ceil npow negcd_result next_gcd ninv_mod ncrt nmodint ncomb nsieve
 number:     nmulmod64 npowmod64 nisprime nsplitmix64 npollard nfactor
 poly:       nntt nconvolution npoly_derivative npoly_integral npoly_inverse
 linear:     nmatrix nmatmul nmatpow nrref_result nrref ndeterminant ninverse

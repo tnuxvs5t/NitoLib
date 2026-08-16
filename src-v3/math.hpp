@@ -1,6 +1,33 @@
 #pragma once
 #include "core.hpp"
 
+/*
+Mathematical floor/ceiling division for one built-in integer type I.  The divisor must be
+nonzero, and the ordinary C++ quotient a / b itself must be representable (in particular,
+the signed minimum divided by -1 is outside this contract).  Signed and unsigned I are
+handled separately so the sign of a negative numerator is never lost to an unsigned
+conversion.
+*/
+template <class I>
+constexpr I ndiv_floor(I a, I b) {
+    I quotient = a / b, remainder = a % b;
+    if constexpr (numeric_limits<I>::is_signed) {
+        if (remainder != 0 && ((remainder < 0) != (b < 0))) --quotient;
+    }
+    return quotient;
+}
+
+template <class I>
+constexpr I ndiv_ceil(I a, I b) {
+    I quotient = a / b, remainder = a % b;
+    if constexpr (numeric_limits<I>::is_signed) {
+        if (remainder != 0 && ((remainder < 0) == (b < 0))) ++quotient;
+    } else if (remainder != 0) {
+        ++quotient;
+    }
+    return quotient;
+}
+
 /* exponent is nonnegative; one is the multiplication identity. */
 template <class T, class E, class M>
 constexpr T npow(T base, E exponent, T one, M multiply) {
