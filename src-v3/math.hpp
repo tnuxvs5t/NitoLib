@@ -63,9 +63,12 @@ constexpr negcd_result next_gcd(long long a, long long b) {
     return {a, old_x, old_y};
 }
 
-/* modulus is positive; nullopt means the inverse does not exist. */
-constexpr optional<long long> ninv_mod(long long value, long long modulus) {
-    auto [gcd, x, y] = next_gcd(value, modulus);
+/* modulus is positive; value % modulus converts to long long; nullopt means no inverse. */
+template <class I>
+constexpr optional<long long> ninv_mod(I value, long long modulus) {
+    long long reduced_value = static_cast<long long>(value % modulus);
+    if (reduced_value < 0) reduced_value += modulus;
+    auto [gcd, x, y] = next_gcd(reduced_value, modulus);
     (void)y;
     if (gcd != 1) return nullopt;
     x %= modulus;
@@ -73,56 +76,176 @@ constexpr optional<long long> ninv_mod(long long value, long long modulus) {
     return x;
 }
 
-/* Returns the least nonnegative solution and lcm modulus, or nullopt if inconsistent. */
+/* Forward declarations let CRT reuse the same standard-only modular kernels. */
+template <class I>
+constexpr long long nmod_norm(I value, long long modulus);
+
+constexpr long long nmod_add_canonical(long long left, long long right, long long modulus);
+constexpr long long nmod_mul_canonical(long long left, long long right, long long modulus);
+
+/* Positive moduli; residues may be wider; the final lcm must fit long long. */
+template <class A, class B>
 constexpr optional<pair<long long, long long>>
-ncrt(long long a, long long modulus_a, long long b, long long modulus_b) {
+ncrt(A a, long long modulus_a, B b, long long modulus_b) {
+    long long residue_a = static_cast<long long>(a % modulus_a);
+    long long residue_b = static_cast<long long>(b % modulus_b);
+    if (residue_a < 0) residue_a += modulus_a;
+    if (residue_b < 0) residue_b += modulus_b;
     auto [gcd, x, y] = next_gcd(modulus_a, modulus_b);
     (void)y;
-    long long difference = b - a;
+    long long difference = residue_b - residue_a;
     if (difference % gcd) return nullopt;
     long long reduced = modulus_b / gcd;
-    long long step = static_cast<long long>((__int128(difference / gcd) * x % reduced + reduced) % reduced);
+    long long step = nmod_mul_canonical(nmod_norm(difference / gcd, reduced),
+                                        nmod_norm(x, reduced), reduced);
     long long modulus = modulus_a / gcd * modulus_b;
-    long long value = static_cast<long long>((__int128(modulus_a) * step + a) % modulus);
-    if (value < 0) value += modulus;
+    long long value = nmod_add_canonical(
+        nmod_mul_canonical(nmod_norm(modulus_a, modulus), nmod_norm(step, modulus), modulus),
+        nmod_norm(residue_a, modulus), modulus);
     return pair{value, modulus};
 }
 
-/* MOD is positive and fits signed int.  Division requires an invertible divisor. */
-template <int MOD>
+/*
+Runtime-modulus helpers.  The modulus is positive and fits signed long long; the
+canonical residue type is long long, not int.  The two-argument kernels require
+their operands to already lie in [0,modulus).  Wider-operand overloads normalize
+   before entering the canonical kernels.  The kernels use only standard unsigned
+   arithmetic; multiplication falls back to overflow-safe doubling when the product
+   does not fit signed long long.
+*/
+template <class I>
+constexpr long long nmod_norm(I value, long long modulus) {
+    auto residue = value % modulus;
+    long long result = static_cast<long long>(residue);
+    if (result < 0) result += modulus;
+    return result;
+}
+
+constexpr long long nmod_add_canonical(long long left, long long right, long long modulus) {
+    uint64_t result = static_cast<uint64_t>(left) + static_cast<uint64_t>(right);
+    if (result >= static_cast<uint64_t>(modulus)) result -= static_cast<uint64_t>(modulus);
+    return static_cast<long long>(result);
+}
+
+constexpr long long nmod_sub_canonical(long long left, long long right, long long modulus) {
+    return left >= right ? left - right : modulus - (right - left);
+}
+
+constexpr long long nmod_mul_canonical(long long left, long long right, long long modulus) {
+    if (modulus <= 3'037'000'499LL) return left * right % modulus;
+    uint64_t result = 0;
+    uint64_t base = static_cast<uint64_t>(left);
+    uint64_t exponent = static_cast<uint64_t>(right);
+    while (exponent) {
+        if (exponent & 1)
+            result = static_cast<uint64_t>(nmod_add_canonical(
+                static_cast<long long>(result), static_cast<long long>(base), modulus));
+        exponent >>= 1;
+        if (exponent)
+            base = static_cast<uint64_t>(nmod_add_canonical(
+                static_cast<long long>(base), static_cast<long long>(base), modulus));
+    }
+    return static_cast<long long>(result);
+}
+
+constexpr long long nmod_neg_canonical(long long value, long long modulus) {
+    return value ? modulus - value : 0;
+}
+
+constexpr long long nmod_add(int left, int right, long long modulus) {
+    return nmod_add_canonical(left, right, modulus);
+}
+
+constexpr long long nmod_sub(int left, int right, long long modulus) {
+    return nmod_sub_canonical(left, right, modulus);
+}
+
+constexpr long long nmod_mul(int left, int right, long long modulus) {
+    return nmod_mul_canonical(left, right, modulus);
+}
+
+constexpr long long nmod_neg(int value, long long modulus) {
+    return nmod_neg_canonical(value, modulus);
+}
+
+template <class A, class B>
+constexpr long long nmod_add(A left, B right, long long modulus) {
+    return nmod_add_canonical(nmod_norm(left, modulus), nmod_norm(right, modulus), modulus);
+}
+
+template <class A, class B>
+constexpr long long nmod_sub(A left, B right, long long modulus) {
+    return nmod_sub_canonical(nmod_norm(left, modulus), nmod_norm(right, modulus), modulus);
+}
+
+template <class A, class B>
+constexpr long long nmod_mul(A left, B right, long long modulus) {
+    return nmod_mul_canonical(nmod_norm(left, modulus), nmod_norm(right, modulus), modulus);
+}
+
+template <class I>
+constexpr long long nmod_neg(I value, long long modulus) {
+    return nmod_neg_canonical(nmod_norm(value, modulus), modulus);
+}
+
+/*
+MOD is a positive integral constant representable by signed long long.  The
+auto non-type parameter deliberately avoids imposing int on the modulus; for
+example, nmodint<4000000007LL> is a valid type.  Source values are reduced before
+narrowing, and exponents are nonnegative.  Division requires an invertible divisor.
+*/
+template <auto MOD>
 struct nmodint {
-    int value = 0;
-    static constexpr int mod() { return MOD; }
+    static_assert(numeric_limits<decltype(MOD)>::is_integer);
+    static_assert(MOD > 0 && MOD <= LLONG_MAX);
+    using value_type = long long;
+    value_type value = 0;
+    static constexpr value_type mod() { return static_cast<value_type>(MOD); }
     constexpr nmodint() = default;
-    constexpr nmodint(long long x) : value(int(x % MOD)) { if (value < 0) value += MOD; }
-    constexpr explicit operator int() const { return value; }
+    template <class I>
+    constexpr nmodint(I x) : value(nmod_norm(x, mod())) {}
+    constexpr explicit operator int() const { return static_cast<int>(value); }
+    constexpr explicit operator value_type() const { return value; }
     constexpr nmodint& operator+=(nmodint other) {
-        if (value >= MOD - other.value) value -= MOD - other.value;
-        else value += other.value;
+        value = nmod_add_canonical(value, other.value, mod());
         return *this;
     }
     constexpr nmodint& operator-=(nmodint other) {
-        value -= other.value;
-        if (value < 0) value += MOD;
+        value = nmod_sub_canonical(value, other.value, mod());
         return *this;
     }
     constexpr nmodint& operator*=(nmodint other) {
-        value = int(1LL * value * other.value % MOD);
+        value = nmod_mul_canonical(value, other.value, mod());
         return *this;
     }
-    constexpr nmodint pow(long long exponent) const { return npow(*this, exponent); }
-    constexpr nmodint inv() const { return nmodint(*ninv_mod(value, MOD)); }
+    template <class E>
+    constexpr nmodint pow(E exponent) const { return npow(*this, exponent); }
+    constexpr nmodint inv() const { return nmodint(*ninv_mod(value, mod())); }
     constexpr nmodint& operator/=(nmodint other) { return *this *= other.inv(); }
     friend constexpr nmodint operator+(nmodint a, nmodint b) { return a += b; }
     friend constexpr nmodint operator-(nmodint a, nmodint b) { return a -= b; }
     friend constexpr nmodint operator*(nmodint a, nmodint b) { return a *= b; }
     friend constexpr nmodint operator/(nmodint a, nmodint b) { return a /= b; }
-    friend constexpr nmodint operator-(nmodint a) { return a.value ? nmodint(MOD - a.value) : a; }
+    friend constexpr nmodint operator-(nmodint a) { return nmodint(nmod_neg_canonical(a.value, mod())); }
     friend constexpr auto operator<=>(nmodint, nmodint) = default;
     friend ostream& operator<<(ostream& out, nmodint x) { return out << x.value; }
     friend istream& operator>>(istream& in, nmodint& x) {
-        long long value;
-        return in >> value, x = nmodint(value), in;
+        string token;
+        if (!(in >> token)) return in;
+        int at = 0;
+        bool negative = false;
+        if (token[at] == '+' || token[at] == '-') {
+            negative = token[at] == '-';
+            if (++at == int(token.size())) return in.setstate(ios::failbit), in;
+        }
+        value_type residue = 0;
+        for (; at < int(token.size()); ++at) {
+            int digit = token[at] - '0';
+            if (digit < 0 || digit > 9) return in.setstate(ios::failbit), in;
+            residue = nmod_add_canonical(nmod_mul_canonical(residue, 10, mod()), digit, mod());
+        }
+        x.value = negative ? nmod_neg_canonical(residue, mod()) : residue;
+        return in;
     }
 };
 

@@ -1,8 +1,23 @@
 #pragma once
 #include "core.hpp"
 
+/* modulus is nonzero; operands are reduced internally. */
+constexpr uint64_t naddmod64(uint64_t left, uint64_t right, uint64_t modulus) {
+    uint64_t gap = modulus - right;
+    return left >= gap ? left - gap : left + right;
+}
+
 constexpr uint64_t nmulmod64(uint64_t left, uint64_t right, uint64_t modulus) {
-    return uint64_t(__uint128_t(left) * right % modulus);
+    left %= modulus;
+    right %= modulus;
+    if (modulus <= 3'037'000'499ULL) return left * right % modulus;
+    uint64_t result = 0;
+    while (right) {
+        if (right & 1) result = naddmod64(result, left, modulus);
+        right >>= 1;
+        if (right) left = naddmod64(left, left, modulus);
+    }
+    return result;
 }
 
 constexpr uint64_t npowmod64(uint64_t base, uint64_t exponent, uint64_t modulus) {
@@ -56,7 +71,7 @@ inline uint64_t npollard(uint64_t value, uint64_t seed = 0x243f6a8885a308d3ULL) 
         uint64_t y = nsplitmix64(state) % (value - 1) + 1;
         uint64_t constant = nsplitmix64(state) % (value - 1) + 1;
         auto advance = [&](uint64_t x) {
-            return uint64_t((__uint128_t(nmulmod64(x, x, value)) + constant) % value);
+            return naddmod64(nmulmod64(x, x, value), constant, value);
         };
         uint64_t divisor = 1, radius = 1, x = 0, saved = 0;
         while (divisor == 1) {
