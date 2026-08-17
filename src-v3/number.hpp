@@ -8,16 +8,7 @@ constexpr uint64_t naddmod64(uint64_t left, uint64_t right, uint64_t modulus) {
 }
 
 constexpr uint64_t nmulmod64(uint64_t left, uint64_t right, uint64_t modulus) {
-    left %= modulus;
-    right %= modulus;
-    if (modulus <= 3'037'000'499ULL) return left * right % modulus;
-    uint64_t result = 0;
-    while (right) {
-        if (right & 1) result = naddmod64(result, left, modulus);
-        right >>= 1;
-        if (right) left = naddmod64(left, left, modulus);
-    }
-    return result;
+    return uint64_t(__uint128_t(left) * right % modulus);
 }
 
 constexpr uint64_t npowmod64(uint64_t base, uint64_t exponent, uint64_t modulus) {

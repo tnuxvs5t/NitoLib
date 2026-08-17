@@ -811,6 +811,7 @@ next_gcd             扩展 gcd，返回 {gcd,x,y}
 ninv_mod             可选模逆
 ncrt                 两同余合并，不相容返回 nullopt
 nmodint<MOD>         静态模整数
+nmod_norm/add/sub/mul/neg  运行时模数的规范化与基本运算
 ncomb<Mint>          阶乘/逆阶乘、排列数和组合数
 nsieve               线性筛、最小质因子、范围内分解与 phi
 ```
@@ -819,15 +820,32 @@ nsieve               线性筛、最小质因子、范围内分解与 phi
 `floor(a / b)` / `ceil(a / b)`，同时处理负数除数和无符号整数。模板参数 `I` 是同一个
 内建整数类型；带符号最小值除以 `-1` 不在契约内，因为普通 C++ 除法本身无法表示该商。
 
-`ncrt` 要求最终 lcm 放进 `long long`。`nmodint::inv()` 和除法要求逆元存在；实现不会把
-不可逆除法改写成别的运算。`ncomb` 要求阶乘中用到的每个分母可逆。
+模数宽度保持可检查：运行时 `nmod_*` 的模数与规范剩余为正 `long long`；`nmodint<MOD>`
+使用 `auto` 非类型模板参数，`MOD` 要求为正整数且可表示为 signed `long long`，因此不会把
+模数强制压成 `int`。`ninv_mod/ncrt` 的模数与结果仍为 `long long`。源值可以比模数更宽：
+`nmod_norm`、`nmodint` 构造、`ninv_mod` 和 `ncrt` 都先在源类型中取余，再窄化规范剩余，
+因此可直接接收 `__int128_t/__uint128_t`。源类型只需使 `value % modulus` 的结果能够转成
+`long long`，不依赖 `std::integral`。
+
+`nmodint::pow` 的非负指数同样保留调用者类型，只要求支持按位判奇和右移；直接流输入按
+带可选正负号的十进制 token 逐位取模，不要求整段数字先放进 `long long`。
+
+运行时 `nmod_add/sub/mul/neg` 的规范内核接收 `[0,modulus)` 内的 `long long` 剩余；传入
+`int/long long/__int128_t/__uint128_t` 等源值时，同名重载会先分别调用 `nmod_norm`，再进入
+该 `long long` 内核。加法使用无溢出的标准无符号算术；乘法使用 GCC/Clang 的
+`__int128_t` 宽乘法保护中间结果，因此规范模运算保持 `O(1)`。使用 `deploy` 时选择
+compiler-profile 可移植性策略；调用底层二元内核时，调用者仍须保证操作数已在
+`[0,modulus)` 内。
+
+`ncrt` 要求两个模数为正且最终 lcm 放进 `long long`。`nmodint::inv()` 和除法要求逆元
+存在；实现不会把不可逆除法改写成别的运算。`ncomb` 要求阶乘中用到的每个分母可逆。
 
 ### 13.2 64 位素数与分解
 
 头文件：`src-v3/number.hpp`
 
 ```text
-nmulmod64 / npowmod64   __uint128_t 保护的模乘与模幂
+naddmod64 / nmulmod64 / npowmod64   无溢出模加、128 位保护的模乘与模幂
 nisprime                对整个 uint64_t 确定性的 Miller-Rabin
 npollard                Brent 风格 Pollard-Rho，输入为合数
 nfactor                 升序返回带重数的质因子
@@ -1098,8 +1116,9 @@ graph:      ngraph nto_self nordinal nbfs nbfs_many nrooted nroot ncsr nmake_csr
 graph alg:  n01bfs ndijkstra ntoposort nscc nscc_result
 tree:       npath_piece nhld_layout nhld nreroot nett_forest nlct
 flow:       ndinic nmatching nhopcroft_karp nmst_result nkruskal
-math:       ndiv_floor ndiv_ceil npow negcd_result next_gcd ninv_mod ncrt nmodint ncomb nsieve
-number:     nmulmod64 npowmod64 nisprime nsplitmix64 npollard nfactor
+math:       ndiv_floor ndiv_ceil npow negcd_result next_gcd ninv_mod ncrt nmod_norm nmod_add nmod_sub nmod_mul nmod_neg
+            nmodint ncomb nsieve
+number:     naddmod64 nmulmod64 npowmod64 nisprime nsplitmix64 npollard nfactor
 poly:       nntt nconvolution npoly_derivative npoly_integral npoly_inverse
 linear:     nmatrix nmatmul nmatpow nrref_result nrref ndeterminant ninverse
             nlinear_solution nlinear_solve

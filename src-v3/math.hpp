@@ -109,9 +109,8 @@ ncrt(A a, long long modulus_a, B b, long long modulus_b) {
 Runtime-modulus helpers.  The modulus is positive and fits signed long long; the
 canonical residue type is long long, not int.  The two-argument kernels require
 their operands to already lie in [0,modulus).  Wider-operand overloads normalize
-   before entering the canonical kernels.  The kernels use only standard unsigned
-   arithmetic; multiplication falls back to overflow-safe doubling when the product
-   does not fit signed long long.
+before entering the canonical kernels.  Addition uses standard unsigned arithmetic;
+signed __int128_t protects multiplication when the modulus approaches LLONG_MAX.
 */
 template <class I>
 constexpr long long nmod_norm(I value, long long modulus) {
@@ -132,20 +131,7 @@ constexpr long long nmod_sub_canonical(long long left, long long right, long lon
 }
 
 constexpr long long nmod_mul_canonical(long long left, long long right, long long modulus) {
-    if (modulus <= 3'037'000'499LL) return left * right % modulus;
-    uint64_t result = 0;
-    uint64_t base = static_cast<uint64_t>(left);
-    uint64_t exponent = static_cast<uint64_t>(right);
-    while (exponent) {
-        if (exponent & 1)
-            result = static_cast<uint64_t>(nmod_add_canonical(
-                static_cast<long long>(result), static_cast<long long>(base), modulus));
-        exponent >>= 1;
-        if (exponent)
-            base = static_cast<uint64_t>(nmod_add_canonical(
-                static_cast<long long>(base), static_cast<long long>(base), modulus));
-    }
-    return static_cast<long long>(result);
+    return static_cast<long long>(__int128_t(left) * right % modulus);
 }
 
 constexpr long long nmod_neg_canonical(long long value, long long modulus) {
