@@ -1,9 +1,11 @@
 #pragma once
 #include "view.hpp"
+#include "hash.hpp"
 
 /*
 An nfunc separates enumeration from evaluation.  domain[i] is the semantic key at
-position i; eval(key) is its value.  operator[] is positional, operator() is keyed.
+position i; eval(key) is its value.  operator[] is positional, operator() is keyed;
+two or more call arguments are packed into pair or tuple keys.
 The domain and evaluator are public movable descriptors so composition needs no holder,
 friend protocol, locator trait or result-stabilization machinery.
 */
@@ -19,6 +21,16 @@ struct nfunc {
     template <class K>
     constexpr decltype(auto) operator()(K&& key) const {
         return invoke(eval, forward<K>(key));
+    }
+
+    template <class A, class B, class... C>
+    constexpr decltype(auto) operator()(A&& first, B&& second, C&&... rest) const {
+        if constexpr (sizeof...(C) == 0) {
+            return invoke(eval, pair{forward<A>(first), forward<B>(second)});
+        } else {
+            return invoke(eval, tuple{forward<A>(first), forward<B>(second),
+                                      forward<C>(rest)...});
+        }
     }
 };
 
@@ -116,6 +128,44 @@ constexpr auto nfunc_bind(K keys, V values, L locate) {
                  }};
 }
 
+/*
+Aligned binding requires unique stable keys and equal key/value lengths.  A copyable
+structurally invertible domain keeps O(1) algebraic lookup; every other domain is
+materialized once into a static hash inverse.  Queried keys exist.  The explicit
+three-argument overload remains the escape hatch for a problem-specific locator.
+*/
+template <class K, class V>
+auto nfunc_bind(K keys, V values) {
+    if constexpr (copy_constructible<K> && requires(K& domain) {
+                      domain.inverse(domain[0]);
+                  }) {
+        K locate = keys;
+        return nfunc{move(keys),
+                     [values = move(values), locate = move(locate)](auto&& key) mutable
+                             -> decltype(auto) {
+                         return values[locate.inverse(forward<decltype(key)>(key))];
+                     }};
+    } else {
+        auto locate = nmake_hash_inverse(keys);
+        return nfunc{move(keys),
+                     [values = move(values), locate = move(locate)](const auto& key) mutable
+                             -> decltype(auto) {
+                         return values[locate.find(key)];
+                     }};
+    }
+}
+
+/* Explicit hash/equality rules force the static fallback. */
+template <class K, class V, class H, class E>
+auto nfunc_bind(K keys, V values, H hash, E equal) {
+    auto locate = nmake_hash_inverse(keys, move(hash), move(equal));
+    return nfunc{move(keys),
+                 [values = move(values), locate = move(locate)](const auto& key) mutable
+                         -> decltype(auto) {
+                     return values[locate.find(key)];
+                 }};
+}
+
 /* Dense ordinal binding is the common zero-locator case. */
 template <class V>
 constexpr auto nfunc_bind(V values) {
@@ -123,30 +173,4 @@ constexpr auto nfunc_bind(V values) {
     return nfunc{nrange(n), [values = move(values)](int i) mutable -> decltype(auto) {
                      return values[i];
                  }};
-}
-
-/*
-nanchors materializes key -> position once, then owns that index beside the value
-descriptor.  keys[i] corresponds to values[i].  Keys are unique, hash/equality agree,
-both sequences have equal length, every queried key exists, and borrowed key/value
-owners outlive the result.  Key length, order and values stay stable; payloads may mutate.
-Construction is expected O(n), lookup expected O(1), and the index occupies O(n).
-*/
-template <class K, class V, class H, class E>
-constexpr auto nanchors(K keys, V values, H hash, E equal) {
-    using key_type = remove_cvref_t<decltype(keys[0])>;
-    unordered_map<key_type, int, H, E> position(0, move(hash), move(equal));
-    position.reserve(keys.len());
-    for (int i = 0; i < keys.len(); ++i) position.emplace(keys[i], i);
-    return nfunc{move(keys),
-                 [values = move(values), position = move(position)](const auto& key) mutable
-                         -> decltype(auto) {
-                     return values[position.find(key)->second];
-                 }};
-}
-
-template <class K, class V>
-constexpr auto nanchors(K keys, V values) {
-    using key_type = remove_cvref_t<decltype(keys[0])>;
-    return nanchors(move(keys), move(values), hash<key_type>{}, equal_to<key_type>{});
 }

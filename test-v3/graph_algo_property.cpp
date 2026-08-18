@@ -76,11 +76,11 @@ int main() {
     struct named_edge { string to; int cost; };
     vector<vector<named_edge>> edges{{{"a", 4}, {"b", 1}}, {{"t", 2}},
                                      {{"a", 1}, {"t", 8}}, {}};
-    auto named = ngraph{nall(keys), [&](const string& key) -> auto& { return edges[id[key]]; },
+    auto named = ngraph{ninvert(nall(keys)), [&](const string& key) -> auto& { return edges[id[key]]; },
                         [](const named_edge& item) -> const string& { return item.to; }};
     auto named_distance = ndijkstra(named, string("s"),
                                     [](const named_edge& item) { return item.cost; },
-                                    int(1e9), [&](const string& key) { return id[key]; });
+                                    int(1e9));
     CHECK((named_distance == vector<int>{0, 2, 1, 4}));
 
     vector<vector<int>> pending_siblings{{1, 2}, {2}, {1}};

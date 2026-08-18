@@ -35,8 +35,9 @@ auto nmatmul(const A& left, const B& right) {
     return result;
 }
 
-template <class T>
-nmatrix<T> nmatpow(nmatrix<T> base, uint64_t exponent) {
+/* Square matrix; exponent is nonnegative and supports bit testing and right shift. */
+template <class T, class E>
+nmatrix<T> nmatpow(nmatrix<T> base, E exponent) {
     nmatrix<T> result = nmatrix<T>::identity(base.rows);
     while (exponent) {
         if (exponent & 1) result = nmatmul(result, base);

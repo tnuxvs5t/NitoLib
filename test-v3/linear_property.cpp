@@ -77,6 +77,16 @@ int main() {
     for (int i = 0; i < 50; ++i) state = apply(fibonacci, state);
     check(apply(power, vector<mint>{1, 0}) == state, "matrix power");
 
+    __int128_t huge = 1;
+    for (int i = 0; i < 36; ++i) huge *= 10;
+    auto translation = nmatrix<mint>::identity(2);
+    translation(0, 1) = 1;
+    auto huge_power = nmatpow(translation, huge);
+    check(huge_power(0, 0) == mint(1) && huge_power(1, 1) == mint(1),
+          "wide matrix exponent diagonal");
+    check(huge_power(0, 1) == mint(huge) && huge_power(1, 0) == mint(0),
+          "wide matrix exponent translation");
+
     nmatrix<mint> impossible(1, 1);
     vector<mint> one{1};
     auto no = nlinear_solve(impossible, nall(one));

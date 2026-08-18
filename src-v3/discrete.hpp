@@ -80,9 +80,11 @@ constexpr auto nstride(S source, int first, int last, int step) {
     int distance = step > 0 ? max(0, last - first) : max(0, first - last);
     int width = abs(step);
     int count = distance / width + (distance % width != 0);
-    return nselect(move(source), ntabulate(count, [first, step](int i) {
-                       return first + i * step;
-                   }));
+    return nselect(move(source), ntabulate(
+        count,
+        [first, step](int i) { return first + i * step; },
+        [first, step](int position) { return (position - first) / step; }
+    ));
 }
 
 template <class S>
@@ -108,34 +110,67 @@ constexpr auto nindexed(S source) {
     return nzip(nrange(n), move(source));
 }
 
-namespace ndiscrete_detail {
-template <class T>
-struct owned { using type = remove_cvref_t<T>; };
-
-template <class A, class B>
-struct owned<pair<A, B>> {
-    using type = pair<typename owned<remove_cvref_t<A>>::type,
-                      typename owned<remove_cvref_t<B>>::type>;
-};
-
-template <class... T>
-struct owned<tuple<T...>> {
-    using type = tuple<typename owned<remove_cvref_t<T>>::type...>;
-};
-
-template <class T>
-using owned_t = typename owned<remove_cvref_t<T>>::type;
-}
-
 /* ncollect recursively removes references inside pair/tuple results such as nzip. */
 template <class T = void, class S>
 auto ncollect(S source) {
-    using inferred = ndiscrete_detail::owned_t<decltype(source[0])>;
+    using inferred = nview_detail::owned_t<decltype(source[0])>;
     using result = conditional_t<is_void_v<T>, inferred, T>;
     vector<result> values;
     values.reserve(nlen(source));
     for (int i = 0; i < nlen(source); ++i) values.emplace_back(source[i]);
     return values;
+}
+
+/*
+Position write kernel.  nassign(destination,value_at) assigns value_at(position) and is
+the primitive behind fill/copy/transform.  Destinations yield assignable lvalues;
+ncopy/ntransform require destination.len() >= source.len(), and binary transform also
+requires equal input lengths.  Calls proceed left-to-right.  Descriptors may be temporary,
+but their borrowed owners outlive the call.  Overlapping source/destination storage has
+sequential rather than snapshot semantics, so use ncollect first when detached input is
+required.
+*/
+namespace ndiscrete_detail {
+template <class D, class F>
+constexpr void assign(D&& destination, int count, F& value_at) {
+    for (int i = 0; i < count; ++i) destination[i] = invoke(value_at, i);
+}
+}
+
+template <class D, class F>
+constexpr void nassign(D&& destination, F value_at) {
+    int n = nlen(destination);
+    ndiscrete_detail::assign(forward<D>(destination), n, value_at);
+}
+
+template <class D, class T>
+constexpr void nfill(D&& destination, T value) {
+    nassign(forward<D>(destination), [&](int) -> const T& { return value; });
+}
+
+template <class S, class D>
+constexpr void ncopy(S&& source, D&& destination) {
+    int n = nlen(source);
+    auto value_at = [&](int i) -> decltype(auto) { return source[i]; };
+    ndiscrete_detail::assign(forward<D>(destination), n, value_at);
+}
+
+template <class S, class D, class F>
+constexpr void ntransform(S&& source, D&& destination, F operation) {
+    int n = nlen(source);
+    auto value_at = [&](int i) -> decltype(auto) {
+        return invoke(operation, source[i]);
+    };
+    ndiscrete_detail::assign(forward<D>(destination), n, value_at);
+}
+
+template <class A, class B, class D, class F>
+constexpr void ntransform(A&& first, B&& second, D&& destination, F operation) {
+    int n = nlen(first);
+    auto value_at = [&](int i) -> decltype(auto) {
+        return invoke(operation, first[i], second[i]);
+    };
+    ndiscrete_detail::assign(forward<D>(destination), n, value_at);
 }
 
 /* Left-to-right scalar fold.  operation(accumulator,value) must return assignable T. */

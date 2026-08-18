@@ -3,7 +3,7 @@
 #include "view.hpp"
 
 /* length is a power of two dividing MOD-1; ROOT is a primitive root modulo MOD. */
-template <int MOD = 998244353, int ROOT = 3>
+template <auto MOD = 998244353, auto ROOT = 3>
 void nntt(vector<nmodint<MOD>>& values, bool inverse = false) {
     using mint = nmodint<MOD>;
     int n = int(values.size());
@@ -33,7 +33,7 @@ void nntt(vector<nmodint<MOD>>& values, bool inverse = false) {
     }
 }
 
-template <int MOD = 998244353, int ROOT = 3, class X, class Y>
+template <auto MOD = 998244353, auto ROOT = 3, class X, class Y>
 vector<nmodint<MOD>> nconvolution(X left, Y right) {
     using mint = nmodint<MOD>;
     if (!left.len() || !right.len()) return {};
@@ -71,7 +71,7 @@ vector<M> npoly_integral(const vector<M>& polynomial) {
 }
 
 /* series[0] is invertible; returns the first terms coefficients of 1/series. */
-template <int MOD = 998244353, int ROOT = 3, class V>
+template <auto MOD = 998244353, auto ROOT = 3, class V>
 vector<nmodint<MOD>> npoly_inverse(V series, int terms) {
     using mint = nmodint<MOD>;
     if (!terms) return {};

@@ -35,7 +35,7 @@ int main() {
         for (int vertex = n; --vertex > 0;) subtree[parent[vertex]] += subtree[vertex];
 
         auto direct = nhld(nrange(n), nrange(1),
-                           [&](int vertex) -> auto& { return children[vertex]; }, nordinal{});
+                           [&](int vertex) -> auto& { return children[vertex]; });
         auto graph = ngraph{nrange(n), [&](int vertex) -> auto& { return adjacency[vertex]; }};
         auto rooted = nroot(graph, nrange(1));
         auto projected = nhld(rooted);
@@ -95,9 +95,8 @@ int main() {
     unordered_map<string, int> id{{"root", 0}, {"left", 1}, {"right", 2}, {"leaf", 3}};
     vector<vector<string>> children{{"left", "right"}, {"leaf"}, {}, {}};
     vector<string> roots{"root"};
-    auto named = nhld(nall(keys), nall(roots),
-                      [&](const string& key) -> auto& { return children[id[key]]; },
-                      [&](const string& key) { return id[key]; });
+    auto named = nhld(ninvert(nall(keys)), nall(roots),
+                      [&](const string& key) -> auto& { return children[id[key]]; });
     CHECK(named.lca(string("leaf"), string("right")) == "root");
     CHECK(named.positions()("leaf") >= 0);
 }

@@ -2,6 +2,8 @@
 
 > 状态：从零重建中。本文只描述 `src-v3/` 当前已经存在并经过独立测试的能力。
 > V2/X 及更早代码已离开活动工作树；V3 暂时没有统一头文件。
+> v3.1 的当前结构主线是 inverse-first：`nview` 表达正反映射，`nfunc` 复用结构 inverse
+> 或静态 hash fallback，图与树算法只消费这一条定位端口。
 
 ## 0. V3 到底在改革什么
 
@@ -37,9 +39,11 @@ V3 使用 C++23，直接包含需要的模块：
 
 ```text
 core
+├── io
 ├── view
-│   ├── func ─┬─ discrete
-│   │          └─ graph ── graph_algo / graph_store / tree
+│   ├── hash ── func ─┬─ debug（同时依赖 io）
+│   │                  ├─ discrete
+│   │                  └─ graph ── graph_algo / graph_store / tree
 │   ├── ds ── flow
 │   └── string / automata / wavelet / linear / geom
 ├── arena
@@ -77,7 +81,130 @@ struct sum {
 是否允许非交换操作，要看具体结构。`nseg` 保序，`nett_forest` 因为会旋转 Euler 环而要求
 交换；这类差异不会被一个万能 algebra trait 抹平。
 
-## 3. `nview`：只表达有限位置投影
+### 2.1 `io.hpp`：与 iostream 共用缓冲区的泛整数 I/O
+
+`io.hpp` 不替换 `cin/cout`，也不安装新的全局 `streambuf`。它直接使用调用者现有
+`istream/ostream` 的缓冲区和状态，因此普通 `>>/<<` 与 Nitori 整数 I/O 可以按调用顺序
+任意交叉：
+
+```cpp
+#include "src-v3/io.hpp"
+
+ios::sync_with_stdio(false);
+cin.tie(nullptr);
+
+int n;
+__int128_t limit;
+cin >> n;
+nread(limit);                 // 默认读取 cin
+
+long long a, b;
+nscan(a, b);                  // 空格分隔的多个十进制整数
+cout << "answer ";
+nprintln(limit, a + b);       // 默认写入 cout，值之间一个空格并换行
+```
+
+显式流版本适用于文件和字符串台架：
+
+```cpp
+stringstream data("12 -34");
+int x, y;
+nscan(data, x, y);
+nprintln(cerr, x, y);
+```
+
+```text
+nread([in,] value)            读一个整数；成功返回 true
+nscan([in,] values...)        共用一次 stream sentry，全部成功才返回 true
+nwrite([out,] value)          写一个十进制整数
+nprint([out,] values...)      单空格分隔，不换行
+nprintln([out,] values...)    单空格分隔并换行
+```
+
+输入支持可选 `+/-`，逐位检查目标类型的上下界，因此覆盖普通整数以及
+`__int128_t/__uint128_t`，不会借道 `long long`。越界、无数字或流错误设置 `failbit`，并保持
+目标值不变；完整 token 恰好在 EOF 结束时读取成功并设置 `eofbit`。输出也直接处理最小有
+符号值，不先取可能溢出的绝对值。
+
+这是十进制整数端口，不服从流的 `hex/oct/showbase/width/locale` 数值格式状态；字符串、
+浮点、容器和格式 DSL 继续使用标准流或题内代码。若使用默认 `cin/cout` 入口，通常仍应在
+`main` 开头关闭同步并解除 `cin` 的 tie。
+
+### 2.2 `debug.hpp`：递归、即时的 Python 风格观察
+
+`debug.hpp` 默认把值写入 `cerr`，参数之间一个空格，结尾换行并立即 flush；也可以把
+`ostream` 作为第一个参数，便于字符串台架或文件记录：
+
+```cpp
+#include "src-v3/debug.hpp"
+
+vector<pair<int, tuple<string, vector<int>>>> a{
+    {1, {"north", {2, 3}}},
+    {4, {"south", {5}}}
+};
+ndebug("a =", a);
+
+ostringstream out;
+ndebug(out, "state =", a);
+```
+
+```text
+a = [(1, ("north", [2, 3])), (4, ("south", [5]))]
+```
+
+顶层字符串像 Python `print` 一样原样输出，因此可直接充当标签；嵌套字符串与 `char` 带
+引号并转义。整数（包括 128 位）、浮点、布尔、空指针以及已有 `ostream << value` 的
+叶子类型均可输出。`vector` 使用 `[a, b]`，`pair/tuple` 使用 `(a, b)`；单元素 tuple 保留
+尾逗号。它们可以任意嵌套。
+
+用户类型可以在类型所在的命名空间提供 ADL 调试接口，不需要加入全局注册表：
+
+```cpp
+namespace app {
+
+struct point {
+    int x, y;
+};
+
+void ndebug_repr(ndebug_writer& out, const point& value) {
+    out.object("point", [&](auto field) {
+        field("x", value.x);
+        field("y", value.y);
+    });
+}
+
+}
+
+app::point p{2, 3};
+ndebug("p =", p);
+// p = point{x=2, y=3}
+```
+
+`ndebug_writer::value(x)` 重新进入递归渲染，因此字段可以继续使用 `vector`、`tuple`、
+`nview`、`nfunc` 或其他自定义类型的格式。`object(type, fields)` 负责输出
+`type{field=value, ...}` 的标点；`raw(text)` 原样写出，只应用于固定标点和格式标签。
+自定义接口优先于 `operator<<`，没有自定义接口时原有的 `operator<<` 叶子行为保持不变。
+自定义函数应接受 `const T&`，不得依赖 writer 在回调结束后继续存在。
+
+`nview` 显示为 `nview[...]`，强调它是惰性位置投影；`nfunc` 显示为按 position 排列的
+`nfunc[(key, value), ...]`。后者故意不伪装成字典，因为 domain 可以有重复 key，而且顺序
+属于语义的一部分：
+
+```cpp
+auto square = nfunc{nrange(3), [](int key) { return key * key; }};
+ndebug("square =", square);
+// square = nfunc[(0, 0), (1, 1), (2, 4)]
+```
+
+观察惰性对象会真实求值：`nview` 从左到右访问每个 position 一次；`nfunc` 对每个 position
+求 key 一次，再用同一个 key 调 evaluator 一次。有状态 accessor/evaluator 因此可能推进
+状态。接口不复制 descriptor，也不延长 `nall(owner)` 的借用寿命。完整输出的时间为
+`O(输出节点数 + 字符数)`，不做隐藏截断；大对象应先用 `nsub/nslice` 缩小观察范围。
+
+模块不读取 `ONLINE_JUDGE` 或 `NDEBUG`，也不定义全局调试宏。若提交时需要彻底移除求值，
+由调用处显式使用 `#ifdef LOCAL` 包围 `ndebug`。
+
+## 3. `nview`：有限位置投影与可选 inverse
 
 头文件：`src-v3/view.hpp`
 
@@ -88,11 +215,21 @@ struct nview {
     Access access;
     int len() const;
     decltype(auto) operator[](int position) const;
+    // 仅当 accessor 提供该表达式时存在
+    int inverse(Key&& key) const;
 };
 ```
 
 `nview` 拥有 accessor，但通常不拥有 accessor 引用的数据。const 是浅 const：如果 accessor
-返回 `T&`，那么 const view 仍然能修改底层对象。
+返回 `T&`，那么 const view 仍然能修改底层对象。普通 view 只需要 `access(position)`；若
+accessor 还提供 `inverse(key)`，则该投影声明自己单射，并满足：
+
+```text
+view.inverse(view[position]) == position
+```
+
+inverse 只对 view 的像内 key 有定义，不做 membership 或边界恢复。key 的值、顺序或 owner
+结构变化后，依赖旧 key 的 inverse 可能失效。
 
 ### 3.1 创建和切片
 
@@ -108,7 +245,30 @@ auto rev = nreverse(all);
 `nall(vector<int>{...})` 故意不能编译，因为临时 owner 会立刻销毁。`nsub` 不复制元素，
 也不检查区间。`ntabulate` 每次访问都会重新调用函数。
 
-### 3.2 projection 与 materialization
+### 3.2 结构 inverse
+
+`nrange` 自带 O(1) inverse；`nsub`、`nreverse` 在 source 可逆时传播 inverse：
+
+```cpp
+auto ids = nreverse(nsub(nrange(10, 30), 3, 9));
+assert(ids.inverse(ids[2]) == 2);
+```
+
+自定义投影可以同时给出两个方向：
+
+```cpp
+auto arithmetic = ntabulate(
+    6,
+    [](int position) { return 10 + 3 * position; },
+    [](int key) { return (key - 10) / 3; }
+);
+```
+
+`nlocate(view)` 借用一个可逆 lvalue view，返回 `key -> position` callable；它不延长 view
+寿命。`ninvert(view)` 保留已有结构 inverse；若 view 不可逆，则一次性建立并拥有静态 hash
+inverse。后者位于 `hash.hpp`，构造期望 O(n)、查询期望 O(1)。
+
+### 3.3 projection 与 materialization
 
 ```cpp
 struct item { int key, value; };
@@ -124,17 +284,23 @@ int x = doubled[0];                    // 本次访问产生一个值
 `nproject` 保留 callable 的返回类别；`nmap` 把返回结果物化为值。两者都仍是惰性访问，
 `nmap` 不是缓存容器。
 
-### 3.3 组合器
+### 3.4 组合器
 
 ```cpp
 auto picked = ngather(nall(a), ntabulate(2, [](int i) { return 1 - i; }));
 auto zipped = nzip(nrange(3), ntabulate(3, [](int i) { return i * i; }));
 auto cells = nproduct(nrange(2), nrange(3));
+auto cube = nproduct(nrange(2), nrange(3), nrange(4));
 ```
 
 - `ngather(values,positions)` 按位置重排或重复访问。
 - `nzip` 取最短输入长度，tuple 元素保留引用。
-- `nproduct` 是左主序笛卡尔积，长度乘积必须能放进 `int`。
+- `nproduct` 是左主序笛卡尔积，最后一维变化最快，长度乘积必须能放进 `int`。
+  二维结果保持 `pair`，三维及以上结果是 tuple；tuple 元素保留输入 view 的返回类别。
+
+`nproduct` 在所有轴可逆时同时提供坐标到 flat position 的 inverse，不再要求调用者另外
+重复 shape。`ngather` 在 source 与 position plan 都可逆时传播 inverse；`nmap/nproject/nzip`
+默认不猜测逆映射。`nfilter/norder` 也不会为了保留 inverse 偷偷再分配 O(n) 反向计划。
 
 `nview` 还提供随机访问 iterator，因此可以 range-for，也能交给真正接受随机访问 iterator
 的标准算法。迭代器内部借用 view 本身，不能比 view 活得更久。
@@ -160,15 +326,27 @@ struct nfunc {
 ```cpp
 vector<string> names{"alice", "bob"};
 vector<int> score{80, 95};
-unordered_map<string, int> locate{{"alice", 0}, {"bob", 1}};
 
-auto f = nfunc_bind(nall(names), nall(score),
-                    [&](const string& key) { return locate.at(key); });
+auto f = nfunc_bind(nall(names), nall(score));
 
 assert(f.key(1) == "bob");
 assert(f[1] == 95);             // 按 position
 assert(f("alice") == 80);      // 按 key
 ```
+
+`operator()` 支持把多个实参自动打包成结构化 key：两个实参打包成 `pair`，三个及以上实参
+打包成 `tuple`。因此可以直接用坐标调用笛卡尔积函数：
+
+```cpp
+auto f = nfunc{
+    nproduct(nrange(2), nrange(3)),
+    [](const pair<int, int>& cell) { return 3 * cell.first + cell.second; }
+};
+assert(f[5] == 5);
+assert(f(1, 2) == f(pair{1, 2}));
+```
+
+单个实参仍按原样传递；多参数调用与手动构造对应的 `pair`/`tuple` 等价。
 
 稠密下标是常见特例：
 
@@ -176,44 +354,52 @@ assert(f("alice") == 80);      // 按 key
 auto dense = nfunc_bind(nall(score));  // key 就是 0..n-1
 ```
 
-### 4.1 `nanchors`：无工作记忆地锚定两组枚举
+`nfunc` 本身不要求 domain key 唯一。一般 evaluator 可以在重复 domain 上枚举同一个 key
+多次；只有把两组按 position 对齐的 keys/values 绑定起来时，才需要 key 唯一。
 
-当 `keys[i]` 就应映射到 `values[i]`，但调用者不想另外声明和维护 locator 时：
+### 4.2 binding：结构 inverse 优先，hash fallback 兜底
+
+两参数 binding 表示 `keys[position]` 与 `values[position]` 对齐：
 
 ```cpp
+auto grid = nproduct(nrange(10, 13), nrange(-2, 2));
+auto cells = nfunc_bind(grid, nrange(12));
+assert(cells(12, 1) == 11);       // 使用 nproduct 的结构 inverse
+
 vector<string> names{"alice", "bob"};
 vector<int> score{80, 95};
-
-auto f = nanchors(nall(names), nall(score));
-assert(f[1] == 95);
-assert(f("alice") == 80);
+auto scores = nfunc_bind(nall(names), nall(score));
+assert(scores("bob") == 95);     // nall 无结构 inverse，构造一次 hash fallback
 ```
 
-`nanchors` 在构造时物化并拥有一个 `key -> position` 的 `unordered_map`，返回值仍是普通
-`nfunc`，因此可以直接继续使用 `nvalues`、`nentries`、`nredomain` 和 `nmap_values`。
-构造期望 `O(n)`，按 position 或 key 求值期望 `O(1)`，完整枚举期望 `O(n)`，索引额外占用
-`O(n)` 空间；它不会退化成逐次线性扫描。
-
-默认入口使用 `std::hash<Key>` 和 `std::equal_to<Key>`。无标准哈希的 key 可以显式给出
-规则：
-
-```cpp
-auto f = nanchors(nall(keys), nall(values), key_hash, key_equal);
-```
-
-调用者保证：两组序列等长、key 唯一、哈希与相等关系一致、查询的 key 存在。descriptor
-借用的 owner 必须活得足够久，而且建表后 key 的长度、次序和值不可改变；payload value 可以修改。
-这些是注释契约，不会生成 concept/trait 或非法输入恢复层。
-
-如果题目已经有更紧凑的数组 inverse、坐标压缩结果或其他 locator，继续使用
-`nfunc_bind(keys,values,locate)`，避免重复建哈希表。两者的分工是：
+选择顺序是：
 
 ```text
-nanchors    自动拥有索引，消除调用者的 locator 工作记忆
-nfunc_bind  接入已有 locator，保留题目特定的时间与空间结构
+可复制且具有结构 inverse 的 keys  -> 复制轻量 descriptor，保持代数定位
+其他 keys                           -> 物化静态 hash inverse
 ```
 
-### 4.2 组合接口
+hash fallback 把 owned key 紧凑存放，并使用 8-byte slot：高 32 位是 fingerprint，低 32 位是
+`position+1`，零表示空槽。它是一次构建、只查询的静态 inverse，不提供 erase、节点迭代器
+或增量 rehash。构造期望 O(n)，查询期望 O(1)，额外空间 O(n)。`nhash` 对普通叶子使用
+`std::hash`，递归支持 `pair/tuple`，并给每张默认表独立 salt。
+
+自定义 hash/equality 使用四参数 overload，并强制走 hash fallback：
+
+```cpp
+auto f = nfunc_bind(nall(keys), nall(values), key_hash, key_equal);
+```
+
+若题目已经有坐标压缩数组或其他更紧凑 locator，继续使用三参数 overload：
+
+```cpp
+auto f = nfunc_bind(keys, values, locate);
+```
+
+所有 binding 都要求两组序列等长、key 唯一且查询 key 存在。hash/equality 必须一致；借用
+owner 必须存活，建表后 key 的长度、次序和值保持稳定，payload value 可以修改。
+
+### 4.3 组合接口
 
 ```text
 nkeys(f)                       domain
@@ -235,7 +421,7 @@ descriptor 拥有。因此 move-only 或内部有状态的 evaluator 不会因�
 
 `nproduct` 与 `nmap_values` 是稳定的公共名字，不会因为底层实现缩小而消失。
 
-### 4.3 `discrete.hpp`：用位置计划打通 view 与 func
+### 4.4 `discrete.hpp`：用位置计划打通 view 与 func
 
 V2 的问题不是 `nruns/nsort` 这些需求不存在，而是它们曾经被 holder、
 locator、trait 和结果稳定化协议包得太重。`src-v3/discrete.hpp` 只增加一个内核：
@@ -289,6 +475,11 @@ norder(source,compare,projection)     应用计划，不移动值
 值操作与基础序列内核：
 
 ```text
+nassign(destination,value_at)        destination[i] = value_at(i)
+nfill(destination,value)             用稳定 value 填充全部目标位置
+ncopy(source,destination)             按 position 左到右复制
+ntransform(source,destination,op)     一元位置变换并写入
+ntransform(a,b,destination,op)        二元位置变换并写入
 nprefix(source,identity={},operation=plus<>)  含 ID 的左扫描
 nsuffix(source,identity={},operation=plus<>)  含 ID 的右扫描
 nsort(source,compare,projection)      原地排序 source[position] 左值
@@ -300,6 +491,22 @@ nall_of / nany_of / nnone_of         量词
 nargmin / nargmax                     极值位置（空序列为 len）
 nlower / nupper                       已排序位置序列的插入位置
 ```
+
+`nassign` 是写入内核，参数不是含糊的“值或 range”联合体，而始终是
+`value_at(position)`：
+
+```cpp
+vector<int> a(6), b(6);
+nassign(nall(a), [](int i) { return i * i; });
+nfill(nstride(nall(a), 2), -1);            // 只填偶数 position
+ncopy(nall(a), nreverse(nall(b)));         // 复制到重排后的目标
+ntransform(nall(a), nall(b), [](int x) { return x + 1; });
+```
+
+因此目标既可以是普通 `nview`，也可以是 `nfunc` 的 value 投影；domain/key 不会被写入。
+`ncopy/ntransform` 要求目标至少与输入等长，二元 transform 的两个输入等长。所有调用严格
+从左到右执行，不隐藏分配；若输入与目标重叠，后续读取会观察到前面已经完成的写入。需要
+快照语义时先显式 `ncollect`。四者均为 O(写入位置数)，目标必须产生可赋值左值。
 
 `nprefix/nsuffix` 不是切片别名，而是物化全部前后缀折叠值。默认 accumulator 是 source
 元素的去引用值类型，默认 ID 为该类型的 `{}`，默认 OP 为 `plus<>`：
@@ -645,8 +852,10 @@ graph.edges(vertex)
 graph.target(edge)
 ```
 
-邻接结果只需能被 range-for。顶点不是稠密整数时，再传 `index(key)->[0,n)`。没有
-`ngraph_like` concept，也没有默认 edge trait。
+邻接结果只需能被 range-for。`vertices` 必须是可逆 `nview`：
+`vertices.inverse(key)->[0,n)` 把语义顶点映到算法内部 position。连续整数、切片、反转和
+笛卡尔积通常自带结构 inverse；任意离散 key 可在装图前用 `ninvert` 一次性附加静态 hash
+fallback。没有额外 index 参数、`ngraph_like` concept 或默认 edge trait。
 
 ### 9.1 任意后端示例
 
@@ -661,6 +870,20 @@ auto distance = nbfs(graph, 0);
 
 只要端口表达式成立，同一个 BFS 也可以运行在隐式状态图、forward-star、CSR 或用户自定义
 压缩结构上。
+
+非整数顶点也沿同一条端口装配：
+
+```cpp
+vector<string> names{"source", "middle", "sink"};
+auto vertices = ninvert(nall(names));
+auto graph = ngraph{
+    move(vertices),
+    [&](const string& vertex) { return adjacency(vertex); }
+};
+auto distance = nbfs(graph, string{"source"});
+```
+
+hash inverse 由 vertex descriptor 自己拥有；其借用的 `names` 与邻接后端仍须活过算法调用。
 
 ### 9.2 `ncsr`
 
@@ -693,8 +916,9 @@ ndinic                Dinic 最大流与残量 cut
 nhopcroft_karp        二分图最大匹配
 ```
 
-`nscc(forward,reverse,index)` 要求两张图的 vertex descriptor 在相同 position 上表示同一个
-key。V3 不替用户偷偷构造反图，因为反图的存储策略本来就是自由度的一部分。
+`nscc(forward,reverse)` 要求两张图的 vertex descriptor 在相同 position 上表示同一个
+key；第二遍仍以正图的 inverse 解释反图 edge target。V3 不替用户偷偷构造反图，因为反图
+的存储策略本来就是自由度的一部分。
 
 `ndinic<C>` 的容量类型要支持零值、比较、加减与 `min`。DFS 是递归实现，极深层次图需要
 由调用者评估栈深度。
@@ -703,7 +927,7 @@ key。V3 不替用户偷偷构造反图，因为反图的存储策略本来就�
 
 ### 11.1 `nroot`
 
-`nroot(graph,roots,index)` 对给定根做 first-discovery，返回 `nrooted`：
+`nroot(graph,roots)` 对给定根做 first-discovery，返回 `nrooted`：
 
 ```text
 parents() subtree_sizes() depths() components() positions()
@@ -723,8 +947,10 @@ order() roots() children(vertex)
 核心构造端口是：
 
 ```cpp
-auto layout = nhld(vertices, roots, children, index);
+auto layout = nhld(vertices, roots, children);
 ```
+
+其中 `vertices` 自身必须提供 inverse；核心入口没有独立 `index` 参数。
 
 便利入口 `nhld(rooted)` 只是把 `nrooted` 投影接入同一个核心，不制造另一套树 owner。
 
@@ -743,7 +969,7 @@ HLD 需要 roots/children 真正描述一片 rooted forest，每个非根恰好�
 ### 11.3 `nreroot`
 
 ```cpp
-auto answer = nreroot(graph, base, lift, merge, index);
+auto answer = nreroot(graph, base, lift, merge);
 ```
 
 输入是每条无向边以两个方向各出现一次的森林。`base(vertex)` 产生点自身状态；
@@ -881,8 +1107,9 @@ ninverse                 可逆时返回逆矩阵，否则 nullopt
 nlinear_solve            particular + nullspace basis，或 inconsistent
 ```
 
-朴素乘法 `O(rmk)`；RREF、行列式和求逆为标准三次复杂度。维度相容、方阵条件和右端长度
-属于调用者契约。
+`nmatpow` 的非负指数保留调用者类型，只要求支持按位判奇和右移，因此可以直接使用
+`__int128_t` 指数。朴素乘法 `O(rmk)`；RREF、行列式和求逆为标准三次复杂度。维度相容、
+方阵条件和右端长度属于调用者契约。
 
 ## 14. 字符串
 
@@ -992,9 +1219,9 @@ V3 不以“恢复全部 V2 公共符号”为目标。当前取舍如下。
 ### 17.1 已从零重建并保留
 
 ```text
-位置投影：nview、range/sub/reverse/project/map/gather/zip/product
-离散函数：nfunc、bind/anchors/keys/values/entries/redomain/restrict/map_values/compose
-离散算法：select/slice/stride/filter/collect/order/sort、序列折叠、区间键 chunks/blocks/windows/runs
+位置投影：nview、range/sub/reverse/project/map/gather/zip/product、结构 inverse
+离散函数：nfunc、bind/keys/values/entries/redomain/restrict/map_values/compose、hash fallback
+离散算法：select/slice/stride/filter/collect/order/sort、assign/fill/copy/transform、序列折叠、区间键 chunks/blocks/windows/runs
 节点内核：narena、隐式 FHQ、多根 destructive split/merge
 区间结构：Fenwick、迭代/懒/稀疏/持久根线段树、聚合队列、Sparse Table、Wavelet Matrix
 并查集：普通、带势能与 rollback
@@ -1011,12 +1238,12 @@ V3 不以“恢复全部 V2 公共符号”为目标。当前取舍如下。
 ```text
 checked/unsafe 双实现与 npre 恢复链
 nmaybe、nvector、ndeque、nheap 等 STL 同义包装
-覆盖整个 STL 的 nfill/ncopy/nreplace 等同义改名层
+覆盖整个 STL 的 nreplace/nremove/nrotate 等同义改名层
 nenumerable 游标森林与循环宏
 nresource_pool/nnode_domain/generation/epoch 的全局身份体系
 nset/nmap/nbije/nrel 等大规模关联容器包装族
 统一图 edge trait、统一 owner facade、自动反图和自动纠错
-竞赛 I/O 包装
+覆盖浮点、字符串、容器和格式 DSL 的大而全竞赛 I/O 包装
 强制 amalgamate 和统一 Nitori.h
 ```
 
@@ -1065,9 +1292,11 @@ ASan + UBSan
 泄漏、会在 `NDEBUG` 消失的 assert 测试、concept/domain 压力回流、文档本地链接以及
 每个头文件能否独立 include。
 
-benchmark 是 deterministic workload，用于观察直接排序与投影排序、结构 order/runs、FHQ 节点大小、split/merge、线段树、
-Wavelet Matrix、LCT 路径、直接邻接与 graph port、CSR 构造/BFS、rooted projection、
-稀疏节点数和峰值 RSS。时间值受机器波动影响，checksum 与规模必须稳定。
+benchmark 是 deterministic workload，用于观察直接排序与投影排序、结构 order/runs、
+静态 hash inverse 与 `unordered_map`、FHQ 节点大小、split/merge、线段树、Wavelet Matrix、
+LCT 路径、直接邻接与 graph port、CSR 构造/BFS、rooted projection、稀疏节点数和峰值
+RSS。时间值受机器波动影响，checksum 与规模必须稳定；跨运行的单个毫秒值不能代替同一
+workload 下的结构、内存和 checksum 对照。
 
 ## 19. 扩展 V3 的自检流程
 
@@ -1099,11 +1328,16 @@ V3 的完成标准不是符号数量，而是：核心结构短、组合路径�
 
 ```text
 core:       nlen nchmin nchmax
-view:       nview nall ntabulate nrange nsub nreverse nproject nmap ngather nzip nproduct
+io:         nread nscan nwrite nprint nprintln
+debug:      ndebug
+            ndebug_writer ndebug_repr
+view:       nview nall ntabulate nrange nsub nreverse nproject nmap ngather nzip nproduct nlocate
+hash:       nhash nhash_inverse nmake_hash_inverse ninvert
 func:       nfunc nkeys nvalues nentries nredomain nrestrict nmap_values ncompose
-            nselect_positions nfunc_bind nanchors
+            nselect_positions nfunc_bind
 discrete:   nselect nslice nstride nfilter nindexed ncollect nprefix nsuffix
-            naccumulate neach nfind_if ncount_if nall_of nany_of nnone_of
+            nassign nfill ncopy ntransform naccumulate neach nfind_if ncount_if
+            nall_of nany_of nnone_of
             nargmin nargmax nlower nupper nargsort norder nsort nreverse_inplace
             nchunks nblock nblocks nwindows nruns
 memory:     narena
@@ -1112,7 +1346,7 @@ segment:    nsegment_trace nsegment_cover nadd nseg nlazyseg naddsum_action
             nlazy_addsum nsparse_seg
 ds:         nsum_group nfenwick ndsu npotential_dsu nrollback_dsu nqueue_agg
             nsparse_table nwavelet
-graph:      ngraph nto_self nordinal nbfs nbfs_many nrooted nroot ncsr nmake_csr
+graph:      ngraph nto_self nbfs nbfs_many nrooted nroot ncsr nmake_csr
 graph alg:  n01bfs ndijkstra ntoposort nscc nscc_result
 tree:       npath_piece nhld_layout nhld nreroot nett_forest nlct
 flow:       ndinic nmatching nhopcroft_karp nmst_result nkruskal

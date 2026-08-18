@@ -29,6 +29,12 @@ int main() {
            vector<string>{"(a+(b+(c+I)))", "(b+(c+I))", "(c+I)", "I"}));
     CHECK((ncollect(nstride(nall(values), 0, 6, 2)) == vector<int>{8, 7, 9}));
     CHECK((ncollect(nstride(nall(values), -2)) == vector<int>{2, 1, 3}));
+    auto invertible_stride = nstride(nrange(10, 30), 1, 19, 3);
+    for (int i = 0; i < invertible_stride.len(); ++i)
+        CHECK(invertible_stride.inverse(invertible_stride[i]) == i);
+    auto negative_stride = nstride(nrange(6), -2);
+    for (int i = 0; i < negative_stride.len(); ++i)
+        CHECK(negative_stride.inverse(negative_stride[i]) == i);
 
     CHECK(naccumulate(nall(values), 0) == 30);
     CHECK(naccumulate(nall(values), string{}, [](string accumulated, int value) {

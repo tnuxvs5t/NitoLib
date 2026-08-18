@@ -52,7 +52,7 @@ int main() {
 
     vector<string> anchor_keys{"north", "east", "south", "west"};
     vector<int> anchor_values{2, 3, 5, 7};
-    auto anchored = nanchors(nall(anchor_keys), nall(anchor_values));
+    auto anchored = nfunc_bind(nall(anchor_keys), nall(anchor_values));
     static_assert(same_as<decltype(anchored(string("north"))), int&>);
     CHECK(anchored.len() == 4 && anchored.key(2) == "south");
     CHECK(anchored[1] == 3 && anchored("west") == 7);
@@ -64,8 +64,8 @@ int main() {
 
     vector<string> no_keys;
     vector<int> no_values;
-    auto empty_anchors = nanchors(nall(no_keys), nall(no_values));
-    CHECK(empty_anchors.len() == 0);
+    auto empty_binding = nfunc_bind(nall(no_keys), nall(no_values));
+    CHECK(empty_binding.len() == 0);
 
     auto move_only = nfunc{nrange(5),
                            [p = make_unique<int>(6)](int key) { return *p * key; }};

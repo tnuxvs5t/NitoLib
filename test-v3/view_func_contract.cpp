@@ -55,6 +55,33 @@ int main() {
     CHECK(letters[1] == 'B');
     CHECK(nproduct(nall(a), nrange(0)).empty());
 
+    auto keyed = nfunc{
+        nproduct(nrange(2), nrange(3)),
+        [](const pair<int, int>& key) { return 10 * key.first + key.second; }
+    };
+    CHECK(keyed[4] == 11);
+    CHECK((keyed(1, 2) == keyed(pair{1, 2})));
+    CHECK(keyed(1, 2) == 12);
+
+    auto cube = nfunc{
+        nproduct(nrange(2), nrange(2), nrange(2)),
+        [](const tuple<int, int, int>& key) {
+            return 4 * get<0>(key) + 2 * get<1>(key) + get<2>(key);
+        }
+    };
+    CHECK(cube[5] == 5);
+    CHECK((cube(1, 0, 1) == cube(tuple{1, 0, 1})));
+    CHECK(cube(1, 0, 1) == 5);
+
+    auto transformed = nmap_values(move(keyed), [](int value) { return value + 1; });
+    CHECK(transformed(1, 2) == 13);
+
+    auto bound = nfunc_bind(
+        nproduct(nrange(2), nrange(3)), nrange(6),
+        [](const pair<int, int>& key) { return 3 * key.first + key.second; }
+    );
+    CHECK(bound[5] == 5 && (bound(pair{1, 2}) == 5));
+
     auto move_only = ntabulate(4, [p = make_unique<int>(7)](int i) { return *p + i; });
     auto backwards = nreverse(move(move_only));
     CHECK(backwards[0] == 10 && backwards[3] == 7);

@@ -77,11 +77,10 @@ int main() {
     unordered_map<string, int> id;
     for (int i = 0; i < int(names.size()); ++i) id[names[i]] = i;
     vector<vector<string>> named_edges{{"gear", "lab"}, {"cucumber"}, {"lab"}, {}};
-    auto named = ngraph{nall(names), [&](const string& name) -> auto& {
+    auto named = ngraph{ninvert(nall(names)), [&](const string& name) -> auto& {
                             return named_edges[id[name]];
                         }};
-    auto named_distance = nbfs(named, string("river"),
-                               [&](const string& name) { return id[name]; });
+    auto named_distance = nbfs(named, string("river"));
     CHECK((named_distance == vector<int>{0, 1, 2, 1}));
 
     vector<vector<int>> hostile{{0, 1, 1}, {2, 0}, {1}, {4}, {3}};
@@ -94,9 +93,7 @@ int main() {
     CHECK(spanning.components()(3) == 3 && spanning.components()(4) == 3);
 
     int rows = 17, columns = 13;
-    auto cells = nmap(nproduct(nrange(rows), nrange(columns)), [](auto cell) {
-        return pair<int, int>{cell.first, cell.second};
-    });
+    auto cells = nproduct(nrange(rows), nrange(columns));
     auto grid = ngraph{move(cells), [=](pair<int, int> cell) {
         vector<pair<int, int>> answer;
         for (auto [dx, dy] : {pair{-1, 0}, pair{1, 0}, pair{0, -1}, pair{0, 1}}) {
@@ -105,8 +102,7 @@ int main() {
         }
         return answer;
     }};
-    auto cell_id = [=](pair<int, int> cell) { return cell.first * columns + cell.second; };
-    auto distance = nbfs(grid, pair{0, 0}, cell_id);
+    auto distance = nbfs(grid, pair{0, 0});
     for (int x = 0; x < rows; ++x)
         for (int y = 0; y < columns; ++y)
             CHECK(distance[x * columns + y] == x + y);
