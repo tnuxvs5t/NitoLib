@@ -810,6 +810,17 @@ destructive 根必须独占且互不重叠；persistent 根可能共享节点，
 
 双栈聚合队列，保持非交换顺序。`push/pop/front/fold` 摊还 `O(1)`。
 
+### `ndeque_agg<T,M>`
+
+双向聚合队列以两个有方向的聚合栈表示
+`reverse(left) + right`。`push_front/push_back/pop_front/pop_back/front/back/fold` 均摊
+`O(1)`，但一次端点访问或弹出可能触发 `O(n)` 的半分重建；空间为 `O(n)`。`M` 只要求
+单位元与结合律，聚合严格保持从队首到队尾的非交换顺序。
+
+`operator[](position)` 按队列顺序提供 `O(1)` 只读访问，因此可以借用 `nall(deque)` 做限制性
+枚举。由 `nall` 捕获的长度在 push/pop 后失效；重建或修改也可能使先前取得的元素引用失效。
+`front/back/pop_front/pop_back` 要求队列非空。
+
 ### `nsparse_table<T,O>`
 
 要求结合、交换、幂等，查询必须非空。预处理 `O(n log n)`，查询 `O(1)`。
@@ -1344,7 +1355,7 @@ memory:     narena
 fhq:        nfhq nfhq_noop nmake_fhq
 segment:    nsegment_trace nsegment_cover nadd nseg nlazyseg naddsum_action
             nlazy_addsum nsparse_seg
-ds:         nsum_group nfenwick ndsu npotential_dsu nrollback_dsu nqueue_agg
+ds:         nsum_group nfenwick ndsu npotential_dsu nrollback_dsu nqueue_agg ndeque_agg
             nsparse_table nwavelet
 graph:      ngraph nto_self nbfs nbfs_many nrooted nroot ncsr nmake_csr
 graph alg:  n01bfs ndijkstra ntoposort nscc nscc_result

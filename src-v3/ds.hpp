@@ -206,6 +206,85 @@ struct nqueue_agg {
     }
 };
 
+/*
+Ordered deque aggregation.  M supplies id() and associative M(left,right); order is
+never assumed commutative.  The deque is reverse(left) followed by right.  Rebuilding
+an empty requested side gives it half the elements, so all operations are amortized
+O(1), while one endpoint access/pop may take O(n).  Endpoints and pops require nonempty.
+
+operator[] is deliberately read-only.  References may be invalidated by any operation
+that changes or rebuilds storage, and an nall descriptor must not outlive a structural
+mutation because it captured the old length.
+*/
+template <class T, class M>
+struct ndeque_agg {
+private:
+    struct node { T value, aggregate; };
+    [[no_unique_address]] mutable M merge;
+    vector<node> left, right;
+
+    void add_left(vector<node>& side, T value) {
+        T aggregate = side.empty() ? value : invoke(merge, value, side.back().aggregate);
+        side.push_back({move(value), move(aggregate)});
+    }
+    void add_right(vector<node>& side, T value) {
+        T aggregate = side.empty() ? value : invoke(merge, side.back().aggregate, value);
+        side.push_back({move(value), move(aggregate)});
+    }
+
+    void ensure_front() {
+        if (!left.empty() || right.empty()) return;
+        int n = int(right.size()), left_count = (n + 1) / 2;
+        vector<node> next_left, next_right;
+        next_left.reserve(left_count);
+        next_right.reserve(n - left_count);
+        for (int i = left_count; i > 0; --i)
+            add_left(next_left, move(right[i - 1].value));
+        for (int i = left_count; i < n; ++i)
+            add_right(next_right, move(right[i].value));
+        left.swap(next_left);
+        right.swap(next_right);
+    }
+
+    void ensure_back() {
+        if (!right.empty() || left.empty()) return;
+        int n = int(left.size()), right_count = (n + 1) / 2;
+        vector<node> next_left, next_right;
+        next_left.reserve(n - right_count);
+        next_right.reserve(right_count);
+        for (int i = right_count; i < n; ++i)
+            add_left(next_left, move(left[i].value));
+        for (int i = right_count; i > 0; --i)
+            add_right(next_right, move(left[i - 1].value));
+        left.swap(next_left);
+        right.swap(next_right);
+    }
+
+public:
+    explicit ndeque_agg(M operation = {}) : merge(move(operation)) {}
+    int len() const { return int(left.size() + right.size()); }
+    bool empty() const { return left.empty() && right.empty(); }
+
+    const T& operator[](int position) const {
+        int left_count = int(left.size());
+        return position < left_count ? left[left_count - 1 - position].value
+                                     : right[position - left_count].value;
+    }
+
+    void push_front(T value) { add_left(left, move(value)); }
+    void push_back(T value) { add_right(right, move(value)); }
+    const T& front() { ensure_front(); return left.back().value; }
+    const T& back() { ensure_back(); return right.back().value; }
+    void pop_front() { ensure_front(); left.pop_back(); }
+    void pop_back() { ensure_back(); right.pop_back(); }
+
+    T fold() const {
+        if (left.empty()) return right.empty() ? merge.id() : right.back().aggregate;
+        if (right.empty()) return left.back().aggregate;
+        return invoke(merge, left.back().aggregate, right.back().aggregate);
+    }
+};
+
 /* O must be associative, commutative and idempotent; queries are nonempty [l,r). */
 template <class T, class O>
 struct nsparse_table {
