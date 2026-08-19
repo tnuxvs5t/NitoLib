@@ -8,17 +8,17 @@ struct concat {
 };
 
 struct minimum {
-    int operator()(int a, int b) const { return min(a, b); }
+    nidx_t operator()(nidx_t a, nidx_t b) const { return min(a, b); }
 };
 
 int main() {
     mt19937 rng(0xD5);
-    for (int round = 0; round < 5000; ++round) {
-        int n = 1 + int(rng() % 100);
+    for (nidx_t round = 0; round < 5000; ++round) {
+        nidx_t n = 1 + nidx_t(rng() % 100);
         vector<long long> values(n);
         nfenwick<long long> tree(nall(values));
-        for (int step = 0; step < 300; ++step) {
-            int operation = int(rng() % 4), position = int(rng() % n);
+        for (nidx_t step = 0; step < 300; ++step) {
+            nidx_t operation = nidx_t(rng() % 4), position = nidx_t(rng() % n);
             if (operation == 0) {
                 long long delta = rng() % 30;
                 values[position] += delta;
@@ -28,16 +28,16 @@ int main() {
                 values[position] = value;
                 tree.set(position, value);
             } else {
-                int left = int(rng() % (n + 1));
-                int right = left + int(rng() % (n - left + 1));
+                nidx_t left = nidx_t(rng() % (n + 1));
+                nidx_t right = left + nidx_t(rng() % (n - left + 1));
                 CHECK(tree.fold(left, right) ==
                       accumulate(values.begin() + left, values.begin() + right, 0LL));
             }
             long long total = accumulate(values.begin(), values.end(), 0LL);
             long long target = rng() % (total + 2);
-            int expected = n;
+            nidx_t expected = n;
             long long prefix = 0;
-            for (int i = 0; i < n; ++i) {
+            for (nidx_t i = 0; i < n; ++i) {
                 prefix += values[i];
                 if (prefix >= target) { expected = i; break; }
             }
@@ -45,51 +45,51 @@ int main() {
         }
     }
 
-    for (int round = 0; round < 3000; ++round) {
-        int n = 1 + int(rng() % 30);
+    for (nidx_t round = 0; round < 3000; ++round) {
+        nidx_t n = 1 + nidx_t(rng() % 30);
         nrollback_dsu rollback(n);
-        vector<int> label(n);
+        vector<nidx_t> label(n);
         iota(label.begin(), label.end(), 0);
-        vector<vector<int>> snapshots{label};
-        for (int step = 0; step < 200; ++step) {
+        vector<vector<nidx_t>> snapshots{label};
+        for (nidx_t step = 0; step < 200; ++step) {
             if (rng() % 4 || rollback.time() == 0) {
-                int a = int(rng() % n), b = int(rng() % n);
+                nidx_t a = nidx_t(rng() % n), b = nidx_t(rng() % n);
                 bool expected = label[a] != label[b];
-                int old = label[b];
+                nidx_t old = label[b];
                 if (expected)
-                    for (int& value : label) if (value == old) value = label[a];
+                    for (nidx_t& value : label) if (value == old) value = label[a];
                 CHECK(rollback.merge(a, b) == expected);
                 if (expected) snapshots.push_back(label);
             } else {
-                int target = int(rng() % (rollback.time() + 1));
+                nidx_t target = nidx_t(rng() % (rollback.time() + 1));
                 rollback.rollback(target);
                 label = snapshots[target];
                 snapshots.resize(target + 1);
             }
-            int probe = int(rng() % n);
-            for (int vertex = 0; vertex < n; ++vertex)
+            nidx_t probe = nidx_t(rng() % n);
+            for (nidx_t vertex = 0; vertex < n; ++vertex)
                 CHECK(rollback.same(probe, vertex) == (label[probe] == label[vertex]));
         }
-        for (int a = 0; a < n; ++a)
-            for (int b = 0; b < n; ++b)
+        for (nidx_t a = 0; a < n; ++a)
+            for (nidx_t b = 0; b < n; ++b)
                 CHECK(rollback.same(a, b) == (label[a] == label[b]));
 
         ndsu compressed(n);
         iota(label.begin(), label.end(), 0);
-        for (int step = 0; step < 200; ++step) {
-            int a = int(rng() % n), b = int(rng() % n), old = label[b];
+        for (nidx_t step = 0; step < 200; ++step) {
+            nidx_t a = nidx_t(rng() % n), b = nidx_t(rng() % n), old = label[b];
             if (label[a] != old)
-                for (int& value : label) if (value == old) value = label[a];
+                for (nidx_t& value : label) if (value == old) value = label[a];
             compressed.merge(a, b);
-            for (int vertex = 0; vertex < n; ++vertex)
+            for (nidx_t vertex = 0; vertex < n; ++vertex)
                 CHECK(compressed.same(a, vertex) == (label[a] == label[vertex]));
         }
     }
 
-    for (int round = 0; round < 5000; ++round) {
+    for (nidx_t round = 0; round < 5000; ++round) {
         nqueue_agg<string, concat> queue;
         deque<string> reference;
-        for (int step = 0; step < 300; ++step) {
+        for (nidx_t step = 0; step < 300; ++step) {
             if (reference.empty() || rng() & 1) {
                 string value(1, char('a' + rng() % 5));
                 queue.push(value);
@@ -101,18 +101,18 @@ int main() {
             }
             string expected;
             for (const string& value : reference) expected += value;
-            CHECK(queue.fold() == expected && queue.len() == int(reference.size()));
+            CHECK(queue.fold() == expected && queue.len() == nidx_t(reference.size()));
         }
     }
 
-    for (int round = 0; round < 5000; ++round) {
-        int n = 1 + int(rng() % 100);
-        vector<int> values(n);
-        for (int& value : values) value = int(rng());
+    for (nidx_t round = 0; round < 5000; ++round) {
+        nidx_t n = 1 + nidx_t(rng() % 100);
+        vector<nidx_t> values(n);
+        for (nidx_t& value : values) value = nidx_t(rng());
         nsparse_table table(nall(values), minimum{});
-        for (int query = 0; query < 200; ++query) {
-            int left = int(rng() % n);
-            int right = left + 1 + int(rng() % (n - left));
+        for (nidx_t query = 0; query < 200; ++query) {
+            nidx_t left = nidx_t(rng() % n);
+            nidx_t right = left + 1 + nidx_t(rng() % (n - left));
             CHECK(table.fold(left, right) == *min_element(values.begin() + left,
                                                           values.begin() + right));
         }

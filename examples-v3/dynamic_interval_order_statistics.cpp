@@ -12,42 +12,42 @@ online: no future update value is collected or compressed.  A detached one-node 
 root is recycled explicitly; integer handles are stable and no active root shares it.
 */
 struct nrange_order_stat {
-    using outer_kernel = nsparse_seg<int, monostate>;
+    using outer_kernel = nsparse_seg<nidx_t, monostate>;
     static constexpr long long value_lo = -1'000'000'000LL;
     static constexpr long long value_hi = 1'000'000'001LL;
-    static constexpr int value_levels =
+    static constexpr nidx_t value_levels =
         bit_width((unsigned long long)(value_hi - value_lo - 1)) + 1;
 
-    int length, outer_root;
-    vector<int> values;
+    nidx_t length, outer_root;
+    vector<nidx_t> values;
     outer_kernel outer;
-    nfhq<int> positions;
-    vector<int> free_nodes;
+    nfhq<nidx_t> positions;
+    vector<nidx_t> free_nodes;
 
     /* Union of at most paths root-to-leaf paths has this many nodes at most. */
-    static int outer_node_bound(int paths) {
+    static nidx_t outer_node_bound(nidx_t paths) {
         long long answer = 0, layer = 1;
-        for (int depth = 0; depth < value_levels; ++depth) {
+        for (nidx_t depth = 0; depth < value_levels; ++depth) {
             answer += min<long long>(layer, paths);
             layer = min<long long>(layer * 2, paths);
         }
-        return int(answer);
+        return nidx_t(answer);
     }
 
-    nrange_order_stat(vector<int> initial, int operation_bound)
-        : length(int(initial.size())), outer_root(-1), values(move(initial)),
+    nrange_order_stat(vector<nidx_t> initial, nidx_t operation_bound)
+        : length(nidx_t(initial.size())), outer_root(-1), values(move(initial)),
           outer(value_lo, value_hi) {
-        int historical_values = length + operation_bound;
+        nidx_t historical_values = length + operation_bound;
         outer.reserve(outer_node_bound(historical_values));
         positions.reserve(length * value_levels);
         free_nodes.reserve(length);
         outer_root = outer.make(-1);
-        for (int position = 0; position < length; ++position)
+        for (nidx_t position = 0; position < length; ++position)
             insert_value(values[position], position);
     }
 
-    int open_child(int node, int side) {
-        int next = side ? outer[node].right : outer[node].left;
+    nidx_t open_child(nidx_t node, nidx_t side) {
+        nidx_t next = side ? outer[node].right : outer[node].left;
         if (next < 0) {
             next = outer.make(-1);
             // make may reallocate the arena: re-index node instead of saving a reference.
@@ -57,68 +57,68 @@ struct nrange_order_stat {
         return next;
     }
 
-    int existing_child(int node, int side) const {
+    nidx_t existing_child(nidx_t node, nidx_t side) const {
         return side ? outer[node].right : outer[node].left;
     }
 
-    int inner_root(int node) const {
+    nidx_t inner_root(nidx_t node) const {
         return node < 0 ? -1 : outer[node].aggregate;
     }
 
-    int make_position(int position) {
+    nidx_t make_position(nidx_t position) {
         if (free_nodes.empty()) return positions.make(position);
-        int handle = free_nodes.back();
+        nidx_t handle = free_nodes.back();
         free_nodes.pop_back();
         positions[handle] = {position, -1, -1, -1, 1, positions.random_priority()};
         positions.up(handle);
         return handle;
     }
 
-    int insert_inner(int root, int position) {
+    nidx_t insert_inner(nidx_t root, nidx_t position) {
         auto [less, greater_equal] = positions.split_by(root,
-            [&](int current) { return current < position; });
+            [&](nidx_t current) { return current < position; });
         return positions.merge(positions.merge(less, make_position(position)),
                                greater_equal);
     }
 
-    pair<int, int> erase_inner(int root, int position) {
+    pair<nidx_t, nidx_t> erase_inner(nidx_t root, nidx_t position) {
         auto [less, greater_equal] = positions.split_by(root,
-            [&](int current) { return current < position; });
+            [&](nidx_t current) { return current < position; });
         auto [equal, greater] = positions.split_by(greater_equal,
-            [&](int current) { return current <= position; });
+            [&](nidx_t current) { return current <= position; });
         auto [erased, remaining_equal] = positions.split(equal, 1);
-        int joined = positions.merge(positions.merge(less, remaining_equal), greater);
+        nidx_t joined = positions.merge(positions.merge(less, remaining_equal), greater);
         return {joined, erased};
     }
 
-    void insert_value(int value, int position) {
-        auto child = [&](int node, int side) { return open_child(node, side); };
+    void insert_value(nidx_t value, nidx_t position) {
+        auto child = [&](nidx_t node, nidx_t side) { return open_child(node, side); };
         nsegment_trace(outer_root, value_lo, value_hi, (long long)value, child,
-                       [&](int node) {
+                       [&](nidx_t node) {
             outer[node].aggregate = insert_inner(outer[node].aggregate, position);
         });
     }
 
-    void erase_value(int value, int position) {
-        auto child = [&](int node, int side) { return existing_child(node, side); };
+    void erase_value(nidx_t value, nidx_t position) {
+        auto child = [&](nidx_t node, nidx_t side) { return existing_child(node, side); };
         nsegment_trace(outer_root, value_lo, value_hi, (long long)value, child,
-                       [&](int node) {
+                       [&](nidx_t node) {
             auto [root, erased] = erase_inner(outer[node].aggregate, position);
             outer[node].aggregate = root;
             free_nodes.push_back(erased);
         });
     }
 
-    void assign(int position, int value) {
-        int old = values[position];
+    void assign(nidx_t position, nidx_t value) {
+        nidx_t old = values[position];
         if (old == value) return;
         erase_value(old, position);
         insert_value(value, position);
         values[position] = value;
     }
 
-    int inner_less(int root, int position) const {
-        int answer = 0;
+    nidx_t inner_less(nidx_t root, nidx_t position) const {
+        nidx_t answer = 0;
         while (root >= 0) {
             const auto& node = positions[root];
             if (node.value < position) {
@@ -131,32 +131,32 @@ struct nrange_order_stat {
         return answer;
     }
 
-    int position_count(int root, int query_left, int query_right) const {
+    nidx_t position_count(nidx_t root, nidx_t query_left, nidx_t query_right) const {
         return inner_less(root, query_right) - inner_less(root, query_left);
     }
 
     /* Count array values < bound inside the position interval. */
-    int value_count(int query_left, int query_right, long long bound) const {
-        int answer = 0;
-        auto child = [&](int node, int side) { return existing_child(node, side); };
+    nidx_t value_count(nidx_t query_left, nidx_t query_right, long long bound) const {
+        nidx_t answer = 0;
+        auto child = [&](nidx_t node, nidx_t side) { return existing_child(node, side); };
         nsegment_cover(outer_root, value_lo, value_hi, value_lo, bound, child,
-                       [&](int node) {
+                       [&](nidx_t node) {
             answer += position_count(outer[node].aggregate, query_left, query_right);
         });
         return answer;
     }
 
-    int rank(int query_left, int query_right, int value) const {
+    nidx_t rank(nidx_t query_left, nidx_t query_right, nidx_t value) const {
         return value_count(query_left, query_right, value) + 1;
     }
 
-    int kth(int query_left, int query_right, int k) const {
-        int node = outer_root;
+    nidx_t kth(nidx_t query_left, nidx_t query_right, nidx_t k) const {
+        nidx_t node = outer_root;
         long long left = value_lo, right = value_hi;
         while (left + 1 < right) {
             long long middle = midpoint(left, right);
-            int left_child = outer[node].left;
-            int count_left = position_count(inner_root(left_child), query_left, query_right);
+            nidx_t left_child = outer[node].left;
+            nidx_t count_left = position_count(inner_root(left_child), query_left, query_right);
             if (k <= count_left) {
                 node = left_child;
                 right = middle;
@@ -166,16 +166,16 @@ struct nrange_order_stat {
                 left = middle;
             }
         }
-        return int(left);
+        return nidx_t(left);
     }
 
-    int predecessor(int query_left, int query_right, int value) const {
-        int less = value_count(query_left, query_right, value);
+    nidx_t predecessor(nidx_t query_left, nidx_t query_right, nidx_t value) const {
+        nidx_t less = value_count(query_left, query_right, value);
         return kth(query_left, query_right, less);
     }
 
-    int successor(int query_left, int query_right, int value) const {
-        int less_equal = value_count(query_left, query_right, (long long)value + 1);
+    nidx_t successor(nidx_t query_left, nidx_t query_right, nidx_t value) const {
+        nidx_t less_equal = value_count(query_left, query_right, (long long)value + 1);
         return kth(query_left, query_right, less_equal + 1);
     }
 };
@@ -185,14 +185,14 @@ int main() {
     ios::sync_with_stdio(false);
     cin.tie(nullptr);
 
-    int n, q;
+    nidx_t n, q;
     cin >> n >> q;
-    vector<int> initial(n);
-    for (int& value : initial) cin >> value;
+    vector<nidx_t> initial(n);
+    for (nidx_t& value : initial) cin >> value;
 
     nrange_order_stat tree(move(initial), q);
     while (q--) {
-        int type, left, right, value;
+        nidx_t type, left, right, value;
         cin >> type >> left;
         if (type == 3) {
             cin >> value;

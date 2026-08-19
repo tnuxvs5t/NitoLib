@@ -9,29 +9,29 @@ template <class T>
 void verify(const vector<T>& source, mt19937_64& random) {
     auto copy = source;
     nwavelet wave(nall(copy));
-    check(wave.len() == int(source.size()), "length");
+    check(wave.len() == nidx_t(source.size()), "length");
     check(wave.empty() == source.empty(), "empty");
-    for (int i = 0; i < int(source.size()); ++i)
+    for (nidx_t i = 0; i < nidx_t(source.size()); ++i)
         check(wave.access(i) == source[i], "access");
     if (source.empty()) return;
 
-    for (int query = 0; query < 300; ++query) {
-        int left = int(random() % source.size());
-        int right = left + 1 + int(random() % (source.size() - left));
+    for (nidx_t query = 0; query < 300; ++query) {
+        nidx_t left = nidx_t(random() % source.size());
+        nidx_t right = left + 1 + nidx_t(random() % (source.size() - left));
         vector<T> sorted(source.begin() + left, source.begin() + right);
         sort(sorted.begin(), sorted.end());
-        int order = int(random() % sorted.size());
+        nidx_t order = nidx_t(random() % sorted.size());
         check(wave.kth(left, right, order) == sorted[order], "kth");
 
         const T& value = source[random() % source.size()];
-        int equal = int(count(sorted.begin(), sorted.end(), value));
-        int below = int(lower_bound(sorted.begin(), sorted.end(), value) - sorted.begin());
+        nidx_t equal = nidx_t(count(sorted.begin(), sorted.end(), value));
+        nidx_t below = nidx_t(lower_bound(sorted.begin(), sorted.end(), value) - sorted.begin());
         check(wave.count(left, right, value) == equal, "rank");
         check(wave.less(left, right, value) == below, "less");
 
         const T& other = source[random() % source.size()];
         T lower = min(value, other), upper = max(value, other);
-        int inside = int(lower_bound(sorted.begin(), sorted.end(), upper) -
+        nidx_t inside = nidx_t(lower_bound(sorted.begin(), sorted.end(), upper) -
                          lower_bound(sorted.begin(), sorted.end(), lower));
         check(wave.count(left, right, lower, upper) == inside, "range count");
 
@@ -54,8 +54,8 @@ int main() {
     verify(vector<long long>{LLONG_MIN, 0, LLONG_MAX, LLONG_MIN, -1, 1}, random);
     verify(vector<string>{"", "z", "aa", "z", "a", "aba"}, random);
 
-    for (int trial = 0; trial < 500; ++trial) {
-        int n = int(random() % 50);
+    for (nidx_t trial = 0; trial < 500; ++trial) {
+        nidx_t n = nidx_t(random() % 50);
         vector<long long> source(n);
         for (long long& value : source) {
             uint64_t mode = random() % 20;

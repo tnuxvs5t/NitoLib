@@ -11,12 +11,12 @@ inverse membership and [0,len()) are caller contracts.
 */
 template <class A>
 struct nview {
-    int length;
+    nidx_t length;
     mutable A access;
 
-    constexpr int len() const { return length; }
+    constexpr nidx_t len() const { return length; }
     constexpr bool empty() const { return !length; }
-    constexpr decltype(auto) operator[](int i) const { return invoke(access, i); }
+    constexpr decltype(auto) operator[](nidx_t i) const { return invoke(access, i); }
 
     template <class K>
     requires requires(A& accessor, K&& key) {
@@ -27,7 +27,7 @@ struct nview {
     }
 
     struct iterator {
-        using difference_type = int;
+        using difference_type = nidx_t;
         using reference = decltype(declval<const nview&>()[0]);
         using value_type = remove_cvref_t<reference>;
         using pointer = void;
@@ -35,20 +35,20 @@ struct nview {
         using iterator_concept = random_access_iterator_tag;
 
         const nview* view = nullptr;
-        int position = 0;
+        nidx_t position = 0;
 
         constexpr decltype(auto) operator*() const { return (*view)[position]; }
-        constexpr decltype(auto) operator[](int d) const { return (*view)[position + d]; }
+        constexpr decltype(auto) operator[](nidx_t d) const { return (*view)[position + d]; }
         constexpr iterator& operator++() { ++position; return *this; }
         constexpr iterator operator++(int) { auto old = *this; ++*this; return old; }
         constexpr iterator& operator--() { --position; return *this; }
         constexpr iterator operator--(int) { auto old = *this; --*this; return old; }
-        constexpr iterator& operator+=(int d) { position += d; return *this; }
-        constexpr iterator& operator-=(int d) { position -= d; return *this; }
-        friend constexpr iterator operator+(iterator it, int d) { return it += d; }
-        friend constexpr iterator operator+(int d, iterator it) { return it += d; }
-        friend constexpr iterator operator-(iterator it, int d) { return it -= d; }
-        constexpr int operator-(iterator other) const { return position - other.position; }
+        constexpr iterator& operator+=(nidx_t d) { position += d; return *this; }
+        constexpr iterator& operator-=(nidx_t d) { position -= d; return *this; }
+        friend constexpr iterator operator+(iterator it, nidx_t d) { return it += d; }
+        friend constexpr iterator operator+(nidx_t d, iterator it) { return it += d; }
+        friend constexpr iterator operator-(iterator it, nidx_t d) { return it -= d; }
+        constexpr nidx_t operator-(iterator other) const { return position - other.position; }
         constexpr auto operator<=>(const iterator&) const = default;
     };
 
@@ -57,7 +57,7 @@ struct nview {
 };
 
 template <class A>
-nview(int, A) -> nview<A>;
+nview(nidx_t, A) -> nview<A>;
 
 namespace nview_detail {
 template <class T>
@@ -103,13 +103,17 @@ constexpr auto nlocate(V& view) {
 /* nall borrows an lvalue.  There is deliberately no temporary-owner overload. */
 template <class A>
 constexpr auto nall(A& a) {
-    return nview{nlen(a), [p = addressof(a)](int i) -> decltype(auto) { return (*p)[i]; }};
+    return nview{nlen(a), [p = addressof(a)](nidx_t i) -> decltype(auto) { return (*p)[i]; }};
 }
 
 template <class F>
-constexpr auto ntabulate(int n, F f) {
+constexpr auto ntabulate(nidx_t n, F f) {
     return nview{n, move(f)};
 }
+
+template <class N, class F>
+requires nidx_wider_v<N>
+constexpr auto ntabulate(N, F) = delete;
 
 namespace nview_detail {
 template <class F, class I>
@@ -117,7 +121,7 @@ struct invertible_access {
     [[no_unique_address]] F project;
     [[no_unique_address]] I backward;
 
-    constexpr decltype(auto) operator()(int position) {
+    constexpr decltype(auto) operator()(nidx_t position) {
         return invoke(project, position);
     }
 
@@ -128,24 +132,24 @@ struct invertible_access {
 };
 
 struct range_access {
-    int first;
+    nidx_t first;
 
-    constexpr int operator()(int position) const { return first + position; }
-    constexpr int inverse(int key) const { return key - first; }
+    constexpr nidx_t operator()(nidx_t position) const { return first + position; }
+    constexpr nidx_t inverse(nidx_t key) const { return key - first; }
 };
 
 template <class V>
 struct sub_access {
     V view;
-    int first;
+    nidx_t first;
 
-    constexpr decltype(auto) operator()(int position) { return view[first + position]; }
+    constexpr decltype(auto) operator()(nidx_t position) { return view[first + position]; }
 
     template <class K>
     requires requires(V& source, K&& key) {
         source.inverse(forward<K>(key));
     }
-    constexpr int inverse(K&& key) {
+    constexpr nidx_t inverse(K&& key) {
         return view.inverse(forward<K>(key)) - first;
     }
 };
@@ -153,9 +157,9 @@ struct sub_access {
 template <class V>
 struct reverse_access {
     V view;
-    int length;
+    nidx_t length;
 
-    constexpr decltype(auto) operator()(int position) {
+    constexpr decltype(auto) operator()(nidx_t position) {
         return view[length - 1 - position];
     }
 
@@ -163,7 +167,7 @@ struct reverse_access {
     requires requires(V& source, K&& key) {
         source.inverse(forward<K>(key));
     }
-    constexpr int inverse(K&& key) {
+    constexpr nidx_t inverse(K&& key) {
         return length - 1 - view.inverse(forward<K>(key));
     }
 };
@@ -173,7 +177,7 @@ struct gather_access {
     V view;
     I positions;
 
-    constexpr decltype(auto) operator()(int position) {
+    constexpr decltype(auto) operator()(nidx_t position) {
         return view[positions[position]];
     }
 
@@ -181,54 +185,70 @@ struct gather_access {
     requires requires(V& source, I& plan, K&& key) {
         plan.inverse(source.inverse(forward<K>(key)));
     }
-    constexpr int inverse(K&& key) {
+    constexpr nidx_t inverse(K&& key) {
         return positions.inverse(view.inverse(forward<K>(key)));
     }
 };
 }
 
 template <class F, class I>
-constexpr auto ntabulate(int n, F forward, I inverse) {
+constexpr auto ntabulate(nidx_t n, F forward, I inverse) {
     return nview{n, nview_detail::invertible_access<F, I>{move(forward), move(inverse)}};
 }
 
-constexpr auto nrange(int first, int last) {
+template <class N, class F, class I>
+requires nidx_wider_v<N>
+constexpr auto ntabulate(N, F, I) = delete;
+
+constexpr auto nrange(nidx_t first, nidx_t last) {
     return nview{last - first, nview_detail::range_access{first}};
 }
 
-constexpr auto nrange(int n) { return nrange(0, n); }
+template <class A, class B>
+requires (nidx_wider_v<A> || nidx_wider_v<B>)
+constexpr auto nrange(A, B) = delete;
+
+constexpr auto nrange(nidx_t n) { return nrange(0, n); }
+
+template <class N>
+requires nidx_wider_v<N>
+constexpr auto nrange(N) = delete;
 
 template <class V>
-constexpr auto nsub(V view, int first, int last) {
+constexpr auto nsub(V view, nidx_t first, nidx_t last) {
     return nview{last - first, nview_detail::sub_access<V>{move(view), first}};
 }
 
+template <class V, class A, class B>
+requires (nidx_wider_v<A> || nidx_wider_v<B>)
+constexpr auto nsub(V, A, B) = delete;
+
 template <class V>
 constexpr auto nreverse(V view) {
-    int n = view.len();
+    nidx_t n = view.len();
     return nview{n, nview_detail::reverse_access<V>{move(view), n}};
 }
 
 /* nproject preserves the callable's exact result category; nmap materializes it. */
 template <class V, class F>
 constexpr auto nproject(V view, F f) {
-    int n = view.len();
-    return nview{n, [view = move(view), f = move(f)](int i) mutable -> decltype(auto) {
+    nidx_t n = view.len();
+    return nview{n, [view = move(view), f = move(f)](nidx_t i) mutable -> decltype(auto) {
                      return invoke(f, view[i]);
                  }};
 }
 
 template <class V, class F>
 constexpr auto nmap(V view, F f) {
-    int n = view.len();
-    return nview{n, [view = move(view), f = move(f)](int i) mutable {
+    nidx_t n = view.len();
+    return nview{n, [view = move(view), f = move(f)](nidx_t i) mutable {
                      return invoke(f, view[i]);
                  }};
 }
 
 template <class V, class I>
 constexpr auto ngather(V view, I positions) {
-    int n = positions.len();
+    nidx_t n = positions.len();
     return nview{n, nview_detail::gather_access<V, I>{move(view), move(positions)}};
 }
 
@@ -236,8 +256,8 @@ constexpr auto ngather(V view, I positions) {
 template <class V, class... W>
 constexpr auto nzip(V first, W... rest) {
     auto views = tuple<V, W...>(move(first), move(rest)...);
-    int n = apply([](const auto&... x) { return min({x.len()...}); }, views);
-    return nview{n, [views = move(views)](int i) mutable {
+    nidx_t n = apply([](const auto&... x) { return min({x.len()...}); }, views);
+    return nview{n, [views = move(views)](nidx_t i) mutable {
                      return apply([&](auto&... x) {
                          return tuple<decltype(x[i])...>(x[i]...);
                      }, views);
@@ -247,14 +267,14 @@ constexpr auto nzip(V first, W... rest) {
 namespace nproduct_detail {
 template <class Tuple, size_t... I>
 constexpr auto lengths(const Tuple& views, index_sequence<I...>) {
-    return array<int, sizeof...(I)>{get<I>(views).len()...};
+    return array<nidx_t, sizeof...(I)>{get<I>(views).len()...};
 }
 
 template <class Tuple, size_t... I>
-constexpr auto tuple_at(Tuple& views, const array<int, sizeof...(I)>& lengths,
-                        int flat, index_sequence<I...>) {
-    array<int, sizeof...(I)> position{};
-    for (int dimension = int(sizeof...(I)) - 1; dimension >= 0; --dimension) {
+constexpr auto tuple_at(Tuple& views, const array<nidx_t, sizeof...(I)>& lengths,
+                        nidx_t flat, index_sequence<I...>) {
+    array<nidx_t, sizeof...(I)> position{};
+    for (nidx_t dimension = nidx_t(sizeof...(I)) - 1; dimension >= 0; --dimension) {
         position[dimension] = flat % lengths[dimension];
         flat /= lengths[dimension];
     }
@@ -267,10 +287,10 @@ template <class X, class Y>
 struct pair_access {
     X left;
     Y right;
-    int width;
+    nidx_t width;
 
-    constexpr auto operator()(int flat) {
-        int x = flat / width, y = flat % width;
+    constexpr auto operator()(nidx_t flat) {
+        nidx_t x = flat / width, y = flat % width;
         return pair<decltype(left[x]), decltype(right[y])>(left[x], right[y]);
     }
 
@@ -279,7 +299,7 @@ struct pair_access {
         x.inverse(key.first);
         y.inverse(key.second);
     }
-    constexpr int inverse(K&& key) {
+    constexpr nidx_t inverse(K&& key) {
         return left.inverse(key.first) * width + right.inverse(key.second);
     }
 };
@@ -292,9 +312,9 @@ constexpr bool inverse_available(index_sequence<I...>) {
 }
 
 template <class Tuple, class Key, size_t... I>
-constexpr int tuple_inverse(Tuple& views, const array<int, sizeof...(I)>& lengths,
+constexpr nidx_t tuple_inverse(Tuple& views, const array<nidx_t, sizeof...(I)>& lengths,
                             const Key& key, index_sequence<I...>) {
-    int flat = 0;
+    nidx_t flat = 0;
     ((flat = flat * lengths[I] + get<I>(views).inverse(get<I>(key))), ...);
     return flat;
 }
@@ -302,25 +322,25 @@ constexpr int tuple_inverse(Tuple& views, const array<int, sizeof...(I)>& length
 template <class Tuple, size_t N>
 struct tuple_access {
     Tuple views;
-    array<int, N> lengths;
+    array<nidx_t, N> lengths;
 
-    constexpr auto operator()(int flat) {
+    constexpr auto operator()(nidx_t flat) {
         return tuple_at(views, lengths, flat, make_index_sequence<N>{});
     }
 
     template <class K>
     requires (inverse_available<Tuple, K>(make_index_sequence<N>{}))
-    constexpr int inverse(const K& key) {
+    constexpr nidx_t inverse(const K& key) {
         return tuple_inverse(views, lengths, key, make_index_sequence<N>{});
     }
 };
 }
 
-/* Left-major Cartesian product.  The product length must fit signed int. */
+/* Left-major Cartesian product.  The product length must fit signed nidx_t. */
 template <class X, class Y>
 constexpr auto nproduct(X left, Y right) {
-    int n = int(1LL * left.len() * right.len());
-    int width = right.len();
+    nidx_t n = nidx_t(__int128_t(left.len()) * right.len());
+    nidx_t width = right.len();
     return nview{n, nproduct_detail::pair_access<X, Y>{move(left), move(right), width}};
 }
 
@@ -333,11 +353,11 @@ constexpr auto nproduct(X first, Y second, Z... rest) {
     auto lengths = nproduct_detail::lengths(
         views, make_index_sequence<dimensions>{}
     );
-    long long total = 1;
-    for (int length : lengths)
+    __int128_t total = 1;
+    for (nidx_t length : lengths)
         total *= length;
     return nview{
-        int(total),
+        nidx_t(total),
         nproduct_detail::tuple_access<decltype(views), dimensions>{move(views), lengths}
     };
 }

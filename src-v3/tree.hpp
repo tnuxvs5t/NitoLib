@@ -2,7 +2,7 @@
 #include "graph.hpp"
 
 struct npath_piece {
-    int left, right;
+    nidx_t left, right;
     bool reverse;
 };
 
@@ -15,14 +15,14 @@ base interval right-to-left.  This preserves noncommutative vertex-path aggregat
 template <class V>
 struct nhld_layout {
     V vertices;
-    vector<int> parent_position, depth_value, subtree_value, heavy_position;
-    vector<int> head_position, position_value, vertex_at_position, root_position;
+    vector<nidx_t> parent_position, depth_value, subtree_value, heavy_position;
+    vector<nidx_t> head_position, position_value, vertex_at_position, root_position;
 
-    int len() const { return vertices.len(); }
+    nidx_t len() const { return vertices.len(); }
     auto keys() const {
         return ntabulate(
             len(),
-            [this](int i) -> decltype(auto) { return vertices[i]; },
+            [this](nidx_t i) -> decltype(auto) { return vertices[i]; },
             [this](auto&& key) {
                 return vertices.inverse(forward<decltype(key)>(key));
             }
@@ -37,26 +37,26 @@ struct nhld_layout {
 
     auto parents() const {
         return nmap_values(nfunc_bind(keys(), nall(parent_position)),
-                           [this](int position) -> decltype(auto) {
+                           [this](nidx_t position) -> decltype(auto) {
                                return vertices[position];
                            });
     }
 
     auto heads() const {
         return nmap_values(nfunc_bind(keys(), nall(head_position)),
-                           [this](int position) -> decltype(auto) {
+                           [this](nidx_t position) -> decltype(auto) {
                                return vertices[position];
                            });
     }
 
     auto order() const {
         return nproject(nall(vertex_at_position),
-                        [this](int position) -> decltype(auto) { return vertices[position]; });
+                        [this](nidx_t position) -> decltype(auto) { return vertices[position]; });
     }
 
     template <class X, class Y>
     decltype(auto) lca(X&& x, Y&& y) const {
-        int a = vertices.inverse(forward<X>(x)), b = vertices.inverse(forward<Y>(y));
+        nidx_t a = vertices.inverse(forward<X>(x)), b = vertices.inverse(forward<Y>(y));
         while (head_position[a] != head_position[b]) {
             if (depth_value[head_position[a]] < depth_value[head_position[b]]) swap(a, b);
             a = parent_position[head_position[a]];
@@ -66,7 +66,7 @@ struct nhld_layout {
 
     template <class X, class Y>
     vector<npath_piece> path(X&& x, Y&& y) const {
-        int a = vertices.inverse(forward<X>(x)), b = vertices.inverse(forward<Y>(y));
+        nidx_t a = vertices.inverse(forward<X>(x)), b = vertices.inverse(forward<Y>(y));
         vector<npath_piece> left, right;
         while (head_position[a] != head_position[b]) {
             if (depth_value[head_position[a]] >= depth_value[head_position[b]]) {
@@ -93,20 +93,20 @@ No concrete graph/tree owner, parent array type or adjacency representation is r
 */
 template <class V, class R, class C>
 auto nhld(V vertices, R roots, C children) {
-    int n = vertices.len();
-    vector<int> parent(n, -1), depth(n), subtree(n, 1), heavy(n, -1), traversal, root_position;
+    nidx_t n = vertices.len();
+    vector<nidx_t> parent(n, -1), depth(n), subtree(n, 1), heavy(n, -1), traversal, root_position;
     traversal.reserve(n);
-    for (int i = 0; i < roots.len(); ++i) {
-        int root = vertices.inverse(roots[i]);
+    for (nidx_t i = 0; i < roots.len(); ++i) {
+        nidx_t root = vertices.inverse(roots[i]);
         root_position.push_back(root);
         parent[root] = root;
-        vector<int> stack{root};
+        vector<nidx_t> stack{root};
         while (!stack.empty()) {
-            int from = stack.back();
+            nidx_t from = stack.back();
             stack.pop_back();
             traversal.push_back(from);
             for (auto&& child_key : invoke(children, vertices[from])) {
-                int child = vertices.inverse(child_key);
+                nidx_t child = vertices.inverse(child_key);
                 parent[child] = from;
                 depth[child] = depth[from] + 1;
                 stack.push_back(child);
@@ -114,26 +114,26 @@ auto nhld(V vertices, R roots, C children) {
         }
     }
     for (auto it = traversal.rbegin(); it != traversal.rend(); ++it) {
-        int vertex = *it;
+        nidx_t vertex = *it;
         if (parent[vertex] == vertex) continue;
-        int p = parent[vertex];
+        nidx_t p = parent[vertex];
         subtree[p] += subtree[vertex];
         if (heavy[p] < 0 || subtree[heavy[p]] < subtree[vertex]) heavy[p] = vertex;
     }
 
-    vector<int> head(n), position(n), at(n);
-    int timer = 0;
-    for (int root : root_position) {
-        vector<pair<int, int>> tasks{{root, root}};
+    vector<nidx_t> head(n), position(n), at(n);
+    nidx_t timer = 0;
+    for (nidx_t root : root_position) {
+        vector<pair<nidx_t, nidx_t>> tasks{{root, root}};
         while (!tasks.empty()) {
             auto [start, chain] = tasks.back();
             tasks.pop_back();
-            for (int vertex = start; vertex >= 0; vertex = heavy[vertex]) {
+            for (nidx_t vertex = start; vertex >= 0; vertex = heavy[vertex]) {
                 head[vertex] = chain;
                 position[vertex] = timer;
                 at[timer++] = vertex;
                 for (auto&& child_key : invoke(children, vertices[vertex])) {
-                    int child = vertices.inverse(child_key);
+                    nidx_t child = vertices.inverse(child_key);
                     if (child != heavy[vertex]) tasks.emplace_back(child, child);
                 }
             }
@@ -162,19 +162,19 @@ excluded into its contribution to `to`.  Returns answers by dense vertex positio
 template <class G, class Base, class Lift, class M>
 auto nreroot(G&& graph, Base base, Lift lift, M merge) {
     using S = remove_cvref_t<decltype(invoke(base, graph.vertices[0]))>;
-    int n = graph.vertices.len();
-    vector<int> parent(n, -1), order;
+    nidx_t n = graph.vertices.len();
+    vector<nidx_t> parent(n, -1), order;
     order.reserve(n);
-    for (int source = 0; source < n; ++source) {
+    for (nidx_t source = 0; source < n; ++source) {
         if (parent[source] >= 0) continue;
         parent[source] = source;
-        vector<int> stack{source};
+        vector<nidx_t> stack{source};
         while (!stack.empty()) {
-            int from = stack.back();
+            nidx_t from = stack.back();
             stack.pop_back();
             order.push_back(from);
             for (auto&& edge : graph.edges(graph.vertices[from])) {
-                int to = graph.vertices.inverse(graph.target(edge));
+                nidx_t to = graph.vertices.inverse(graph.target(edge));
                 if (parent[to] < 0) parent[to] = from, stack.push_back(to);
             }
         }
@@ -182,10 +182,10 @@ auto nreroot(G&& graph, Base base, Lift lift, M merge) {
 
     vector<S> toward_parent(n, merge.id());
     for (auto it = order.rbegin(); it != order.rend(); ++it) {
-        int from = *it;
+        nidx_t from = *it;
         S state = invoke(base, graph.vertices[from]);
         for (auto&& edge : graph.edges(graph.vertices[from])) {
-            int to = graph.vertices.inverse(graph.target(edge));
+            nidx_t to = graph.vertices.inverse(graph.target(edge));
             if (parent[to] == from) state = invoke(merge, move(state), toward_parent[to]);
         }
         if (parent[from] != from)
@@ -197,19 +197,19 @@ auto nreroot(G&& graph, Base base, Lift lift, M merge) {
     }
 
     vector<S> from_parent(n, merge.id()), answer(n, merge.id());
-    for (int from : order) {
+    for (nidx_t from : order) {
         vector<S> contribution;
         for (auto&& edge : graph.edges(graph.vertices[from])) {
-            int to = graph.vertices.inverse(graph.target(edge));
+            nidx_t to = graph.vertices.inverse(graph.target(edge));
             contribution.push_back(to == parent[from] ? from_parent[from] : toward_parent[to]);
         }
-        int degree = int(contribution.size());
+        nidx_t degree = nidx_t(contribution.size());
         vector<S> suffix(degree + 1, merge.id());
-        for (int i = degree; i--;) suffix[i] = invoke(merge, contribution[i], suffix[i + 1]);
+        for (nidx_t i = degree; i--;) suffix[i] = invoke(merge, contribution[i], suffix[i + 1]);
         S prefix = invoke(base, graph.vertices[from]);
-        int position = 0;
+        nidx_t position = 0;
         for (auto&& edge : graph.edges(graph.vertices[from])) {
-            int to = graph.vertices.inverse(graph.target(edge));
+            nidx_t to = graph.vertices.inverse(graph.target(edge));
             if (parent[to] == from) {
                 S without = invoke(merge, prefix, suffix[position + 1]);
                 from_parent[to] = invoke(lift, without, graph.vertices[from], edge);

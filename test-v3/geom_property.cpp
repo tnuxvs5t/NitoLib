@@ -26,22 +26,22 @@ bool rational_intersection(point a, point b, point c, point d) {
 
 int main() {
     mt19937 rng(0x6E0);
-    for (int round = 0; round < 200000; ++round) {
-        auto make_point = [&] { return point{int(rng() % 31) - 15, int(rng() % 31) - 15}; };
+    for (nidx_t round = 0; round < 200000; ++round) {
+        auto make_point = [&] { return point{nidx_t(rng() % 31) - 15, nidx_t(rng() % 31) - 15}; };
         point a = make_point(), b = make_point(), c = make_point(), d = make_point();
         CHECK(nsegment_intersect(a, b, c, d) == rational_intersection(a, b, c, d));
     }
 
-    for (int round = 0; round < 20000; ++round) {
-        int n = int(rng() % 40);
+    for (nidx_t round = 0; round < 20000; ++round) {
+        nidx_t n = nidx_t(rng() % 40);
         vector<point> points(n);
         for (point& value : points)
-            value = {int(rng() % 31) - 15, int(rng() % 31) - 15};
+            value = {nidx_t(rng() % 31) - 15, nidx_t(rng() % 31) - 15};
         auto hull = nconvex_hull(nall(points));
         CHECK(adjacent_find(hull.begin(), hull.end()) == hull.end());
         if (hull.size() >= 3) {
             CHECK(npolygon_area2(nall(hull)) > 0);
-            for (int i = 0; i < int(hull.size()); ++i) {
+            for (nidx_t i = 0; i < nidx_t(hull.size()); ++i) {
                 point a = hull[i], b = hull[(i + 1) % hull.size()];
                 point c = hull[(i + 2) % hull.size()];
                 CHECK(ncross(a, b, c) > 0);

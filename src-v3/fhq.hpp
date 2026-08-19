@@ -4,7 +4,7 @@
 
 struct nfhq_noop {
     template <class Q>
-    constexpr void operator()(Q&, int) const {}
+    constexpr void operator()(Q&, nidx_t) const {}
 };
 
 /*
@@ -23,7 +23,7 @@ template <class T, class Pull = nfhq_noop, class Push = nfhq_noop>
 struct nfhq {
     struct node {
         T value;
-        int left = -1, right = -1, parent = -1, size = 1;
+        nidx_t left = -1, right = -1, parent = -1, size = 1;
         uint32_t priority;
     };
 
@@ -36,11 +36,11 @@ struct nfhq {
                   uint64_t seed = 0x243f6a8885a308d3ULL)
         : puller(move(pull_policy)), pusher(move(push_policy)), random_state(seed) {}
 
-    node& operator[](int handle) { return pool[handle]; }
-    const node& operator[](int handle) const { return pool[handle]; }
-    int nodes() const { return pool.len(); }
-    int size(int root) const { return root < 0 ? 0 : pool[root].size; }
-    void reserve(int n) { pool.reserve(n); }
+    node& operator[](nidx_t handle) { return pool[handle]; }
+    const node& operator[](nidx_t handle) const { return pool[handle]; }
+    nidx_t nodes() const { return pool.len(); }
+    nidx_t size(nidx_t root) const { return root < 0 ? 0 : pool[root].size; }
+    void reserve(nidx_t n) { pool.reserve(n); }
 
     uint32_t random_priority() {
         uint64_t z = (random_state += 0x9e3779b97f4a7c15ULL);
@@ -50,67 +50,67 @@ struct nfhq {
     }
 
     template <class U>
-    int make(U&& value) {
-        int handle = pool.make(node{T(forward<U>(value)), -1, -1, -1, 1,
+    nidx_t make(U&& value) {
+        nidx_t handle = pool.make(node{T(forward<U>(value)), -1, -1, -1, 1,
                                     random_priority()});
         up(handle);
         return handle;
     }
 
-    void down(int handle) {
+    void down(nidx_t handle) {
         if (handle >= 0) invoke(pusher, *this, handle);
     }
 
-    void up(int handle) {
+    void up(nidx_t handle) {
         if (handle < 0) return;
         pool[handle].size = 1 + size(pool[handle].left) + size(pool[handle].right);
         invoke(puller, *this, handle);
     }
 
     /* Call expose before mutating a saved handle, then rebuild afterwards. */
-    void expose(int handle) {
-        vector<int> path;
-        for (int x = handle; x >= 0; x = pool[x].parent) path.push_back(x);
+    void expose(nidx_t handle) {
+        vector<nidx_t> path;
+        for (nidx_t x = handle; x >= 0; x = pool[x].parent) path.push_back(x);
         for (auto it = path.rbegin(); it != path.rend(); ++it) down(*it);
     }
 
-    void rebuild(int handle) {
+    void rebuild(nidx_t handle) {
         for (; handle >= 0; handle = pool[handle].parent) up(handle);
     }
 
-    void swap_children(int handle) {
+    void swap_children(nidx_t handle) {
         swap(pool[handle].left, pool[handle].right);
     }
 
   private:
-    void set_left(int parent, int child) {
-        int old = pool[parent].left;
+    void set_left(nidx_t parent, nidx_t child) {
+        nidx_t old = pool[parent].left;
         if (old >= 0 && old != child && pool[old].parent == parent) pool[old].parent = -1;
         pool[parent].left = child;
         if (child >= 0) pool[child].parent = parent;
     }
 
-    void set_right(int parent, int child) {
-        int old = pool[parent].right;
+    void set_right(nidx_t parent, nidx_t child) {
+        nidx_t old = pool[parent].right;
         if (old >= 0 && old != child && pool[old].parent == parent) pool[old].parent = -1;
         pool[parent].right = child;
         if (child >= 0) pool[child].parent = parent;
     }
 
-    int take_left(int parent) {
-        int child = pool[parent].left;
+    nidx_t take_left(nidx_t parent) {
+        nidx_t child = pool[parent].left;
         set_left(parent, -1);
         return child;
     }
 
-    int take_right(int parent) {
-        int child = pool[parent].right;
+    nidx_t take_right(nidx_t parent) {
+        nidx_t child = pool[parent].right;
         set_right(parent, -1);
         return child;
     }
 
     template <class F>
-    pair<int, int> split_by0(int root, F& goes_left) {
+    pair<nidx_t, nidx_t> split_by0(nidx_t root, F& goes_left) {
         if (root < 0) return {-1, -1};
         down(root);
         if (invoke(goes_left, pool[root].value)) {
@@ -128,7 +128,7 @@ struct nfhq {
     }
 
   public:
-    int merge(int left, int right) {
+    nidx_t merge(nidx_t left, nidx_t right) {
         if (left < 0) {
             if (right >= 0) pool[right].parent = -1;
             return right;
@@ -140,23 +140,23 @@ struct nfhq {
         down(left);
         down(right);
         if (pool[left].priority >= pool[right].priority) {
-            int joined = merge(take_right(left), right);
+            nidx_t joined = merge(take_right(left), right);
             set_right(left, joined);
             up(left);
             pool[left].parent = -1;
             return left;
         }
-        int joined = merge(left, take_left(right));
+        nidx_t joined = merge(left, take_left(right));
         set_left(right, joined);
         up(right);
         pool[right].parent = -1;
         return right;
     }
 
-    pair<int, int> split(int root, int left_size) {
+    pair<nidx_t, nidx_t> split(nidx_t root, nidx_t left_size) {
         if (root < 0) return {-1, -1};
         down(root);
-        int current_left = size(pool[root].left);
+        nidx_t current_left = size(pool[root].left);
         if (left_size <= current_left) {
             auto [left, middle] = split(take_left(root), left_size);
             set_left(root, middle);
@@ -173,14 +173,14 @@ struct nfhq {
 
     /* goes_left(value) must be false only after it first becomes false in inorder. */
     template <class F>
-    pair<int, int> split_by(int root, F goes_left) {
+    pair<nidx_t, nidx_t> split_by(nidx_t root, F goes_left) {
         return split_by0(root, goes_left);
     }
 
-    int kth(int root, int position) {
+    nidx_t kth(nidx_t root, nidx_t position) {
         while (true) {
             down(root);
-            int left_size = size(pool[root].left);
+            nidx_t left_size = size(pool[root].left);
             if (position < left_size)
                 root = pool[root].left;
             else if (position == left_size)
@@ -192,16 +192,16 @@ struct nfhq {
         }
     }
 
-    int root_of(int handle) const {
+    nidx_t root_of(nidx_t handle) const {
         while (pool[handle].parent >= 0) handle = pool[handle].parent;
         return handle;
     }
 
-    int rank(int handle) {
+    nidx_t rank(nidx_t handle) {
         expose(handle);
-        int answer = size(pool[handle].left);
+        nidx_t answer = size(pool[handle].left);
         while (pool[handle].parent >= 0) {
-            int parent = pool[handle].parent;
+            nidx_t parent = pool[handle].parent;
             if (pool[parent].right == handle) answer += size(pool[parent].left) + 1;
             handle = parent;
         }
@@ -209,15 +209,15 @@ struct nfhq {
     }
 
     template <class V>
-    int build(V values) {
-        int root = -1;
-        for (int i = 0; i < values.len(); ++i) root = merge(root, make(values[i]));
+    nidx_t build(V values) {
+        nidx_t root = -1;
+        for (nidx_t i = 0; i < values.len(); ++i) root = merge(root, make(values[i]));
         return root;
     }
 
     /* A sequence descriptor is invalidated semantically when its captured root changes. */
-    auto sequence(int root) {
-        return ntabulate(size(root), [this, root](int i) -> T& {
+    auto sequence(nidx_t root) {
+        return ntabulate(size(root), [this, root](nidx_t i) -> T& {
             return pool[kth(root, i)].value;
         });
     }

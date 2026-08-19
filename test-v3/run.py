@@ -19,16 +19,22 @@ MODES = {
     "opt": ["-O2", "-DNDEBUG"],
     "san": ["-O1", "-g", "-fsanitize=address,undefined", "-fno-omit-frame-pointer"],
 }
+INDEX_MODES = {
+    "idx32": [],
+    "idx64": ["-DNITORI_INDEX_64"],
+}
 COMMON = ["-std=c++23", "-Wall", "-Wextra", "-Wpedantic", "-Wshadow", "-Werror"]
 
 subprocess.run([sys.executable, str(ROOT / "test-v3/measure.py")], check=True)
 with tempfile.TemporaryDirectory(prefix="nitori-v3-") as tmp:
-    for mode, flags in MODES.items():
-        for source in TESTS:
-            binary = Path(tmp) / f"{source.stem}-{mode}"
-            command = [os.environ.get("CXX", "g++"), *COMMON, *flags,
-                       str(source), "-o", str(binary)]
-            print("+", " ".join(command), flush=True)
-            subprocess.run(command, check=True)
-            subprocess.run([str(binary)], check=True)
-print(f"v3 gate passed: {len(TESTS)} tests x {len(MODES)} modes")
+    for index_mode, index_flags in INDEX_MODES.items():
+        for mode, flags in MODES.items():
+            for source in TESTS:
+                binary = Path(tmp) / f"{source.stem}-{index_mode}-{mode}"
+                command = [os.environ.get("CXX", "g++"), *COMMON, *index_flags,
+                           *flags, str(source), "-o", str(binary)]
+                print("+", " ".join(command), flush=True)
+                subprocess.run(command, check=True)
+                subprocess.run([str(binary)], check=True)
+print(f"v3 gate passed: {len(TESTS)} tests x {len(INDEX_MODES)} index modes"
+      f" x {len(MODES)} build modes")

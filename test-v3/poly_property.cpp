@@ -6,20 +6,20 @@ using mint = nmodint<998244353>;
 
 int main() {
     mt19937 rng(0xF05);
-    for (int round = 0; round < 5000; ++round) {
-        int n = int(rng() % 100), m = int(rng() % 100);
-        vector<int> a(n), b(m);
-        for (int& value : a) value = int(rng() % mint::mod());
-        for (int& value : b) value = int(rng() % mint::mod());
+    for (nidx_t round = 0; round < 5000; ++round) {
+        nidx_t n = nidx_t(rng() % 100), m = nidx_t(rng() % 100);
+        vector<nidx_t> a(n), b(m);
+        for (nidx_t& value : a) value = nidx_t(rng() % mint::mod());
+        for (nidx_t& value : b) value = nidx_t(rng() % mint::mod());
         auto got = nconvolution(nall(a), nall(b));
         vector<mint> expected(n && m ? n + m - 1 : 0);
-        for (int i = 0; i < n; ++i)
-            for (int j = 0; j < m; ++j) expected[i + j] += mint(a[i]) * mint(b[j]);
+        for (nidx_t i = 0; i < n; ++i)
+            for (nidx_t j = 0; j < m; ++j) expected[i + j] += mint(a[i]) * mint(b[j]);
         CHECK(got == expected);
     }
 
-    for (int logarithm = 0; logarithm <= 16; ++logarithm) {
-        int n = 1 << logarithm;
+    for (nidx_t logarithm = 0; logarithm <= 16; ++logarithm) {
+        nidx_t n = 1 << logarithm;
         vector<mint> values(n), original;
         for (mint& value : values) value = rng() % mint::mod();
         original = values;
@@ -28,15 +28,15 @@ int main() {
         CHECK(values == original);
     }
 
-    for (int round = 0; round < 3000; ++round) {
-        int n = 1 + int(rng() % 150);
+    for (nidx_t round = 0; round < 3000; ++round) {
+        nidx_t n = 1 + nidx_t(rng() % 150);
         vector<mint> polynomial(n);
         polynomial[0] = 1 + rng() % (mint::mod() - 1);
-        for (int i = 1; i < n; ++i) polynomial[i] = rng() % mint::mod();
+        for (nidx_t i = 1; i < n; ++i) polynomial[i] = rng() % mint::mod();
         auto inverse = npoly_inverse(nall(polynomial), n);
         auto product = nconvolution(nall(polynomial), nall(inverse));
         CHECK(product[0] == mint(1));
-        for (int i = 1; i < n; ++i) CHECK(product[i] == mint(0));
+        for (nidx_t i = 1; i < n; ++i) CHECK(product[i] == mint(0));
 
         auto restored = npoly_derivative(npoly_integral(polynomial));
         CHECK(restored == polynomial);
@@ -56,7 +56,7 @@ int main() {
 
     using small = nmodint<17>;
     vector<small> cycle(16);
-    for (int i = 0; i < 16; ++i) cycle[i] = i;
+    for (nidx_t i = 0; i < 16; ++i) cycle[i] = i;
     auto original = cycle;
     nntt<17, 3>(cycle);
     nntt<17, 3>(cycle, true);

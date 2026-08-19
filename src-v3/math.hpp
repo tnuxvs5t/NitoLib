@@ -107,7 +107,7 @@ ncrt(A a, long long modulus_a, B b, long long modulus_b) {
 
 /*
 Runtime-modulus helpers.  The modulus is positive and fits signed long long; the
-canonical residue type is long long, not int.  The two-argument kernels require
+canonical residue type is long long, not nidx_t.  The two-argument kernels require
 their operands to already lie in [0,modulus).  Wider-operand overloads normalize
 before entering the canonical kernels.  Addition uses standard unsigned arithmetic;
 signed __int128_t protects multiplication when the modulus approaches LLONG_MAX.
@@ -138,22 +138,6 @@ constexpr long long nmod_neg_canonical(long long value, long long modulus) {
     return value ? modulus - value : 0;
 }
 
-constexpr long long nmod_add(int left, int right, long long modulus) {
-    return nmod_add_canonical(left, right, modulus);
-}
-
-constexpr long long nmod_sub(int left, int right, long long modulus) {
-    return nmod_sub_canonical(left, right, modulus);
-}
-
-constexpr long long nmod_mul(int left, int right, long long modulus) {
-    return nmod_mul_canonical(left, right, modulus);
-}
-
-constexpr long long nmod_neg(int value, long long modulus) {
-    return nmod_neg_canonical(value, modulus);
-}
-
 template <class A, class B>
 constexpr long long nmod_add(A left, B right, long long modulus) {
     return nmod_add_canonical(nmod_norm(left, modulus), nmod_norm(right, modulus), modulus);
@@ -176,7 +160,7 @@ constexpr long long nmod_neg(I value, long long modulus) {
 
 /*
 MOD is a positive integral constant representable by signed long long.  The
-auto non-type parameter deliberately avoids imposing int on the modulus; for
+auto non-type parameter deliberately avoids imposing nidx_t on the modulus; for
 example, nmodint<4000000007LL> is a valid type.  Source values are reduced before
 narrowing, and exponents are nonnegative.  Division requires an invertible divisor.
 */
@@ -190,7 +174,6 @@ struct nmodint {
     constexpr nmodint() = default;
     template <class I>
     constexpr nmodint(I x) : value(nmod_norm(x, mod())) {}
-    constexpr explicit operator int() const { return static_cast<int>(value); }
     constexpr explicit operator value_type() const { return value; }
     constexpr nmodint& operator+=(nmodint other) {
         value = nmod_add_canonical(value, other.value, mod());
@@ -218,15 +201,15 @@ struct nmodint {
     friend istream& operator>>(istream& in, nmodint& x) {
         string token;
         if (!(in >> token)) return in;
-        int at = 0;
+        nidx_t at = 0;
         bool negative = false;
         if (token[at] == '+' || token[at] == '-') {
             negative = token[at] == '-';
-            if (++at == int(token.size())) return in.setstate(ios::failbit), in;
+            if (++at == nidx_t(token.size())) return in.setstate(ios::failbit), in;
         }
         value_type residue = 0;
-        for (; at < int(token.size()); ++at) {
-            int digit = token[at] - '0';
+        for (; at < nidx_t(token.size()); ++at) {
+            nidx_t digit = token[at] - '0';
             if (digit < 0 || digit > 9) return in.setstate(ios::failbit), in;
             residue = nmod_add_canonical(nmod_mul_canonical(residue, 10, mod()), digit, mod());
         }
@@ -239,45 +222,45 @@ struct nmodint {
 template <class M>
 struct ncomb {
     vector<M> factorial{M(1)}, inverse_factorial{M(1)};
-    explicit ncomb(int n = 0) { extend(n); }
-    void extend(int n) {
-        int old = int(factorial.size()) - 1;
+    explicit ncomb(nidx_t n = 0) { extend(n); }
+    void extend(nidx_t n) {
+        nidx_t old = nidx_t(factorial.size()) - 1;
         if (n <= old) return;
         factorial.resize(n + 1);
-        for (int i = old + 1; i <= n; ++i) factorial[i] = factorial[i - 1] * M(i);
+        for (nidx_t i = old + 1; i <= n; ++i) factorial[i] = factorial[i - 1] * M(i);
         inverse_factorial.resize(n + 1);
         inverse_factorial[n] = factorial[n].inv();
-        for (int i = n; i > old; --i) inverse_factorial[i - 1] = inverse_factorial[i] * M(i);
+        for (nidx_t i = n; i > old; --i) inverse_factorial[i - 1] = inverse_factorial[i] * M(i);
     }
-    M permutation(int n, int k) const { return factorial[n] * inverse_factorial[n - k]; }
-    M choose(int n, int k) const {
+    M permutation(nidx_t n, nidx_t k) const { return factorial[n] * inverse_factorial[n - k]; }
+    M choose(nidx_t n, nidx_t k) const {
         return k < 0 || k > n ? M{} : factorial[n] * inverse_factorial[k] * inverse_factorial[n - k];
     }
 };
 
 struct nsieve {
-    vector<int> least, primes;
-    explicit nsieve(int n = 0) : least(n + 1) {
-        for (int value = 2; value <= n; ++value) {
+    vector<nidx_t> least, primes;
+    explicit nsieve(nidx_t n = 0) : least(n + 1) {
+        for (nidx_t value = 2; value <= n; ++value) {
             if (!least[value]) least[value] = value, primes.push_back(value);
-            for (int prime : primes) {
+            for (nidx_t prime : primes) {
                 if (prime > least[value] || 1LL * prime * value > n) break;
                 least[prime * value] = prime;
             }
         }
     }
-    bool prime(int value) const { return value >= 2 && least[value] == value; }
-    vector<pair<int, int>> factor(int value) const {
-        vector<pair<int, int>> result;
+    bool prime(nidx_t value) const { return value >= 2 && least[value] == value; }
+    vector<pair<nidx_t, nidx_t>> factor(nidx_t value) const {
+        vector<pair<nidx_t, nidx_t>> result;
         while (value > 1) {
-            int prime = least[value], exponent = 0;
+            nidx_t prime = least[value], exponent = 0;
             do value /= prime, ++exponent; while (value > 1 && least[value] == prime);
             result.emplace_back(prime, exponent);
         }
         return result;
     }
-    int phi(int value) const {
-        int result = value;
+    nidx_t phi(nidx_t value) const {
+        nidx_t result = value;
         for (auto [prime, exponent] : factor(value)) result -= result / prime, (void)exponent;
         return result;
     }

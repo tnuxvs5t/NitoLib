@@ -68,22 +68,28 @@ struct nhash {
 };
 
 /*
-Static unique key -> source position inverse.  Keys are stored densely and slots contain
-only a 32-bit fingerprint plus dense key index+1; zero is empty.  Construction knows the
+Static unique key -> source position inverse.  Keys are stored densely and each slot
+contains a 32-bit fingerprint plus an nidx_t position; a negative position is empty.
+Construction knows the
 final size, so there is no growth, erase, tombstone, node allocation or rehash.  Hash and
-equality agree, queried keys are stable, and positions fit signed int.  A missing key
+equality agree, queried keys are stable, and positions fit nidx_t.  A missing key
 returns -1.  Build is expected O(n), lookup expected O(1), storage O(n).
 */
 template <class K, class H = nhash, class E = equal_to<>>
 struct nhash_inverse {
   private:
+    struct slot {
+        uint32_t fingerprint = 0;
+        nidx_t position = -1;
+    };
+
     vector<K> keys;
-    vector<uint64_t> table;
+    vector<slot> table;
     size_t mask = 0;
     H hasher;
     E equal;
 
-    static size_t capacity_for(int expected) {
+    static size_t capacity_for(nidx_t expected) {
         if (expected <= 0)
             return 1;
         size_t need = size_t(expected);
@@ -95,40 +101,37 @@ struct nhash_inverse {
     }
 
     static uint32_t tag(uint64_t hash) { return uint32_t(hash >> 32); }
-    static uint64_t encode(uint64_t hash, int index) {
-        return uint64_t(tag(hash)) << 32 | (uint64_t(uint32_t(index)) + 1);
-    }
 
   public:
     template <class V>
     explicit nhash_inverse(const V& source, H hash = {}, E relation = {})
         : hasher(move(hash)), equal(move(relation)) {
-        int n = source.len();
+        nidx_t n = source.len();
         keys.reserve(n);
-        for (int i = 0; i < n; ++i)
+        for (nidx_t i = 0; i < n; ++i)
             keys.push_back(nview_detail::own(source[i]));
-        table.assign(capacity_for(n), 0);
+        table.assign(capacity_for(n), {});
         mask = table.size() - 1;
-        for (int i = 0; i < n; ++i) {
+        for (nidx_t i = 0; i < n; ++i) {
             uint64_t hash_value = uint64_t(hasher(keys[i]));
             size_t at = hash_value & mask;
-            while (table[at])
+            while (table[at].position >= 0)
                 at = (at + 1) & mask;
-            table[at] = encode(hash_value, i);
+            table[at] = {tag(hash_value), i};
         }
     }
 
     static constexpr size_t storage_key_bytes() { return sizeof(K); }
-    static constexpr size_t storage_slot_bytes() { return sizeof(uint64_t); }
+    static constexpr size_t storage_slot_bytes() { return sizeof(slot); }
 
     template <class Q>
-    int find(const Q& key) const {
+    nidx_t find(const Q& key) const {
         uint64_t hash = uint64_t(hasher(key));
         size_t at = hash & mask;
-        while (uint64_t cell = table[at]) {
-            int index = int(uint32_t(cell)) - 1;
-            if (uint32_t(cell >> 32) == tag(hash) && equal(keys[index], key))
-                return index;
+        while (table[at].position >= 0) {
+            const slot& cell = table[at];
+            if (cell.fingerprint == tag(hash) && equal(keys[cell.position], key))
+                return cell.position;
             at = (at + 1) & mask;
         }
         return -1;
@@ -147,10 +150,10 @@ struct inverted_access {
     V view;
     I locate;
 
-    constexpr decltype(auto) operator()(int position) { return view[position]; }
+    constexpr decltype(auto) operator()(nidx_t position) { return view[position]; }
 
     template <class K>
-    int inverse(const K& key) const { return locate.find(key); }
+    nidx_t inverse(const K& key) const { return locate.find(key); }
 };
 }
 
@@ -163,7 +166,7 @@ constexpr V ninvert(V view) {
 
 template <class V, class H, class E>
 auto ninvert(V view, H hash, E equal) {
-    int n = view.len();
+    nidx_t n = view.len();
     auto locate = nmake_hash_inverse(view, move(hash), move(equal));
     using I = decltype(locate);
     return nview{n, nhash_detail::inverted_access<V, I>{move(view), move(locate)}};

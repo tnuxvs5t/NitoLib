@@ -14,9 +14,9 @@ struct nfunc {
     D domain;
     mutable F eval;
 
-    constexpr int len() const { return domain.len(); }
-    constexpr decltype(auto) key(int i) const { return domain[i]; }
-    constexpr decltype(auto) operator[](int i) const { return invoke(eval, domain[i]); }
+    constexpr nidx_t len() const { return domain.len(); }
+    constexpr decltype(auto) key(nidx_t i) const { return domain[i]; }
+    constexpr decltype(auto) operator[](nidx_t i) const { return invoke(eval, domain[i]); }
 
     template <class K>
     constexpr decltype(auto) operator()(K&& key) const {
@@ -57,16 +57,16 @@ constexpr auto nvalues(G& function) {
 
 template <class G>
 constexpr auto nvalues(G&& function) {
-    int n = function.len();
-    return nview{n, [function = forward<G>(function)](int i) mutable -> decltype(auto) {
+    nidx_t n = function.len();
+    return nview{n, [function = forward<G>(function)](nidx_t i) mutable -> decltype(auto) {
                      return function[i];
                  }};
 }
 
 template <class G>
 constexpr auto nentries(G& function) {
-    int n = function.len();
-    return nview{n, [p = addressof(function)](int i) {
+    nidx_t n = function.len();
+    return nview{n, [p = addressof(function)](nidx_t i) {
                      using K = decltype(p->key(i));
                      using V = decltype((*p)[i]);
                      return pair<K, V>(p->key(i), (*p)[i]);
@@ -75,8 +75,8 @@ constexpr auto nentries(G& function) {
 
 template <class G>
 constexpr auto nentries(G&& function) {
-    int n = function.len();
-    return nview{n, [function = forward<G>(function)](int i) mutable {
+    nidx_t n = function.len();
+    return nview{n, [function = forward<G>(function)](nidx_t i) mutable {
                      using K = decltype(function.key(i));
                      using V = decltype(function[i]);
                      return pair<K, V>(function.key(i), function[i]);
@@ -169,8 +169,8 @@ auto nfunc_bind(K keys, V values, H hash, E equal) {
 /* Dense ordinal binding is the common zero-locator case. */
 template <class V>
 constexpr auto nfunc_bind(V values) {
-    int n = values.len();
-    return nfunc{nrange(n), [values = move(values)](int i) mutable -> decltype(auto) {
+    nidx_t n = values.len();
+    return nfunc{nrange(n), [values = move(values)](nidx_t i) mutable -> decltype(auto) {
                      return values[i];
                  }};
 }

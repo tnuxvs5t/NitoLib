@@ -39,7 +39,7 @@ int main() {
     verify_factor(2305843009213693951ULL);
 
     mt19937_64 random(0xfa67022026ULL);
-    for (int trial = 0; trial < 3000; ++trial) {
+    for (nidx_t trial = 0; trial < 3000; ++trial) {
         uint64_t value = 1 + random() % 1000000000ULL;
         verify_factor(value);
     }

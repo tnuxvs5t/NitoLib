@@ -11,15 +11,15 @@ template <class T, class M = nadd<T>>
 struct nlct {
     struct node {
         T value, forward, reverse;
-        int left = -1, right = -1, parent = -1, size = 1;
+        nidx_t left = -1, right = -1, parent = -1, size = 1;
         bool reversed = false;
     };
     [[no_unique_address]] mutable M merge;
     vector<node> nodes;
 
-    explicit nlct(int n = 0, M operation = {}) : merge(move(operation)) {
+    explicit nlct(nidx_t n = 0, M operation = {}) : merge(move(operation)) {
         nodes.reserve(n);
-        for (int i = 0; i < n; ++i) {
+        for (nidx_t i = 0; i < n; ++i) {
             T value = merge.id();
             nodes.push_back({value, value, move(value)});
         }
@@ -28,23 +28,23 @@ struct nlct {
     template <class V>
     explicit nlct(V values, M operation = {}) : merge(move(operation)) {
         nodes.reserve(values.len());
-        for (int i = 0; i < values.len(); ++i) {
+        for (nidx_t i = 0; i < values.len(); ++i) {
             T value = values[i];
             nodes.push_back({value, value, move(value)});
         }
     }
 
-    int len() const { return int(nodes.size()); }
-    int size(int vertex) const { return vertex < 0 ? 0 : nodes[vertex].size; }
-    T forward(int vertex) const { return vertex < 0 ? merge.id() : nodes[vertex].forward; }
-    T reverse(int vertex) const { return vertex < 0 ? merge.id() : nodes[vertex].reverse; }
+    nidx_t len() const { return nidx_t(nodes.size()); }
+    nidx_t size(nidx_t vertex) const { return vertex < 0 ? 0 : nodes[vertex].size; }
+    T forward(nidx_t vertex) const { return vertex < 0 ? merge.id() : nodes[vertex].forward; }
+    T reverse(nidx_t vertex) const { return vertex < 0 ? merge.id() : nodes[vertex].reverse; }
 
-    bool auxiliary_root(int vertex) const {
-        int parent = nodes[vertex].parent;
+    bool auxiliary_root(nidx_t vertex) const {
+        nidx_t parent = nodes[vertex].parent;
         return parent < 0 || (nodes[parent].left != vertex && nodes[parent].right != vertex);
     }
 
-    void pull(int vertex) {
+    void pull(nidx_t vertex) {
         auto& current = nodes[vertex];
         current.size = 1 + size(current.left) + size(current.right);
         current.forward = invoke(merge, invoke(merge, forward(current.left), current.value),
@@ -53,24 +53,24 @@ struct nlct {
                                  reverse(current.left));
     }
 
-    void toggle(int vertex) {
+    void toggle(nidx_t vertex) {
         if (vertex < 0) return;
         swap(nodes[vertex].left, nodes[vertex].right);
         swap(nodes[vertex].forward, nodes[vertex].reverse);
         nodes[vertex].reversed = !nodes[vertex].reversed;
     }
 
-    void push(int vertex) {
+    void push(nidx_t vertex) {
         if (!nodes[vertex].reversed) return;
         toggle(nodes[vertex].left);
         toggle(nodes[vertex].right);
         nodes[vertex].reversed = false;
     }
 
-    void rotate(int vertex) {
-        int parent = nodes[vertex].parent, grandparent = nodes[parent].parent;
+    void rotate(nidx_t vertex) {
+        nidx_t parent = nodes[vertex].parent, grandparent = nodes[parent].parent;
         bool right_child = nodes[parent].right == vertex;
-        int middle = right_child ? nodes[vertex].left : nodes[vertex].right;
+        nidx_t middle = right_child ? nodes[vertex].left : nodes[vertex].right;
         if (!auxiliary_root(parent)) {
             if (nodes[grandparent].left == parent) nodes[grandparent].left = vertex;
             else nodes[grandparent].right = vertex;
@@ -89,15 +89,15 @@ struct nlct {
         pull(vertex);
     }
 
-    void splay(int vertex) {
-        vector<int> path{vertex};
-        for (int at = vertex; !auxiliary_root(at); at = nodes[at].parent)
+    void splay(nidx_t vertex) {
+        vector<nidx_t> path{vertex};
+        for (nidx_t at = vertex; !auxiliary_root(at); at = nodes[at].parent)
             path.push_back(nodes[at].parent);
         for (auto it = path.rbegin(); it != path.rend(); ++it) push(*it);
         while (!auxiliary_root(vertex)) {
-            int parent = nodes[vertex].parent;
+            nidx_t parent = nodes[vertex].parent;
             if (!auxiliary_root(parent)) {
-                int grandparent = nodes[parent].parent;
+                nidx_t grandparent = nodes[parent].parent;
                 bool zigzig = (nodes[parent].left == vertex) ==
                               (nodes[grandparent].left == parent);
                 rotate(zigzig ? parent : vertex);
@@ -106,9 +106,9 @@ struct nlct {
         }
     }
 
-    int access(int vertex) {
-        int previous = -1;
-        for (int current = vertex; current >= 0; current = nodes[current].parent) {
+    nidx_t access(nidx_t vertex) {
+        nidx_t previous = -1;
+        for (nidx_t current = vertex; current >= 0; current = nodes[current].parent) {
             splay(current);
             nodes[current].right = previous;
             if (previous >= 0) nodes[previous].parent = current;
@@ -119,12 +119,12 @@ struct nlct {
         return previous;
     }
 
-    void make_root(int vertex) {
+    void make_root(nidx_t vertex) {
         access(vertex);
         toggle(vertex);
     }
 
-    int find_root(int vertex) {
+    nidx_t find_root(nidx_t vertex) {
         access(vertex);
         push(vertex);
         while (nodes[vertex].left >= 0) vertex = nodes[vertex].left, push(vertex);
@@ -132,18 +132,18 @@ struct nlct {
         return vertex;
     }
 
-    bool connected(int a, int b) {
+    bool connected(nidx_t a, nidx_t b) {
         if (a == b) return true;
         make_root(a);
         return find_root(b) == a;
     }
 
-    void link(int a, int b) {
+    void link(nidx_t a, nidx_t b) {
         make_root(a);
         nodes[a].parent = b;
     }
 
-    void cut(int a, int b) {
+    void cut(nidx_t a, nidx_t b) {
         make_root(a);
         access(b);
         nodes[b].left = -1;
@@ -151,24 +151,24 @@ struct nlct {
         pull(b);
     }
 
-    void set(int vertex, T value) {
+    void set(nidx_t vertex, T value) {
         access(vertex);
         nodes[vertex].value = move(value);
         pull(vertex);
     }
 
-    T get(int vertex) {
+    T get(nidx_t vertex) {
         access(vertex);
         return nodes[vertex].value;
     }
 
-    T fold(int a, int b) {
+    T fold(nidx_t a, nidx_t b) {
         make_root(a);
         access(b);
         return nodes[b].forward;
     }
 
-    int path_size(int a, int b) {
+    nidx_t path_size(nidx_t a, nidx_t b) {
         make_root(a);
         access(b);
         return nodes[b].size;

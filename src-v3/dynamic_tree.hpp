@@ -1,5 +1,6 @@
 #pragma once
 #include "fhq.hpp"
+#include "hash.hpp"
 #include "segment.hpp"
 
 /*
@@ -11,15 +12,15 @@ the cyclic Euler sequence.  This is deliberately not a path-query structure.
 template <class T, class M = nadd<T>>
 struct nett_forest {
     struct item {
-        int vertex;
+        nidx_t vertex;
         bool token;
         T value, aggregate;
-        int vertex_count;
+        nidx_t vertex_count;
     };
     struct pull_policy {
         [[no_unique_address]] M merge;
         template <class Q>
-        void operator()(Q& tree, int handle) {
+        void operator()(Q& tree, nidx_t handle) {
             auto& node = tree[handle];
             T aggregate = node.left < 0 ? merge.id() : tree[node.left].value.aggregate;
             if (node.value.token) aggregate = invoke(merge, move(aggregate), node.value.value);
@@ -33,14 +34,15 @@ struct nett_forest {
     };
 
     using kernel_type = nfhq<item, pull_policy>;
+    using edge_key = pair<nidx_t, nidx_t>;
     kernel_type sequence;
-    vector<int> representative;
-    unordered_map<uint64_t, pair<int, int>> occurrence;
+    vector<nidx_t> representative;
+    unordered_map<edge_key, pair<nidx_t, nidx_t>, nhash> occurrence;
 
-    explicit nett_forest(int n = 0, M merge = {})
+    explicit nett_forest(nidx_t n = 0, M merge = {})
         : sequence(pull_policy{move(merge)}), representative(n) {
         T identity = sequence.puller.merge.id();
-        for (int vertex = 0; vertex < n; ++vertex)
+        for (nidx_t vertex = 0; vertex < n; ++vertex)
             representative[vertex] = sequence.make(item{vertex, true, identity, identity, 1});
     }
 
@@ -48,49 +50,49 @@ struct nett_forest {
     explicit nett_forest(V values, M merge = {})
         : sequence(pull_policy{move(merge)}), representative(values.len()) {
         T identity = sequence.puller.merge.id();
-        for (int vertex = 0; vertex < values.len(); ++vertex)
+        for (nidx_t vertex = 0; vertex < values.len(); ++vertex)
             representative[vertex] = sequence.make(item{vertex, true, values[vertex], identity, 1});
     }
 
-    int len() const { return int(representative.size()); }
-    static uint64_t key(int a, int b) {
+    nidx_t len() const { return nidx_t(representative.size()); }
+    static edge_key key(nidx_t a, nidx_t b) {
         if (a > b) swap(a, b);
-        return uint64_t(uint32_t(a)) << 32 | uint32_t(b);
+        return {a, b};
     }
-    int root(int vertex) const { return sequence.root_of(representative[vertex]); }
-    bool connected(int a, int b) const { return root(a) == root(b); }
-    int component_size(int vertex) const { return sequence[root(vertex)].value.vertex_count; }
-    T fold(int vertex) const { return sequence[root(vertex)].value.aggregate; }
+    nidx_t root(nidx_t vertex) const { return sequence.root_of(representative[vertex]); }
+    bool connected(nidx_t a, nidx_t b) const { return root(a) == root(b); }
+    nidx_t component_size(nidx_t vertex) const { return sequence[root(vertex)].value.vertex_count; }
+    T fold(nidx_t vertex) const { return sequence[root(vertex)].value.aggregate; }
 
-    void set(int vertex, T value) {
-        int handle = representative[vertex];
+    void set(nidx_t vertex, T value) {
+        nidx_t handle = representative[vertex];
         sequence.expose(handle);
         sequence[handle].value.value = move(value);
         sequence.rebuild(handle);
     }
 
-    int reroot(int vertex) {
-        int handle = representative[vertex], tree = sequence.root_of(handle);
-        int position = sequence.rank(handle);
+    nidx_t reroot(nidx_t vertex) {
+        nidx_t handle = representative[vertex], tree = sequence.root_of(handle);
+        nidx_t position = sequence.rank(handle);
         auto [left, right] = sequence.split(tree, position);
         return sequence.merge(right, left);
     }
 
     /* a and b are in different components and no parallel forest edge exists. */
-    void link(int a, int b) {
-        int left = reroot(a), right = reroot(b);
+    void link(nidx_t a, nidx_t b) {
+        nidx_t left = reroot(a), right = reroot(b);
         T identity = sequence.puller.merge.id();
-        int ab = sequence.make(item{-1, false, identity, identity, 0});
-        int ba = sequence.make(item{-1, false, identity, identity, 0});
+        nidx_t ab = sequence.make(item{-1, false, identity, identity, 0});
+        nidx_t ba = sequence.make(item{-1, false, identity, identity, 0});
         sequence.merge(sequence.merge(sequence.merge(left, ab), right), ba);
         occurrence[key(a, b)] = {ab, ba};
     }
 
     /* The edge {a,b} exists.  Its two removed occurrence handles become abandoned. */
-    void cut(int a, int b) {
+    void cut(nidx_t a, nidx_t b) {
         auto [first, second] = occurrence.at(key(a, b));
-        int tree = sequence.root_of(first);
-        int left_position = sequence.rank(first), right_position = sequence.rank(second);
+        nidx_t tree = sequence.root_of(first);
+        nidx_t left_position = sequence.rank(first), right_position = sequence.rank(second);
         if (left_position > right_position) swap(left_position, right_position);
         auto [through_right, suffix] = sequence.split(tree, right_position + 1);
         auto [prefix, right_edge] = sequence.split(through_right, right_position);

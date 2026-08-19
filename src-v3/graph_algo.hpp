@@ -5,8 +5,8 @@
 template <class G, class K, class Cost, class W>
 vector<W> ndijkstra(G&& graph, K source, Cost cost, W infinity) {
     vector<W> distance(graph.vertices.len(), infinity);
-    priority_queue<pair<W, int>, vector<pair<W, int>>, greater<>> queue;
-    int start = graph.vertices.inverse(source);
+    priority_queue<pair<W, nidx_t>, vector<pair<W, nidx_t>>, greater<>> queue;
+    nidx_t start = graph.vertices.inverse(source);
     distance[start] = W{};
     queue.emplace(W{}, start);
     while (!queue.empty()) {
@@ -14,7 +14,7 @@ vector<W> ndijkstra(G&& graph, K source, Cost cost, W infinity) {
         queue.pop();
         if (distance[from] < current) continue;
         for (auto&& edge : graph.edges(graph.vertices[from])) {
-            int to = graph.vertices.inverse(graph.target(edge));
+            nidx_t to = graph.vertices.inverse(graph.target(edge));
             W candidate = current + invoke(cost, edge);
             if (candidate < distance[to]) {
                 distance[to] = candidate;
@@ -27,10 +27,10 @@ vector<W> ndijkstra(G&& graph, K source, Cost cost, W infinity) {
 
 /* Edge costs are exactly 0 or 1; unreachable positions are -1. */
 template <class G, class K, class Cost>
-vector<int> n01bfs(G&& graph, K source, Cost cost) {
-    int n = graph.vertices.len(), start = graph.vertices.inverse(source);
-    vector<int> distance(n, numeric_limits<int>::max());
-    deque<pair<int, int>> queue;
+vector<nidx_t> n01bfs(G&& graph, K source, Cost cost) {
+    nidx_t n = graph.vertices.len(), start = graph.vertices.inverse(source);
+    vector<nidx_t> distance(n, numeric_limits<nidx_t>::max());
+    deque<pair<nidx_t, nidx_t>> queue;
     distance[start] = 0;
     queue.emplace_back(0, start);
     while (!queue.empty()) {
@@ -38,34 +38,34 @@ vector<int> n01bfs(G&& graph, K source, Cost cost) {
         queue.pop_front();
         if (current != distance[from]) continue;
         for (auto&& edge : graph.edges(graph.vertices[from])) {
-            int to = graph.vertices.inverse(graph.target(edge));
-            int weight = invoke(cost, edge), candidate = current + weight;
+            nidx_t to = graph.vertices.inverse(graph.target(edge));
+            nidx_t weight = invoke(cost, edge), candidate = current + weight;
             if (candidate >= distance[to]) continue;
             distance[to] = candidate;
             if (weight) queue.emplace_back(candidate, to);
             else queue.emplace_front(candidate, to);
         }
     }
-    for (int& value : distance)
-        if (value == numeric_limits<int>::max()) value = -1;
+    for (nidx_t& value : distance)
+        if (value == numeric_limits<nidx_t>::max()) value = -1;
     return distance;
 }
 
 /* Returns dense vertex positions.  A result shorter than vertices.len() exposes a cycle. */
 template <class G>
-vector<int> ntoposort(G&& graph) {
-    int n = graph.vertices.len();
-    vector<int> indegree(n), queue, order;
-    for (int from = 0; from < n; ++from)
+vector<nidx_t> ntoposort(G&& graph) {
+    nidx_t n = graph.vertices.len();
+    vector<nidx_t> indegree(n), queue, order;
+    for (nidx_t from = 0; from < n; ++from)
         for (auto&& edge : graph.edges(graph.vertices[from]))
             ++indegree[graph.vertices.inverse(graph.target(edge))];
-    for (int vertex = 0; vertex < n; ++vertex)
+    for (nidx_t vertex = 0; vertex < n; ++vertex)
         if (!indegree[vertex]) queue.push_back(vertex);
-    for (int at = 0; at < int(queue.size()); ++at) {
-        int from = queue[at];
+    for (nidx_t at = 0; at < nidx_t(queue.size()); ++at) {
+        nidx_t from = queue[at];
         order.push_back(from);
         for (auto&& edge : graph.edges(graph.vertices[from])) {
-            int to = graph.vertices.inverse(graph.target(edge));
+            nidx_t to = graph.vertices.inverse(graph.target(edge));
             if (!--indegree[to]) queue.push_back(to);
         }
     }
@@ -73,8 +73,8 @@ vector<int> ntoposort(G&& graph) {
 }
 
 struct nscc_result {
-    vector<int> component;
-    int count;
+    vector<nidx_t> component;
+    nidx_t count;
 };
 
 /*
@@ -84,13 +84,13 @@ how reverse edges are stored.  Component labels are dense in second-pass discove
 */
 template <class G, class R>
 nscc_result nscc(G&& graph, R&& reverse_graph) {
-    int n = graph.vertices.len();
+    nidx_t n = graph.vertices.len();
     vector<unsigned char> seen(n);
-    vector<int> order;
+    vector<nidx_t> order;
     order.reserve(n);
-    for (int source = 0; source < n; ++source) {
+    for (nidx_t source = 0; source < n; ++source) {
         if (seen[source]) continue;
-        vector<pair<int, bool>> stack{{source, false}};
+        vector<pair<nidx_t, bool>> stack{{source, false}};
         while (!stack.empty()) {
             auto [from, exit] = stack.back();
             stack.pop_back();
@@ -102,23 +102,23 @@ nscc_result nscc(G&& graph, R&& reverse_graph) {
             seen[from] = true;
             stack.emplace_back(from, true);
             for (auto&& edge : graph.edges(graph.vertices[from])) {
-                int to = graph.vertices.inverse(graph.target(edge));
+                nidx_t to = graph.vertices.inverse(graph.target(edge));
                 if (!seen[to]) stack.emplace_back(to, false);
             }
         }
     }
 
-    vector<int> component(n, -1), stack;
-    int count = 0;
+    vector<nidx_t> component(n, -1), stack;
+    nidx_t count = 0;
     for (auto it = order.rbegin(); it != order.rend(); ++it) {
         if (component[*it] >= 0) continue;
         component[*it] = count;
         stack.push_back(*it);
         while (!stack.empty()) {
-            int from = stack.back();
+            nidx_t from = stack.back();
             stack.pop_back();
             for (auto&& edge : reverse_graph.edges(reverse_graph.vertices[from])) {
-                int to = graph.vertices.inverse(reverse_graph.target(edge));
+                nidx_t to = graph.vertices.inverse(reverse_graph.target(edge));
                 if (component[to] < 0) component[to] = count, stack.push_back(to);
             }
         }

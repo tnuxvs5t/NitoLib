@@ -39,17 +39,17 @@ ngraph(V, N, To) -> ngraph<V, N, To>;
 
 /* Distances are stored by dense position.  Duplicate sources are harmless. */
 template <class G, class R>
-vector<int> nbfs_many(G&& graph, R sources) {
-    vector<int> distance(graph.vertices.len(), -1), queue;
+vector<nidx_t> nbfs_many(G&& graph, R sources) {
+    vector<nidx_t> distance(graph.vertices.len(), -1), queue;
     queue.reserve(graph.vertices.len());
-    for (int i = 0; i < sources.len(); ++i) {
-        int source = graph.vertices.inverse(sources[i]);
+    for (nidx_t i = 0; i < sources.len(); ++i) {
+        nidx_t source = graph.vertices.inverse(sources[i]);
         if (distance[source] < 0) distance[source] = 0, queue.push_back(source);
     }
-    for (int at = 0; at < int(queue.size()); ++at) {
-        int from = queue[at];
+    for (nidx_t at = 0; at < nidx_t(queue.size()); ++at) {
+        nidx_t from = queue[at];
         for (auto&& edge : graph.edges(graph.vertices[from])) {
-            int to = graph.vertices.inverse(graph.target(edge));
+            nidx_t to = graph.vertices.inverse(graph.target(edge));
             if (distance[to] < 0) distance[to] = distance[from] + 1, queue.push_back(to);
         }
     }
@@ -57,8 +57,8 @@ vector<int> nbfs_many(G&& graph, R sources) {
 }
 
 template <class G, class K>
-vector<int> nbfs(G&& graph, K source) {
-    auto sources = ntabulate(1, [source = move(source)](int) mutable -> decltype(auto) {
+vector<nidx_t> nbfs(G&& graph, K source) {
+    auto sources = ntabulate(1, [source = move(source)](nidx_t) mutable -> decltype(auto) {
         return (source);
     });
     return nbfs_many(forward<G>(graph), move(sources));
@@ -72,16 +72,16 @@ parent[root]==root; unseen vertices have parent/depth/component/subtree == -1/0.
 template <class V>
 struct nrooted {
     V vertices;
-    vector<int> parent_position, depth_value, component_position;
-    vector<int> preorder_position, subtree_value, root_position;
-    vector<int> child_offset, child_position;
+    vector<nidx_t> parent_position, depth_value, component_position;
+    vector<nidx_t> preorder_position, subtree_value, root_position;
+    vector<nidx_t> child_offset, child_position;
 
-    int len() const { return vertices.len(); }
+    nidx_t len() const { return vertices.len(); }
 
     auto keys() const {
         return ntabulate(
             len(),
-            [this](int i) -> decltype(auto) { return vertices[i]; },
+            [this](nidx_t i) -> decltype(auto) { return vertices[i]; },
             [this](auto&& key) {
                 return vertices.inverse(forward<decltype(key)>(key));
             }
@@ -96,7 +96,7 @@ struct nrooted {
 
     auto parents() const {
         return nmap_values(nfunc_bind(keys(), nall(parent_position)),
-                           [this](int position) -> decltype(auto) {
+                           [this](nidx_t position) -> decltype(auto) {
                                return vertices[position];
                            });
     }
@@ -107,7 +107,7 @@ struct nrooted {
 
     auto components() const {
         return nmap_values(nfunc_bind(keys(), nall(component_position)),
-                           [this](int position) -> decltype(auto) {
+                           [this](nidx_t position) -> decltype(auto) {
                                return vertices[position];
                            });
     }
@@ -118,20 +118,20 @@ struct nrooted {
 
     auto order() const {
         return nproject(nall(preorder_position),
-                        [this](int position) -> decltype(auto) { return vertices[position]; });
+                        [this](nidx_t position) -> decltype(auto) { return vertices[position]; });
     }
 
     auto roots() const {
         return nproject(nall(root_position),
-                        [this](int position) -> decltype(auto) { return vertices[position]; });
+                        [this](nidx_t position) -> decltype(auto) { return vertices[position]; });
     }
 
     template <class K>
     auto children(K&& key) const {
-        int position = vertices.inverse(forward<K>(key));
+        nidx_t position = vertices.inverse(forward<K>(key));
         return nproject(nsub(nall(child_position), child_offset[position],
                              child_offset[position + 1]),
-                        [this](int child) -> decltype(auto) { return vertices[child]; });
+                        [this](nidx_t child) -> decltype(auto) { return vertices[child]; });
     }
 };
 
@@ -143,24 +143,24 @@ forest.  Roots need not cover every vertex; uncovered metadata remains unseen.
 */
 template <class G, class R>
 auto nroot(G graph, R roots) {
-    int n = graph.vertices.len();
-    vector<int> parent(n, -1), depth(n, -1), component(n, -1), order, subtree(n);
-    vector<int> root_positions;
+    nidx_t n = graph.vertices.len();
+    vector<nidx_t> parent(n, -1), depth(n, -1), component(n, -1), order, subtree(n);
+    vector<nidx_t> root_positions;
     order.reserve(n);
-    for (int i = 0; i < roots.len(); ++i) {
-        int root = graph.vertices.inverse(roots[i]);
+    for (nidx_t i = 0; i < roots.len(); ++i) {
+        nidx_t root = graph.vertices.inverse(roots[i]);
         if (parent[root] >= 0) continue;
         parent[root] = root;
         depth[root] = 0;
         component[root] = root;
         root_positions.push_back(root);
-        vector<int> stack{root};
+        vector<nidx_t> stack{root};
         while (!stack.empty()) {
-            int from = stack.back();
+            nidx_t from = stack.back();
             stack.pop_back();
             order.push_back(from);
             for (auto&& edge : graph.edges(graph.vertices[from])) {
-                int to = graph.vertices.inverse(graph.target(edge));
+                nidx_t to = graph.vertices.inverse(graph.target(edge));
                 if (parent[to] >= 0) continue;
                 parent[to] = from;
                 depth[to] = depth[from] + 1;
@@ -170,18 +170,18 @@ auto nroot(G graph, R roots) {
         }
     }
     for (auto it = order.rbegin(); it != order.rend(); ++it) {
-        int vertex = *it;
+        nidx_t vertex = *it;
         subtree[vertex] += 1;
         if (parent[vertex] != vertex) subtree[parent[vertex]] += subtree[vertex];
     }
-    vector<int> child_offset(n + 1), child_position;
+    vector<nidx_t> child_offset(n + 1), child_position;
     child_position.reserve(order.size() - root_positions.size());
-    for (int vertex : order)
+    for (nidx_t vertex : order)
         if (parent[vertex] != vertex) ++child_offset[parent[vertex] + 1];
     partial_sum(child_offset.begin(), child_offset.end(), child_offset.begin());
-    vector<int> cursor = child_offset;
+    vector<nidx_t> cursor = child_offset;
     child_position.resize(child_offset.back());
-    for (int vertex : order)
+    for (nidx_t vertex : order)
         if (parent[vertex] != vertex) child_position[cursor[parent[vertex]]++] = vertex;
     using V = decltype(graph.vertices);
     return nrooted<V>{move(graph.vertices), move(parent), move(depth), move(component),

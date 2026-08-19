@@ -3,18 +3,30 @@
 
 using namespace std;
 
+#ifdef NITORI_INDEX_64
+using nidx_t = long long;
+#else
+using nidx_t = int;
+#endif
+using nuidx_t = make_unsigned_t<nidx_t>;
+
+template <class T>
+inline constexpr bool nidx_wider_v =
+    integral<remove_cvref_t<T>> &&
+    numeric_limits<remove_cvref_t<T>>::digits > numeric_limits<nidx_t>::digits;
+
 /*
 Nitori v3 intentionally uses expression-based templates instead of a concept/trait
 registry.  A finite object used below supplies len(); an ordinary container supplied
-to nall supplies size() and operator[].  Lengths and positions are signed int, and
+to nall supplies size() and operator[].  Lengths and positions use nidx_t, and
 valid intervals are half-open.  These are contest contracts, not runtime diagnostics.
 */
 template <class A>
-constexpr int nlen(const A& a) {
+constexpr nidx_t nlen(const A& a) {
     if constexpr (requires { a.len(); })
-        return int(a.len());
+        return nidx_t(a.len());
     else
-        return int(size(a));
+        return nidx_t(size(a));
 }
 
 /*

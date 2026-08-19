@@ -16,14 +16,14 @@ static_assert(ranges::random_access_range<aggregate_view>);
 static_assert(!indirectly_writable<ranges::iterator_t<aggregate_view>, string>);
 
 void check(aggregate_deque& actual, const deque<string>& expected) {
-    CHECK(actual.len() == int(expected.size()));
+    CHECK(actual.len() == nidx_t(expected.size()));
     CHECK(actual.empty() == expected.empty());
     string aggregate;
     for (const string& value : expected) aggregate += value;
     CHECK(actual.fold() == aggregate);
     auto view = nall(actual);
-    CHECK(view.len() == int(expected.size()));
-    for (int i = 0; i < view.len(); ++i)
+    CHECK(view.len() == nidx_t(expected.size()));
+    for (nidx_t i = 0; i < view.len(); ++i)
         CHECK(view[i] == expected[size_t(i)] && actual[i] == expected[size_t(i)]);
     if (!expected.empty()) {
         CHECK(actual.front() == expected.front());
@@ -40,12 +40,12 @@ int main() {
         fixed_reference.push_back(string(1, value));
     }
     CHECK(fixed.front() == "a");
-    for (int i = 0; i < 4; ++i) {
+    for (nidx_t i = 0; i < 4; ++i) {
         fixed.pop_front();
         fixed_reference.pop_front();
     }
     CHECK(fixed.back() == "g");
-    for (int i = 0; i < 2; ++i) {
+    for (nidx_t i = 0; i < 2; ++i) {
         fixed.pop_back();
         fixed_reference.pop_back();
     }
@@ -62,7 +62,7 @@ int main() {
         left_reference.push_front(string(1, value));
     }
     CHECK(left_only.back() == "a");
-    for (int i = 0; i < 4; ++i) {
+    for (nidx_t i = 0; i < 4; ++i) {
         left_only.pop_back();
         left_reference.pop_back();
     }
@@ -71,12 +71,12 @@ int main() {
 
     aggregate_deque alternating;
     deque<string> alternating_reference;
-    for (int i = 0; i < 1000; ++i) {
+    for (nidx_t i = 0; i < 1000; ++i) {
         string value(1, char('a' + i % 6));
         alternating.push_back(value);
         alternating_reference.push_back(value);
     }
-    for (int i = 0; i < 1000; ++i) {
+    for (nidx_t i = 0; i < 1000; ++i) {
         if (i & 1) {
             CHECK(alternating.back() == alternating_reference.back());
             alternating.pop_back();
@@ -90,11 +90,11 @@ int main() {
     check(alternating, alternating_reference);
 
     mt19937 rng(0xD3E9);
-    for (int round = 0; round < 3000; ++round) {
+    for (nidx_t round = 0; round < 3000; ++round) {
         aggregate_deque actual;
         deque<string> expected;
-        for (int step = 0; step < 300; ++step) {
-            int operation = expected.empty() ? int(rng() & 1) : int(rng() % 6);
+        for (nidx_t step = 0; step < 300; ++step) {
+            nidx_t operation = expected.empty() ? nidx_t(rng() & 1) : nidx_t(rng() % 6);
             if (operation == 0) {
                 string value(1, char('a' + rng() % 6));
                 actual.push_front(value);

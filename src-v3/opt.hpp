@@ -24,7 +24,7 @@ O(log(hi-lo)); an empty-root query returns infinity.
 */
 template <class Line, class X, class Y, class Eval = nline_eval, class Better = less<>>
 struct nlichao {
-    struct node { optional<Line> line; int left = -1, right = -1; };
+    struct node { optional<Line> line; nidx_t left = -1, right = -1; };
     narena<node> pool;
     X lo, hi;
     Y infinity;
@@ -35,11 +35,11 @@ struct nlichao {
         : lo(left), hi(right), infinity(move(identity)), evaluate(move(evaluator)),
           better(move(comparison)) {}
 
-    int nodes() const { return pool.len(); }
-    void reserve(int count) { pool.reserve(count); }
+    nidx_t nodes() const { return pool.len(); }
+    void reserve(nidx_t count) { pool.reserve(count); }
 
   private:
-    int add0(int root, X left, X right, Line line) {
+    nidx_t add0(nidx_t root, X left, X right, Line line) {
         if (root < 0) return pool.make(node{move(line)});
         if (!pool[root].line) {
             pool[root].line.emplace(move(line));
@@ -59,7 +59,7 @@ struct nlichao {
         return root;
     }
 
-    int add_segment0(int root, X left, X right, X query_left, X query_right, const Line& line) {
+    nidx_t add_segment0(nidx_t root, X left, X right, X query_left, X query_right, const Line& line) {
         if (query_right <= left || right <= query_left) return root;
         if (query_left <= left && right <= query_right) return add0(root, left, right, line);
         if (root < 0) root = pool.make(node{});
@@ -71,7 +71,7 @@ struct nlichao {
         return root;
     }
 
-    Y query0(int root, X left, X right, X position) const {
+    Y query0(nidx_t root, X left, X right, X position) const {
         if (root < 0) return infinity;
         Y result = pool[root].line ? invoke(evaluate, *pool[root].line, position) : infinity;
         if (left + 1 == right) return result;
@@ -82,9 +82,9 @@ struct nlichao {
     }
 
   public:
-    int add(int root, Line line) { return add0(root, lo, hi, move(line)); }
-    int add_segment(int root, X left, X right, const Line& line) {
+    nidx_t add(nidx_t root, Line line) { return add0(root, lo, hi, move(line)); }
+    nidx_t add_segment(nidx_t root, X left, X right, const Line& line) {
         return add_segment0(root, lo, hi, left, right, line);
     }
-    Y query(int root, X position) const { return query0(root, lo, hi, position); }
+    Y query(nidx_t root, X position) const { return query0(root, lo, hi, position); }
 };

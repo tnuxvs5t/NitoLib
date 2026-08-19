@@ -45,7 +45,7 @@ bool read_integer(istream& in, T& value) {
         character = C::to_char_type(current);
         if (character < '0' || character > '9') break;
         any = true;
-        int digit = character - '0';
+        nidx_t digit = character - '0';
         if (!overflow) {
             if (negative) {
                 if (result < (negative_limit + digit) / 10) overflow = true;
@@ -73,12 +73,12 @@ bool write_integer(ostream& out, T value) {
     using C = ostream::traits_type;
     auto* buffer = out.rdbuf();
     char digits[numeric_limits<T>::digits10 + 3];
-    int length = 0;
+    nidx_t length = 0;
     bool negative = value < T{};
     do {
         T remainder = value % 10;
         if (remainder < T{}) remainder = -remainder;
-        digits[length++] = char('0' + int(remainder));
+        digits[length++] = char('0' + nidx_t(remainder));
         value /= 10;
     } while (value != T{});
     if (negative && C::eq_int_type(buffer->sputc('-'), C::eof())) return false;

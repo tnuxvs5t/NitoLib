@@ -28,7 +28,7 @@ constexpr bool nisprime(uint64_t value) {
                            23ULL, 29ULL, 31ULL, 37ULL})
         if (value % prime == 0) return value == prime;
     uint64_t odd = value - 1;
-    int power = countr_zero(odd);
+    nidx_t power = countr_zero(odd);
     odd >>= power;
     for (uint64_t witness : {2ULL, 325ULL, 9375ULL, 28178ULL, 450775ULL,
                              9780504ULL, 1795265022ULL}) {
@@ -36,7 +36,7 @@ constexpr bool nisprime(uint64_t value) {
         uint64_t current = npowmod64(witness % value, odd, value);
         if (current == 1 || current == value - 1) continue;
         bool passed = false;
-        for (int round = 1; round < power; ++round) {
+        for (nidx_t round = 1; round < power; ++round) {
             current = nmulmod64(current, current, value);
             if (current == value - 1) { passed = true; break; }
         }

@@ -4,14 +4,14 @@
 /* Residual edges are stored in xor-pairs; add returns the forward edge handle. */
 template <class C>
 struct ndinic {
-    struct edge { int to, next; C capacity; };
-    vector<int> head, level, current;
+    struct edge { nidx_t to, next; C capacity; };
+    vector<nidx_t> head, level, current;
     vector<edge> edges;
 
-    explicit ndinic(int n = 0) : head(n, -1), level(n), current(n) {}
-    int len() const { return int(head.size()); }
-    int add(int from, int to, C capacity) {
-        int handle = int(edges.size());
+    explicit ndinic(nidx_t n = 0) : head(n, -1), level(n), current(n) {}
+    nidx_t len() const { return nidx_t(head.size()); }
+    nidx_t add(nidx_t from, nidx_t to, C capacity) {
+        nidx_t handle = nidx_t(edges.size());
         edges.push_back({to, head[from], capacity});
         head[from] = handle;
         edges.push_back({from, head[to], C{}});
@@ -19,14 +19,14 @@ struct ndinic {
         return handle;
     }
 
-    bool layer(int source, int sink) {
+    bool layer(nidx_t source, nidx_t sink) {
         fill(level.begin(), level.end(), -1);
-        vector<int> queue{source};
+        vector<nidx_t> queue{source};
         level[source] = 0;
-        for (int at = 0; at < int(queue.size()); ++at) {
-            int from = queue[at];
-            for (int handle = head[from]; handle >= 0; handle = edges[handle].next) {
-                int to = edges[handle].to;
+        for (nidx_t at = 0; at < nidx_t(queue.size()); ++at) {
+            nidx_t from = queue[at];
+            for (nidx_t handle = head[from]; handle >= 0; handle = edges[handle].next) {
+                nidx_t to = edges[handle].to;
                 if (edges[handle].capacity > C{} && level[to] < 0)
                     level[to] = level[from] + 1, queue.push_back(to);
             }
@@ -34,9 +34,9 @@ struct ndinic {
         return level[sink] >= 0;
     }
 
-    C augment(int from, int sink, C pushed) {
+    C augment(nidx_t from, nidx_t sink, C pushed) {
         if (from == sink) return pushed;
-        for (int& handle = current[from]; handle >= 0; handle = edges[handle].next) {
+        for (nidx_t& handle = current[from]; handle >= 0; handle = edges[handle].next) {
             edge& item = edges[handle];
             if (!(item.capacity > C{}) || level[item.to] != level[from] + 1) continue;
             C sent = augment(item.to, sink, min(pushed, item.capacity));
@@ -49,7 +49,7 @@ struct ndinic {
         return C{};
     }
 
-    C flow(int source, int sink, C limit = numeric_limits<C>::max()) {
+    C flow(nidx_t source, nidx_t sink, C limit = numeric_limits<C>::max()) {
         C result{};
         while (result < limit && layer(source, sink)) {
             current = head;
@@ -62,15 +62,15 @@ struct ndinic {
         return result;
     }
 
-    vector<unsigned char> cut(int source) const {
+    vector<unsigned char> cut(nidx_t source) const {
         vector<unsigned char> reachable(len());
-        vector<int> stack{source};
+        vector<nidx_t> stack{source};
         reachable[source] = true;
         while (!stack.empty()) {
-            int from = stack.back();
+            nidx_t from = stack.back();
             stack.pop_back();
-            for (int handle = head[from]; handle >= 0; handle = edges[handle].next) {
-                int to = edges[handle].to;
+            for (nidx_t handle = head[from]; handle >= 0; handle = edges[handle].next) {
+                nidx_t to = edges[handle].to;
                 if (edges[handle].capacity > C{} && !reachable[to])
                     reachable[to] = true, stack.push_back(to);
             }
@@ -80,29 +80,29 @@ struct ndinic {
 };
 
 struct nmatching {
-    vector<int> left, right;
-    int size;
+    vector<nidx_t> left, right;
+    nidx_t size;
 };
 
 /* next(left_vertex) enumerates dense right positions and must be repeatable. */
 template <class Next>
-nmatching nhopcroft_karp(int left_size, int right_size, Next next) {
-    vector<int> left(left_size, -1), right(right_size, -1), distance(left_size), queue;
+nmatching nhopcroft_karp(nidx_t left_size, nidx_t right_size, Next next) {
+    vector<nidx_t> left(left_size, -1), right(right_size, -1), distance(left_size), queue;
     auto bfs = [&] {
         queue.clear();
         fill(distance.begin(), distance.end(), -1);
-        for (int vertex = 0; vertex < left_size; ++vertex)
+        for (nidx_t vertex = 0; vertex < left_size; ++vertex)
             if (left[vertex] < 0) distance[vertex] = 0, queue.push_back(vertex);
-        for (int at = 0; at < int(queue.size()); ++at) {
-            int from = queue[at];
-            for (int to : invoke(next, from))
+        for (nidx_t at = 0; at < nidx_t(queue.size()); ++at) {
+            nidx_t from = queue[at];
+            for (nidx_t to : invoke(next, from))
                 if (right[to] >= 0 && distance[right[to]] < 0)
                     distance[right[to]] = distance[from] + 1, queue.push_back(right[to]);
         }
     };
-    auto dfs = [&](auto&& self, int from) -> bool {
-        for (int to : invoke(next, from)) {
-            int other = right[to];
+    auto dfs = [&](auto&& self, nidx_t from) -> bool {
+        for (nidx_t to : invoke(next, from)) {
+            nidx_t other = right[to];
             if (other < 0 || (distance[other] == distance[from] + 1 && self(self, other))) {
                 left[from] = to;
                 right[to] = from;
@@ -112,11 +112,11 @@ nmatching nhopcroft_karp(int left_size, int right_size, Next next) {
         distance[from] = -1;
         return false;
     };
-    int size = 0;
+    nidx_t size = 0;
     while (true) {
         bfs();
-        int added = 0;
-        for (int vertex = 0; vertex < left_size; ++vertex)
+        nidx_t added = 0;
+        for (nidx_t vertex = 0; vertex < left_size; ++vertex)
             if (left[vertex] < 0) added += dfs(dfs, vertex);
         if (!added) break;
         size += added;
@@ -127,23 +127,23 @@ nmatching nhopcroft_karp(int left_size, int right_size, Next next) {
 template <class W>
 struct nmst_result {
     W weight;
-    vector<int> edges;
+    vector<nidx_t> edges;
 };
 
 /* Edge projections receive edges[position]; the result is a minimum spanning forest. */
 template <class V, class From, class To, class Weight>
-auto nkruskal(int vertices, V edges, From from, To to, Weight weight) {
+auto nkruskal(nidx_t vertices, V edges, From from, To to, Weight weight) {
     using W = remove_cvref_t<decltype(invoke(weight, edges[0]))>;
-    vector<int> order(edges.len());
+    vector<nidx_t> order(edges.len());
     iota(order.begin(), order.end(), 0);
-    sort(order.begin(), order.end(), [&](int a, int b) {
+    sort(order.begin(), order.end(), [&](nidx_t a, nidx_t b) {
         return invoke(weight, edges[a]) < invoke(weight, edges[b]);
     });
     ndsu components(vertices);
     nmst_result<W> result{W{}, {}};
-    for (int position : order) {
+    for (nidx_t position : order) {
         auto&& edge = edges[position];
-        int a = invoke(from, edge), b = invoke(to, edge);
+        nidx_t a = invoke(from, edge), b = invoke(to, edge);
         if (components.same(a, b)) continue;
         components.merge(a, b);
         result.weight += invoke(weight, edge);

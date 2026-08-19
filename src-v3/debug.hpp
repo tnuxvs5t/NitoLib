@@ -124,7 +124,7 @@ struct printer {
     template <class A>
     void repr(const nview<A>& view) {
         out << "nview[";
-        for (int i = 0; i < view.len(); ++i) {
+        for (nidx_t i = 0; i < view.len(); ++i) {
             if (i) out << ", ";
             decltype(auto) value = view[i];
             repr(value);
@@ -135,7 +135,7 @@ struct printer {
     template <class D, class F>
     void repr(const nfunc<D, F>& function) {
         out << "nfunc[";
-        for (int i = 0; i < function.len(); ++i) {
+        for (nidx_t i = 0; i < function.len(); ++i) {
             if (i) out << ", ";
             out.put('(');
             decltype(auto) key = function.key(i);

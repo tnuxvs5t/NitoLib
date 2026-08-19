@@ -11,14 +11,14 @@ template <class T>
 struct narena {
     vector<T> data;
 
-    int len() const { return int(data.size()); }
-    void reserve(int n) { data.reserve(n); }
-    T& operator[](int handle) { return data[handle]; }
-    const T& operator[](int handle) const { return data[handle]; }
+    nidx_t len() const { return nidx_t(data.size()); }
+    void reserve(nidx_t n) { data.reserve(n); }
+    T& operator[](nidx_t handle) { return data[handle]; }
+    const T& operator[](nidx_t handle) const { return data[handle]; }
 
     template <class... A>
-    int make(A&&... args) {
+    nidx_t make(A&&... args) {
         data.emplace_back(forward<A>(args)...);
-        return int(data.size()) - 1;
+        return nidx_t(data.size()) - 1;
     }
 };

@@ -17,7 +17,8 @@ V2/X 及更早实现已从活动工作树移除，只保存在
 ## Design laws
 
 1. The semantic-source budget is 131072 bytes, excluding comments and layout whitespace.
-2. Use signed `int` positions and half-open `[left,right)` intervals.
+2. Use signed `nidx_t` positions and half-open `[left,right)` intervals. `nidx_t` is
+   `int` by default and `long long` when every translation unit defines `NITORI_INDEX_64`.
 3. Prefer expression-based templates. Do not build a concept/trait/npre registry.
 4. Put mathematical, lifetime, invalidation, ownership and complexity contracts beside code.
 5. Algorithms depend on the smallest callable/data port, never a mandatory backend.

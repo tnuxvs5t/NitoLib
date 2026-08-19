@@ -71,6 +71,10 @@ for path in SOURCE + TESTS + sorted((ROOT / "bench-v3").glob("*.cpp")):
                       "same_domain"):
             require(not re.search(rf"\b{token}\b", code),
                     f"forbidden abstraction pressure {token}: {path}")
+        signed_int = re.sub(r"using\s+nidx_t\s*=\s*int\s*;", "", code)
+        signed_int = re.sub(r"operator(?:\+\+|--)\s*\(\s*int\s*\)", "", signed_int)
+        require(not re.search(r"\bint\b", signed_int),
+                f"structural int bypasses nidx_t: {path}")
 
 for path in TESTS:
     require(not re.search(r"\bassert\s*\(", code_only(path.read_text())),
@@ -84,9 +88,12 @@ for document in (ROOT / "README.md", ROOT / "v3-Tutorial-Comprehensive.md"):
 compiler = os.environ.get("CXX", "g++")
 flags = [compiler, "-std=c++23", "-Wall", "-Wextra", "-Wpedantic", "-Wshadow",
          "-Werror", "-fsyntax-only", "-x", "c++", "-"]
-for header in SOURCE:
-    subprocess.run(flags, cwd=ROOT, input=f'#include "{header.relative_to(ROOT)}"\n',
-                   text=True, check=True)
+for index_flags in ([], ["-DNITORI_INDEX_64"]):
+    for header in SOURCE:
+        subprocess.run([*flags[:1], *index_flags, *flags[1:]], cwd=ROOT,
+                       input=f'#include "{header.relative_to(ROOT)}"\n',
+                       text=True, check=True)
 
 subprocess.run([sys.executable, str(ROOT / "test-v3/measure.py")], check=True)
-print(f"v3 structural audit passed: {len(SOURCE)} headers, {len(TESTS)} tests")
+print(f"v3 structural audit passed: {len(SOURCE)} headers x 2 index modes,"
+      f" {len(TESTS)} tests")

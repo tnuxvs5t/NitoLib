@@ -9,23 +9,23 @@ void check(bool condition, const char* message) {
 
 vector<mint> apply(const nmatrix<mint>& matrix, const vector<mint>& input) {
     vector<mint> result(matrix.rows);
-    for (int row = 0; row < matrix.rows; ++row)
-        for (int column = 0; column < matrix.columns; ++column)
+    for (nidx_t row = 0; row < matrix.rows; ++row)
+        for (nidx_t column = 0; column < matrix.columns; ++column)
             result[row] += matrix(row, column) * input[column];
     return result;
 }
 
 mint brute_determinant(const nmatrix<mint>& matrix) {
-    int n = matrix.rows;
-    vector<int> permutation(n);
+    nidx_t n = matrix.rows;
+    vector<nidx_t> permutation(n);
     iota(permutation.begin(), permutation.end(), 0);
     mint answer = 0;
     do {
-        int inversions = 0;
+        nidx_t inversions = 0;
         mint product = 1;
-        for (int i = 0; i < n; ++i) {
+        for (nidx_t i = 0; i < n; ++i) {
             product *= matrix(i, permutation[i]);
-            for (int j = 0; j < i; ++j) inversions += permutation[j] > permutation[i];
+            for (nidx_t j = 0; j < i; ++j) inversions += permutation[j] > permutation[i];
         }
         answer += inversions & 1 ? -product : product;
     } while (next_permutation(permutation.begin(), permutation.end()));
@@ -34,12 +34,12 @@ mint brute_determinant(const nmatrix<mint>& matrix) {
 
 int main() {
     mt19937 random(0x1a2b3c4dU);
-    for (int trial = 0; trial < 1200; ++trial) {
-        int rows = int(random() % 7), columns = int(random() % 7);
+    for (nidx_t trial = 0; trial < 1200; ++trial) {
+        nidx_t rows = nidx_t(random() % 7), columns = nidx_t(random() % 7);
         nmatrix<mint> matrix(rows, columns);
-        for (mint& value : matrix.data) value = int(random() % 11) - 5;
+        for (mint& value : matrix.data) value = nidx_t(random() % 11) - 5;
         vector<mint> chosen(columns);
-        for (mint& value : chosen) value = int(random() % 11) - 5;
+        for (mint& value : chosen) value = nidx_t(random() % 11) - 5;
         auto right = apply(matrix, chosen);
         auto solution = nlinear_solve(matrix, nall(right));
         check(solution.consistent, "constructed system consistency");
@@ -48,19 +48,19 @@ int main() {
             check(apply(matrix, direction) == vector<mint>(rows), "nullspace basis");
 
         auto reduced = nrref(matrix);
-        check(int(solution.basis.size()) == columns - reduced.rank(), "nullity");
-        for (int row = 0; row < reduced.rank(); ++row) {
-            int pivot = reduced.pivot[row];
+        check(nidx_t(solution.basis.size()) == columns - reduced.rank(), "nullity");
+        for (nidx_t row = 0; row < reduced.rank(); ++row) {
+            nidx_t pivot = reduced.pivot[row];
             check(reduced.matrix(row, pivot) == mint(1), "unit pivot");
-            for (int other = 0; other < rows; ++other)
+            for (nidx_t other = 0; other < rows; ++other)
                 if (other != row) check(reduced.matrix(other, pivot) == mint(0), "clean pivot");
         }
     }
 
-    for (int trial = 0; trial < 500; ++trial) {
-        int n = int(random() % 7);
+    for (nidx_t trial = 0; trial < 500; ++trial) {
+        nidx_t n = nidx_t(random() % 7);
         nmatrix<mint> matrix(n, n);
-        for (mint& value : matrix.data) value = int(random() % 9) - 4;
+        for (mint& value : matrix.data) value = nidx_t(random() % 9) - 4;
         check(ndeterminant(matrix) == brute_determinant(matrix), "determinant");
         auto inverse = ninverse(matrix);
         check(bool(inverse) == (ndeterminant(matrix) != mint(0)), "inverse presence");
@@ -74,11 +74,11 @@ int main() {
     fibonacci(0, 0) = fibonacci(0, 1) = fibonacci(1, 0) = 1;
     auto power = nmatpow(fibonacci, 50);
     vector<mint> state{1, 0};
-    for (int i = 0; i < 50; ++i) state = apply(fibonacci, state);
+    for (nidx_t i = 0; i < 50; ++i) state = apply(fibonacci, state);
     check(apply(power, vector<mint>{1, 0}) == state, "matrix power");
 
     __int128_t huge = 1;
-    for (int i = 0; i < 36; ++i) huge *= 10;
+    for (nidx_t i = 0; i < 36; ++i) huge *= 10;
     auto translation = nmatrix<mint>::identity(2);
     translation(0, 1) = 1;
     auto huge_power = nmatpow(translation, huge);

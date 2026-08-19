@@ -10,7 +10,7 @@ long long timed(F&& work) {
 }
 
 int main() {
-    constexpr int n = 500000;
+    constexpr nidx_t n = 500000;
     vector<long long> values(n);
     uint64_t state = 1;
     string input;
@@ -29,13 +29,13 @@ int main() {
     auto standard_read_ms = timed([&] {
         istringstream in(input);
         long long value;
-        for (int i = 0; i < n; ++i) in >> value, standard_checksum += uint64_t(value);
+        for (nidx_t i = 0; i < n; ++i) in >> value, standard_checksum += uint64_t(value);
         if (!in) abort();
     });
     auto nitori_read_ms = timed([&] {
         istringstream in(input);
         long long value;
-        for (int i = 0; i < n; ++i) {
+        for (nidx_t i = 0; i < n; ++i) {
             if (!nread(in, value)) abort();
             nitori_checksum += uint64_t(value);
         }

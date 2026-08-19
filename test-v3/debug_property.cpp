@@ -3,7 +3,7 @@
 #define CHECK(x) do { if (!(x)) { cerr << __FILE__ << ':' << __LINE__ << ": " #x "\n"; abort(); } } while (false)
 
 struct debug_leaf {
-    int value;
+    nidx_t value;
 };
 
 ostream& operator<<(ostream& out, const debug_leaf& leaf) {
@@ -13,7 +13,7 @@ ostream& operator<<(ostream& out, const debug_leaf& leaf) {
 namespace custom_debug {
 
 struct point {
-    int x, y;
+    nidx_t x, y;
 };
 
 void ndebug_repr(ndebug_writer& out, const point& value) {
@@ -25,7 +25,7 @@ void ndebug_repr(ndebug_writer& out, const point& value) {
 
 struct packet {
     point where;
-    vector<int> payload;
+    vector<nidx_t> payload;
 };
 
 void ndebug_repr(ndebug_writer& out, const packet& value) {
@@ -36,7 +36,7 @@ void ndebug_repr(ndebug_writer& out, const packet& value) {
 }
 
 struct both_interfaces {
-    int value;
+    nidx_t value;
 };
 
 ostream& operator<<(ostream& out, const both_interfaces&) {
@@ -50,10 +50,10 @@ void ndebug_repr(ndebug_writer& out, const both_interfaces& value) {
 }
 
 struct ticking {
-    int value;
-    int* calls;
+    nidx_t value;
+    nidx_t* calls;
 
-    int read() const {
+    nidx_t read() const {
         ++*calls;
         return value;
     }
@@ -70,7 +70,7 @@ void ndebug_repr(ndebug_writer& out, const ticking& value) {
 enum class debug_code : unsigned { ready = 7 };
 
 struct sync_buffer : stringbuf {
-    int synchronizations = 0;
+    nidx_t synchronizations = 0;
     int sync() override {
         ++synchronizations;
         return stringbuf::sync();
@@ -87,7 +87,7 @@ int main() {
           "scalar = true false '\\n' -2 250 "
           "-170141183460469231731687303715884105728 7 leaf(9) nullptr\n");
 
-    vector<pair<int, tuple<string, vector<bool>>>> nested{
+    vector<pair<nidx_t, tuple<string, vector<bool>>>> nested{
         {1, {"a\n\"b", {true, false}}},
         {2, {"河童", {false}}}
     };
@@ -97,8 +97,8 @@ int main() {
           "nested = [(1, (\"a\\n\\\"b\", [true, false])), "
           "(2, (\"河童\", [false]))] () (5,)\n");
 
-    int view_calls = 0;
-    auto view = ntabulate(4, [&](int i) {
+    nidx_t view_calls = 0;
+    auto view = ntabulate(4, [&](nidx_t i) {
         ++view_calls;
         return pair{i, i * i};
     });
@@ -107,13 +107,13 @@ int main() {
     CHECK(lazy.str() == "view = nview[(0, 0), (1, 1), (2, 4), (3, 9)]\n");
     CHECK(view_calls == 4);
 
-    int key_calls = 0, eval_calls = 0;
+    nidx_t key_calls = 0, eval_calls = 0;
     auto function = nfunc{
-        ntabulate(3, [&](int i) {
+        ntabulate(3, [&](nidx_t i) {
             ++key_calls;
             return i == 2 ? 0 : i;
         }),
-        [&](int key) {
+        [&](nidx_t key) {
             ++eval_calls;
             return vector{key, key + 10};
         }
@@ -124,12 +124,12 @@ int main() {
           "f = nfunc[(0, [0, 10]), (1, [1, 11]), (0, [0, 10])]\n");
     CHECK(key_calls == 3 && eval_calls == 3);
 
-    auto move_view = ntabulate(2, [owner = make_unique<int>(6)](int i) {
+    auto move_view = ntabulate(2, [owner = make_unique<nidx_t>(6)](nidx_t i) {
         return *owner + i;
     });
     auto move_function = nfunc{
         nrange(2),
-        [owner = make_unique<int>(8)](int key) { return *owner + key; }
+        [owner = make_unique<nidx_t>(8)](nidx_t key) { return *owner + key; }
     };
     stringstream move_only;
     ndebug(move_only, move_view, move_function);
@@ -143,7 +143,7 @@ int main() {
 
     auto composed = tuple{
         nrange(2),
-        nfunc{nrange(2), [](int key) { return pair{key, char('a' + key)}; }}
+        nfunc{nrange(2), [](nidx_t key) { return pair{key, char('a' + key)}; }}
     };
     stringstream recursive;
     ndebug(recursive, composed);
@@ -164,25 +164,25 @@ int main() {
           "objects = point{x=2, y=3} packet{where=point{x=4, y=5}, payload=[8, 13]} "
           "both{value=21}\n");
 
-    int ticking_calls = 0;
+    nidx_t ticking_calls = 0;
     custom_debug::ticking ticking{34, &ticking_calls};
     stringstream custom_once;
     ndebug(custom_once, ticking);
     CHECK(custom_once.str() == "ticking{read=34}\n" && ticking_calls == 1);
 
     mt19937 rng(0xD38A6);
-    for (int round = 0; round < 1000; ++round) {
-        int n = int(rng() % 21);
-        vector<int> keys(n);
-        for (int& key : keys) key = int(rng() % 11) - 5;
+    for (nidx_t round = 0; round < 1000; ++round) {
+        nidx_t n = nidx_t(rng() % 21);
+        vector<nidx_t> keys(n);
+        for (nidx_t& key : keys) key = nidx_t(rng() % 11) - 5;
 
-        int random_key_calls = 0, random_eval_calls = 0;
+        nidx_t random_key_calls = 0, random_eval_calls = 0;
         auto random_function = nfunc{
-            ntabulate(n, [&](int i) {
+            ntabulate(n, [&](nidx_t i) {
                 ++random_key_calls;
                 return keys[i];
             }),
-            [&](int key) {
+            [&](nidx_t key) {
                 ++random_eval_calls;
                 return pair{key * key, -key};
             }
@@ -191,9 +191,9 @@ int main() {
         stringstream got, expected;
         ndebug(got, random_function);
         expected << "nfunc[";
-        for (int i = 0; i < n; ++i) {
+        for (nidx_t i = 0; i < n; ++i) {
             if (i) expected << ", ";
-            int key = keys[i];
+            nidx_t key = keys[i];
             expected << '(' << key << ", (" << key * key << ", " << -key << "))";
         }
         expected << "]\n";

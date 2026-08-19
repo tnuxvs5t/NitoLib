@@ -41,7 +41,7 @@ int main() {
     CHECK(ndiv_ceil(LLONG_MAX, -2LL) == LLONG_MIN / 2 + 1);
 
     mt19937_64 rng(0xD1A1DE);
-    for (int round = 0; round < 20000; ++round) {
+    for (nidx_t round = 0; round < 20000; ++round) {
         i128 a = i128((u128(rng()) << 64 | rng()) >> 1);
         i128 b = i128(1 + rng() % 100000);
         if (rng() & 1) a = -a;

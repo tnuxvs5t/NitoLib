@@ -27,45 +27,45 @@ long long peak_rss_kib() {
 }
 
 int main() {
-    constexpr int n = 200000;
+    constexpr nidx_t n = 200000;
     uint64_t checksum = 0;
-    vector<int> values(n);
+    vector<nidx_t> values(n);
     iota(values.begin(), values.end(), 1);
 
-    vector<int> shuffled(n);
-    for (int i = 0; i < n; ++i) shuffled[i] = int(1LL * i * 48271 % n);
-    vector<int> direct_sorted = shuffled, projected_sorted = shuffled;
+    vector<nidx_t> shuffled(n);
+    for (nidx_t i = 0; i < n; ++i) shuffled[i] = nidx_t(1LL * i * 48271 % n);
+    vector<nidx_t> direct_sorted = shuffled, projected_sorted = shuffled;
     auto direct_sort = timed([&] { ranges::sort(direct_sorted); });
     auto projected_sort = timed([&] { nsort(nall(projected_sorted)); });
     if (direct_sorted != projected_sorted) return 3;
     auto structural_order = timed([&] {
         auto ordered = norder(nall(shuffled));
-        for (int i = 0; i < n; i += 97) checksum += ordered[i];
+        for (nidx_t i = 0; i < n; i += 97) checksum += ordered[i];
     });
-    vector<int> run_values(n);
-    for (int i = 0; i < n; ++i) run_values[i] = i / 4 % 137;
+    vector<nidx_t> run_values(n);
+    for (nidx_t i = 0; i < n; ++i) run_values[i] = i / 4 % 137;
     auto run_projection = timed([&] {
-        for (int repeat = 0; repeat < 20; ++repeat) {
+        for (nidx_t repeat = 0; repeat < 20; ++repeat) {
             auto runs = nruns(nall(run_values));
             checksum += runs.len();
-            for (int i = 0; i < runs.len(); i += 31)
+            for (nidx_t i = 0; i < runs.len(); i += 31)
                 checksum += runs.key(i).second - runs.key(i).first + runs[i][0];
         }
     });
 
-    nfhq<int> sequence;
+    nfhq<nidx_t> sequence;
     sequence.reserve(n);
-    int root = -1;
+    nidx_t root = -1;
     auto fhq_build = timed([&] { root = sequence.build(nall(values)); });
     auto fhq_transactions = timed([&] {
         uint64_t state = 1;
-        for (int i = 0; i < n; ++i) {
+        for (nidx_t i = 0; i < n; ++i) {
             state = state * 6364136223846793005ULL + 1;
-            int cut = int(state % (n + 1));
+            nidx_t cut = nidx_t(state % (n + 1));
             auto [left, right] = sequence.split(root, cut);
             root = sequence.merge(left, right);
         }
-        for (int i = 0; i < 2000; ++i)
+        for (nidx_t i = 0; i < 2000; ++i)
             checksum += sequence[sequence.kth(root, i * 97 % n)].value;
     });
 
@@ -76,71 +76,71 @@ int main() {
     seg_build = timed([&] { fixed = make_unique<nseg<long long>>(nall(numbers)); });
     seg_work = timed([&] {
         uint64_t state = 7;
-        for (int i = 0; i < 500000; ++i) {
+        for (nidx_t i = 0; i < 500000; ++i) {
             state = state * 2862933555777941757ULL + 3037000493ULL;
-            int left = int(state % n), width = int((state >> 32) % 1000);
-            int right = min(n, left + width);
+            nidx_t left = nidx_t(state % n), width = nidx_t((state >> 32) % 1000);
+            nidx_t right = min(n, left + width);
             checksum += uint64_t(fixed->fold(left, right));
             if (!(i & 31)) fixed->set(left, numbers[left]);
         }
     });
 
-    unique_ptr<nwavelet<int>> wavelet;
-    auto wavelet_build = timed([&] { wavelet = make_unique<nwavelet<int>>(nall(values)); });
+    unique_ptr<nwavelet<nidx_t>> wavelet;
+    auto wavelet_build = timed([&] { wavelet = make_unique<nwavelet<nidx_t>>(nall(values)); });
     auto wavelet_work = timed([&] {
         uint64_t state = 11;
-        for (int i = 0; i < n; ++i) {
+        for (nidx_t i = 0; i < n; ++i) {
             state = state * 2862933555777941757ULL + 3037000493ULL;
-            int left = int(state % n), right = min(n, left + 1 + int((state >> 32) % 10000));
-            checksum += wavelet->kth(left, right, int(state % (right - left)));
-            checksum += wavelet->less(left, right, int(state % (n + 1)));
+            nidx_t left = nidx_t(state % n), right = min(n, left + 1 + nidx_t((state >> 32) % 10000));
+            checksum += wavelet->kth(left, right, nidx_t(state % (right - left)));
+            checksum += wavelet->less(left, right, nidx_t(state % (n + 1)));
         }
     });
 
     unique_ptr<nlct<long long>> paths;
     auto lct_build = timed([&] {
         paths = make_unique<nlct<long long>>(nall(numbers));
-        for (int vertex = 1; vertex < n; ++vertex) paths->link(vertex - 1, vertex);
+        for (nidx_t vertex = 1; vertex < n; ++vertex) paths->link(vertex - 1, vertex);
     });
     auto lct_work = timed([&] {
         uint64_t state = 13;
-        for (int i = 0; i < n; ++i) {
+        for (nidx_t i = 0; i < n; ++i) {
             state = state * 6364136223846793005ULL + 1442695040888963407ULL;
-            int a = int(state % n), b = int((state >> 32) % n);
+            nidx_t a = nidx_t(state % n), b = nidx_t((state >> 32) % n);
             checksum += paths->fold(a, b);
             checksum += paths->path_size(a, b);
         }
     });
 
-    vector<vector<int>> adjacency(n);
-    struct bench_edge { int from, to; };
+    vector<vector<nidx_t>> adjacency(n);
+    struct bench_edge { nidx_t from, to; };
     vector<bench_edge> records;
     records.reserve(4 * n);
-    for (int vertex = 0; vertex < n; ++vertex) {
+    for (nidx_t vertex = 0; vertex < n; ++vertex) {
         adjacency[vertex].push_back((vertex + 1) % n);
         adjacency[vertex].push_back((vertex * 37LL + 11) % n);
         adjacency[vertex].push_back((vertex * 97LL + 23) % n);
         adjacency[vertex].push_back((vertex * 193LL + 47) % n);
-        for (int to : adjacency[vertex]) records.push_back({vertex, to});
+        for (nidx_t to : adjacency[vertex]) records.push_back({vertex, to});
     }
-    vector<int> direct_distance;
+    vector<nidx_t> direct_distance;
     auto direct_bfs = timed([&] {
         direct_distance.assign(n, -1);
-        vector<int> queue{0};
+        vector<nidx_t> queue{0};
         direct_distance[0] = 0;
-        for (int at = 0; at < int(queue.size()); ++at)
-            for (int to : adjacency[queue[at]])
+        for (nidx_t at = 0; at < nidx_t(queue.size()); ++at)
+            for (nidx_t to : adjacency[queue[at]])
                 if (direct_distance[to] < 0)
                     direct_distance[to] = direct_distance[queue[at]] + 1, queue.push_back(to);
     });
-    auto graph = ngraph{nrange(n), [&](int vertex) -> auto& { return adjacency[vertex]; }};
-    vector<int> projected_distance;
+    auto graph = ngraph{nrange(n), [&](nidx_t vertex) -> auto& { return adjacency[vertex]; }};
+    vector<nidx_t> projected_distance;
     auto projected_bfs = timed([&] { projected_distance = nbfs(graph, 0); });
     auto csr_start = clock_type::now();
     auto csr = nmake_csr(n, nall(records), [](bench_edge edge) { return edge.from; },
                          [](bench_edge edge) { return edge.to; });
     auto csr_build = chrono::duration_cast<chrono::milliseconds>(clock_type::now() - csr_start).count();
-    vector<int> csr_distance;
+    vector<nidx_t> csr_distance;
     auto csr_bfs = timed([&] { csr_distance = nbfs(csr, 0); });
     checksum += accumulate(projected_distance.begin(), projected_distance.end(), uint64_t{});
     if (direct_distance != projected_distance || direct_distance != csr_distance) return 2;
@@ -149,28 +149,28 @@ int main() {
     auto rooted = timed([&] {
         auto forest = nroot(graph, nrange(n));
         checksum += forest.order().len();
-        root_time = static_cast<long long>(forest.child_position.capacity() * sizeof(int) +
-                                           forest.child_offset.capacity() * sizeof(int));
+        root_time = static_cast<long long>(forest.child_position.capacity() * sizeof(nidx_t) +
+                                           forest.child_offset.capacity() * sizeof(nidx_t));
     });
 
     nsparse_seg<long long> sparse(0, 1LL << 40);
     sparse.reserve(1700000);
-    int version = -1;
+    nidx_t version = -1;
     auto sparse_time = timed([&] {
         uint64_t state = 19;
-        for (int i = 0; i < 40000; ++i) {
+        for (nidx_t i = 0; i < 40000; ++i) {
             state = state * 6364136223846793005ULL + 1442695040888963407ULL;
             version = sparse.set_copy(version,
                                       static_cast<long long>(state & ((1ULL << 40) - 1)), i);
         }
-        for (int i = 0; i < 40000; ++i)
+        for (nidx_t i = 0; i < 40000; ++i)
             checksum += sparse.get(version, (1LL * i * 1000003) & ((1LL << 40) - 1));
     });
 
     cout << "n=" << n << " edges=" << 4LL * n << '\n';
     cout << "direct_sort_ms=" << direct_sort << " projected_sort_ms=" << projected_sort
          << " structural_order_ms=" << structural_order << " runs_20x_ms=" << run_projection << '\n';
-    cout << "fhq_node_bytes=" << sizeof(nfhq<int>::node)
+    cout << "fhq_node_bytes=" << sizeof(nfhq<nidx_t>::node)
          << " build_ms=" << fhq_build << " split_merge_ms=" << fhq_transactions << '\n';
     cout << "fixed_seg_build_ms=" << seg_build << " workload_ms=" << seg_work << '\n';
     cout << "wavelet_build_ms=" << wavelet_build << " workload_ms=" << wavelet_work << '\n';

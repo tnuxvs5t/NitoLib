@@ -29,23 +29,23 @@ struct key_equal {
 
 int main() {
     mt19937_64 rng(0xA11C0A5ULL);
-    for (int round = 0; round < 5000; ++round) {
-        int n = int(rng() % 97);
+    for (nidx_t round = 0; round < 5000; ++round) {
+        nidx_t n = nidx_t(rng() % 97);
         vector<hash_key> keys(n);
         vector<long long> values(n);
         uint64_t group = rng();
-        for (int i = 0; i < n; ++i) {
+        for (nidx_t i = 0; i < n; ++i) {
             keys[i] = {group, uint64_t(i)};
         }
         shuffle(keys.begin(), keys.end(), rng);
-        for (int i = 0; i < n; ++i)
+        for (nidx_t i = 0; i < n; ++i)
             values[i] = static_cast<long long>(keys[i].item * 17 + 3);
 
         long long hash_calls = 0, equal_calls = 0;
         auto function = nfunc_bind(nall(keys), nall(values),
                                    key_hash{&hash_calls}, key_equal{&equal_calls});
         CHECK(function.len() == n);
-        for (int i = 0; i < n; ++i) {
+        for (nidx_t i = 0; i < n; ++i) {
             hash_key copied = keys[i];
             CHECK(function.key(i).group == keys[i].group);
             CHECK(function[i] == values[i]);
@@ -53,15 +53,15 @@ int main() {
         }
 
         if (n) {
-            int p = int(rng() % n);
+            nidx_t p = nidx_t(rng() % n);
             function(keys[p]) += 11;
             CHECK(values[p] == static_cast<long long>(keys[p].item * 17 + 14));
         }
     }
 
     vector<hash_key> keys(1 << 14);
-    vector<int> values(keys.size());
-    for (int i = 0; i < int(keys.size()); ++i) {
+    vector<nidx_t> values(keys.size());
+    for (nidx_t i = 0; i < nidx_t(keys.size()); ++i) {
         keys[i] = {0x123456789abcdef0ULL, uint64_t(i)};
         values[i] = i * 3;
     }
@@ -75,7 +75,7 @@ int main() {
 
     vector<hash_key> owned_keys{{1, 4}, {1, 9}};
     auto owned_values = nview{
-        2, [data = make_unique<array<int, 2>>(array<int, 2>{40, 90})](int i) -> int& {
+        2, [data = make_unique<array<nidx_t, 2>>(array<nidx_t, 2>{40, 90})](nidx_t i) -> nidx_t& {
             return (*data)[i];
         }};
     auto move_only = nfunc_bind(nall(owned_keys), move(owned_values),

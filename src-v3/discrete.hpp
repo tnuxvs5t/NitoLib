@@ -4,7 +4,7 @@
 /*
 This module treats an index list as a reusable structural plan.  Applying the plan
 to an nview reorders positions; applying it to an nfunc reorders its semantic domain
-and keeps the evaluator.  A vector<int> plan is moved into the returned descriptor,
+and keeps the evaluator.  A vector<nidx_t> plan is moved into the returned descriptor,
 so a locally computed filter/order never leaves a dangling index view.
 
 Sources are descriptors passed by value.  Borrow an ordinary owner with nall(owner).
@@ -23,22 +23,26 @@ constexpr auto nselect(nfunc<D, F> function, I positions) {
 }
 
 template <class S>
-constexpr auto nselect(S source, vector<int> positions) {
-    int n = int(positions.size());
-    return nview{n, [source = move(source), positions = move(positions)](int i) mutable
+constexpr auto nselect(S source, vector<nidx_t> positions) {
+    nidx_t n = nidx_t(positions.size());
+    return nview{n, [source = move(source), positions = move(positions)](nidx_t i) mutable
                         -> decltype(auto) { return source[positions[i]]; }};
 }
 
 template <class D, class F>
-constexpr auto nselect(nfunc<D, F> function, vector<int> positions) {
+constexpr auto nselect(nfunc<D, F> function, vector<nidx_t> positions) {
     auto domain = nselect(move(function.domain), move(positions));
     return nfunc{move(domain), move(function.eval)};
 }
 
 template <class S>
-constexpr auto nslice(S source, int left, int right) {
+constexpr auto nslice(S source, nidx_t left, nidx_t right) {
     return nselect(move(source), nrange(left, right));
 }
+
+template <class S, class A, class B>
+requires (nidx_wider_v<A> || nidx_wider_v<B>)
+constexpr auto nslice(S, A, B) = delete;
 
 /*
 Prefix/suffix scans include the identity, so both results have source.len()+1 values.
@@ -49,11 +53,11 @@ one; prefix uses operation(accumulator,value), suffix operation(value,accumulato
 template <class S, class T = remove_cvref_t<decltype(declval<S&>()[0])>,
           class F = plus<>>
 constexpr vector<T> nprefix(S source, T identity = {}, F operation = {}) {
-    int n = nlen(source);
+    nidx_t n = nlen(source);
     vector<T> result;
     result.reserve(size_t(n) + 1);
     result.push_back(move(identity));
-    for (int i = 0; i < n; ++i) {
+    for (nidx_t i = 0; i < n; ++i) {
         T next = invoke(operation, as_const(result.back()), source[i]);
         result.push_back(move(next));
     }
@@ -63,11 +67,11 @@ constexpr vector<T> nprefix(S source, T identity = {}, F operation = {}) {
 template <class S, class T = remove_cvref_t<decltype(declval<S&>()[0])>,
           class F = plus<>>
 constexpr vector<T> nsuffix(S source, T identity = {}, F operation = {}) {
-    int n = nlen(source);
+    nidx_t n = nlen(source);
     vector<T> result;
     result.reserve(size_t(n) + 1);
     result.push_back(move(identity));
-    for (int i = n; i-- > 0;) {
+    for (nidx_t i = n; i-- > 0;) {
         T next = invoke(operation, source[i], as_const(result.back()));
         result.push_back(move(next));
     }
@@ -76,29 +80,38 @@ constexpr vector<T> nsuffix(S source, T identity = {}, F operation = {}) {
 }
 
 template <class S>
-constexpr auto nstride(S source, int first, int last, int step) {
-    int distance = step > 0 ? max(0, last - first) : max(0, first - last);
-    int width = abs(step);
-    int count = distance / width + (distance % width != 0);
+constexpr auto nstride(S source, nidx_t first, nidx_t last, nidx_t step) {
+    nidx_t distance = step > 0 ? max(nidx_t(0), last - first)
+                               : max(nidx_t(0), first - last);
+    nidx_t width = abs(step);
+    nidx_t count = distance / width + (distance % width != 0);
     return nselect(move(source), ntabulate(
         count,
-        [first, step](int i) { return first + i * step; },
-        [first, step](int position) { return (position - first) / step; }
+        [first, step](nidx_t i) { return first + i * step; },
+        [first, step](nidx_t position) { return (position - first) / step; }
     ));
 }
 
+template <class S, class A, class B, class C>
+requires (nidx_wider_v<A> || nidx_wider_v<B> || nidx_wider_v<C>)
+constexpr auto nstride(S, A, B, C) = delete;
+
 template <class S>
-constexpr auto nstride(S source, int step) {
-    int n = nlen(source);
+constexpr auto nstride(S source, nidx_t step) {
+    nidx_t n = nlen(source);
     return step > 0 ? nstride(move(source), 0, n, step)
                     : nstride(move(source), n - 1, -1, step);
 }
 
+template <class S, class I>
+requires nidx_wider_v<I>
+constexpr auto nstride(S, I) = delete;
+
 template <class S, class P>
 auto nfilter(S source, P predicate) {
-    vector<int> positions;
+    vector<nidx_t> positions;
     positions.reserve(nlen(source));
-    for (int i = 0; i < nlen(source); ++i)
+    for (nidx_t i = 0; i < nlen(source); ++i)
         if (invoke(predicate, source[i])) positions.push_back(i);
     return nselect(move(source), move(positions));
 }
@@ -106,7 +119,7 @@ auto nfilter(S source, P predicate) {
 /* Positional enumeration is lazy; tuple element 1 preserves the source result category. */
 template <class S>
 constexpr auto nindexed(S source) {
-    int n = nlen(source);
+    nidx_t n = nlen(source);
     return nzip(nrange(n), move(source));
 }
 
@@ -117,7 +130,7 @@ auto ncollect(S source) {
     using result = conditional_t<is_void_v<T>, inferred, T>;
     vector<result> values;
     values.reserve(nlen(source));
-    for (int i = 0; i < nlen(source); ++i) values.emplace_back(source[i]);
+    for (nidx_t i = 0; i < nlen(source); ++i) values.emplace_back(source[i]);
     return values;
 }
 
@@ -132,33 +145,33 @@ required.
 */
 namespace ndiscrete_detail {
 template <class D, class F>
-constexpr void assign(D&& destination, int count, F& value_at) {
-    for (int i = 0; i < count; ++i) destination[i] = invoke(value_at, i);
+constexpr void assign(D&& destination, nidx_t count, F& value_at) {
+    for (nidx_t i = 0; i < count; ++i) destination[i] = invoke(value_at, i);
 }
 }
 
 template <class D, class F>
 constexpr void nassign(D&& destination, F value_at) {
-    int n = nlen(destination);
+    nidx_t n = nlen(destination);
     ndiscrete_detail::assign(forward<D>(destination), n, value_at);
 }
 
 template <class D, class T>
 constexpr void nfill(D&& destination, T value) {
-    nassign(forward<D>(destination), [&](int) -> const T& { return value; });
+    nassign(forward<D>(destination), [&](nidx_t) -> const T& { return value; });
 }
 
 template <class S, class D>
 constexpr void ncopy(S&& source, D&& destination) {
-    int n = nlen(source);
-    auto value_at = [&](int i) -> decltype(auto) { return source[i]; };
+    nidx_t n = nlen(source);
+    auto value_at = [&](nidx_t i) -> decltype(auto) { return source[i]; };
     ndiscrete_detail::assign(forward<D>(destination), n, value_at);
 }
 
 template <class S, class D, class F>
 constexpr void ntransform(S&& source, D&& destination, F operation) {
-    int n = nlen(source);
-    auto value_at = [&](int i) -> decltype(auto) {
+    nidx_t n = nlen(source);
+    auto value_at = [&](nidx_t i) -> decltype(auto) {
         return invoke(operation, source[i]);
     };
     ndiscrete_detail::assign(forward<D>(destination), n, value_at);
@@ -166,8 +179,8 @@ constexpr void ntransform(S&& source, D&& destination, F operation) {
 
 template <class A, class B, class D, class F>
 constexpr void ntransform(A&& first, B&& second, D&& destination, F operation) {
-    int n = nlen(first);
-    auto value_at = [&](int i) -> decltype(auto) {
+    nidx_t n = nlen(first);
+    auto value_at = [&](nidx_t i) -> decltype(auto) {
         return invoke(operation, first[i], second[i]);
     };
     ndiscrete_detail::assign(forward<D>(destination), n, value_at);
@@ -176,7 +189,7 @@ constexpr void ntransform(A&& first, B&& second, D&& destination, F operation) {
 /* Left-to-right scalar fold.  operation(accumulator,value) must return assignable T. */
 template <class S, class T, class F = plus<>>
 constexpr T naccumulate(S source, T initial, F operation = {}) {
-    for (int i = 0; i < nlen(source); ++i)
+    for (nidx_t i = 0; i < nlen(source); ++i)
         initial = invoke(operation, move(initial), source[i]);
     return initial;
 }
@@ -184,28 +197,28 @@ constexpr T naccumulate(S source, T initial, F operation = {}) {
 /* Like std::for_each, neach returns the possibly stateful action after ordered calls. */
 template <class S, class F>
 constexpr F neach(S source, F action) {
-    for (int i = 0; i < nlen(source); ++i) invoke(action, source[i]);
+    for (nidx_t i = 0; i < nlen(source); ++i) invoke(action, source[i]);
     return action;
 }
 
 template <class S, class P>
-constexpr int nfind_if(S source, P predicate) {
-    int n = nlen(source);
-    for (int i = 0; i < n; ++i)
+constexpr nidx_t nfind_if(S source, P predicate) {
+    nidx_t n = nlen(source);
+    for (nidx_t i = 0; i < n; ++i)
         if (invoke(predicate, source[i])) return i;
     return n;
 }
 
 template <class S, class P>
-constexpr int ncount_if(S source, P predicate) {
-    int count = 0;
-    for (int i = 0; i < nlen(source); ++i) count += bool(invoke(predicate, source[i]));
+constexpr nidx_t ncount_if(S source, P predicate) {
+    nidx_t count = 0;
+    for (nidx_t i = 0; i < nlen(source); ++i) count += bool(invoke(predicate, source[i]));
     return count;
 }
 
 template <class S, class P>
 constexpr bool nall_of(S source, P predicate) {
-    int n = nlen(source);
+    nidx_t n = nlen(source);
     return nfind_if(move(source), [&](auto&& value) {
                return !invoke(predicate, forward<decltype(value)>(value));
            }) == n;
@@ -213,7 +226,7 @@ constexpr bool nall_of(S source, P predicate) {
 
 template <class S, class P>
 constexpr bool nany_of(S source, P predicate) {
-    int n = nlen(source);
+    nidx_t n = nlen(source);
     return nfind_if(move(source), move(predicate)) != n;
 }
 
@@ -224,16 +237,16 @@ constexpr bool nnone_of(S source, P predicate) {
 
 /* Extrema return the positional index, or len() for an empty source. */
 template <class S, class C = less<>, class P = identity>
-constexpr int nargmin(S source, C compare = {}, P projection = {}) {
-    int n = nlen(source), best = n ? 0 : n;
-    for (int i = 1; i < n; ++i)
+constexpr nidx_t nargmin(S source, C compare = {}, P projection = {}) {
+    nidx_t n = nlen(source), best = n ? 0 : n;
+    for (nidx_t i = 1; i < n; ++i)
         if (invoke(compare, invoke(projection, source[i]),
                     invoke(projection, source[best]))) best = i;
     return best;
 }
 
 template <class S, class C = less<>, class P = identity>
-constexpr int nargmax(S source, C compare = {}, P projection = {}) {
+constexpr nidx_t nargmax(S source, C compare = {}, P projection = {}) {
     return nargmin(move(source), [&](auto&& left, auto&& right) {
         return invoke(compare, forward<decltype(right)>(right),
                        forward<decltype(left)>(left));
@@ -242,10 +255,10 @@ constexpr int nargmax(S source, C compare = {}, P projection = {}) {
 
 /* Binary bounds use positional sorted order and return an insertion position. */
 template <class S, class T, class C = less<>, class P = identity>
-constexpr int nlower(S source, const T& value, C compare = {}, P projection = {}) {
-    int left = 0, right = nlen(source);
+constexpr nidx_t nlower(S source, const T& value, C compare = {}, P projection = {}) {
+    nidx_t left = 0, right = nlen(source);
     while (left < right) {
-        int middle = left + (right - left) / 2;
+        nidx_t middle = left + (right - left) / 2;
         if (invoke(compare, invoke(projection, source[middle]), value)) left = middle + 1;
         else right = middle;
     }
@@ -253,10 +266,10 @@ constexpr int nlower(S source, const T& value, C compare = {}, P projection = {}
 }
 
 template <class S, class T, class C = less<>, class P = identity>
-constexpr int nupper(S source, const T& value, C compare = {}, P projection = {}) {
-    int left = 0, right = nlen(source);
+constexpr nidx_t nupper(S source, const T& value, C compare = {}, P projection = {}) {
+    nidx_t left = 0, right = nlen(source);
     while (left < right) {
-        int middle = left + (right - left) / 2;
+        nidx_t middle = left + (right - left) / 2;
         if (!invoke(compare, value, invoke(projection, source[middle]))) left = middle + 1;
         else right = middle;
     }
@@ -265,10 +278,10 @@ constexpr int nupper(S source, const T& value, C compare = {}, P projection = {}
 
 /* nargsort is a positional plan; norder applies it without moving source values. */
 template <class S, class C = less<>, class P = identity>
-vector<int> nargsort(const S& source, C compare = {}, P projection = {}) {
-    vector<int> order(nlen(source));
+vector<nidx_t> nargsort(const S& source, C compare = {}, P projection = {}) {
+    vector<nidx_t> order(nlen(source));
     iota(order.begin(), order.end(), 0);
-    ranges::sort(order, [&](int left, int right) {
+    ranges::sort(order, [&](nidx_t left, nidx_t right) {
         return invoke(compare, invoke(projection, source[left]),
                        invoke(projection, source[right]));
     });
@@ -289,7 +302,7 @@ For sorting, positions describe distinct storage; repeated aliases are not a per
 */
 template <class S, class C = less<>, class P = identity>
 constexpr void nsort(S&& source, C compare = {}, P projection = {}) {
-    auto values = ntabulate(nlen(source), [p = addressof(source)](int i) -> decltype(auto) {
+    auto values = ntabulate(nlen(source), [p = addressof(source)](nidx_t i) -> decltype(auto) {
         return (*p)[i];
     });
     ranges::sort(values, [&](auto&& left, auto&& right) {
@@ -300,8 +313,8 @@ constexpr void nsort(S&& source, C compare = {}, P projection = {}) {
 
 template <class S>
 constexpr void nreverse_inplace(S&& source) {
-    int n = nlen(source);
-    for (int i = 0; i < n / 2; ++i) swap(source[i], source[n - 1 - i]);
+    nidx_t n = nlen(source);
+    for (nidx_t i = 0; i < n / 2; ++i) swap(source[i], source[n - 1 - i]);
 }
 
 /*
@@ -311,22 +324,22 @@ from the chunk function; therefore its ordinary source descriptor must be copyab
 */
 template <class S, class I>
 constexpr auto nchunks(S source, I intervals) {
-    return nfunc{move(intervals), [source = move(source)](pair<int, int> interval) mutable {
+    return nfunc{move(intervals), [source = move(source)](pair<nidx_t, nidx_t> interval) mutable {
                      return nslice(source, interval.first, interval.second);
                  }};
 }
 
 /* Width is positive; the final valid fixed-width block may be shorter. */
 template <class S>
-constexpr auto nblock(S source, int width, int index) {
-    int n = nlen(source), left = index * width;
+constexpr auto nblock(S source, nidx_t width, nidx_t index) {
+    nidx_t n = nlen(source), left = index * width;
     return nslice(move(source), left, min(n, left + width));
 }
 
 template <class S>
-constexpr auto nblocks(S source, int width) {
-    int n = nlen(source), count = n / width + (n % width != 0);
-    auto intervals = ntabulate(count, [n, width](int i) {
+constexpr auto nblocks(S source, nidx_t width) {
+    nidx_t n = nlen(source), count = n / width + (n % width != 0);
+    auto intervals = ntabulate(count, [n, width](nidx_t i) {
         return pair{i * width, min(n, (i + 1) * width)};
     });
     return nchunks(move(source), move(intervals));
@@ -334,10 +347,10 @@ constexpr auto nblocks(S source, int width) {
 
 /* width and step are positive.  Only complete windows are enumerated. */
 template <class S>
-constexpr auto nwindows(S source, int width, int step = 1) {
-    int n = nlen(source), count = width <= n ? 1 + (n - width) / step : 0;
-    auto intervals = ntabulate(count, [width, step](int i) {
-        int left = i * step;
+constexpr auto nwindows(S source, nidx_t width, nidx_t step = 1) {
+    nidx_t n = nlen(source), count = width <= n ? 1 + (n - width) / step : 0;
+    auto intervals = ntabulate(count, [width, step](nidx_t i) {
+        nidx_t left = i * step;
         return pair{left, left + width};
     });
     return nchunks(move(source), move(intervals));
@@ -346,13 +359,13 @@ constexpr auto nwindows(S source, int width, int step = 1) {
 /* Maximal adjacent runs.  together(previous,current) defines run membership. */
 template <class S, class P = equal_to<>>
 auto nruns(S source, P together = {}) {
-    vector<pair<int, int>> bounds;
-    int n = nlen(source), left = 0;
-    for (int i = 1; i <= n; ++i)
+    vector<pair<nidx_t, nidx_t>> bounds;
+    nidx_t n = nlen(source), left = 0;
+    for (nidx_t i = 1; i <= n; ++i)
         if (i == n || !invoke(together, source[i - 1], source[i]))
             bounds.push_back({left, i}), left = i;
-    int count = int(bounds.size());
+    nidx_t count = nidx_t(bounds.size());
     auto intervals = ntabulate(count,
-                               [bounds = move(bounds)](int i) { return bounds[i]; });
+                               [bounds = move(bounds)](nidx_t i) { return bounds[i]; });
     return nchunks(move(source), move(intervals));
 }

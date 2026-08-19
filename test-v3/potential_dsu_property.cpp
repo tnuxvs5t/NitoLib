@@ -5,26 +5,26 @@ void check(bool condition, const char* message) {
 }
 
 struct xor_group {
-    int id() const { return 0; }
-    int operator()(int a, int b) const { return a ^ b; }
-    int inverse(int value) const { return value; }
+    nidx_t id() const { return 0; }
+    nidx_t operator()(nidx_t a, nidx_t b) const { return a ^ b; }
+    nidx_t inverse(nidx_t value) const { return value; }
 };
 
 template <class T, class G>
 void random_test(G group, uint64_t seed) {
     mt19937_64 random(seed);
-    for (int trial = 0; trial < 500; ++trial) {
-        int n = 1 + int(random() % 24);
+    for (nidx_t trial = 0; trial < 500; ++trial) {
+        nidx_t n = 1 + nidx_t(random() % 24);
         npotential_dsu<T, G> dsu(n, group);
-        vector<vector<pair<int, T>>> graph(n);
+        vector<vector<pair<nidx_t, T>>> graph(n);
 
-        auto brute = [&](int source, int target) -> optional<T> {
+        auto brute = [&](nidx_t source, nidx_t target) -> optional<T> {
             vector<unsigned char> seen(n);
             vector<T> value(n, group.id());
-            vector<int> queue{source};
+            vector<nidx_t> queue{source};
             seen[source] = true;
-            for (int at = 0; at < int(queue.size()); ++at) {
-                int from = queue[at];
+            for (nidx_t at = 0; at < nidx_t(queue.size()); ++at) {
+                nidx_t from = queue[at];
                 for (auto [to, delta] : graph[from]) if (!seen[to]) {
                     seen[to] = true;
                     value[to] = group(value[from], delta);
@@ -35,8 +35,8 @@ void random_test(G group, uint64_t seed) {
             return group(group.inverse(value[source]), value[target]);
         };
 
-        for (int step = 0; step < 600; ++step) {
-            int a = int(random() % n), b = int(random() % n);
+        for (nidx_t step = 0; step < 600; ++step) {
+            nidx_t a = nidx_t(random() % n), b = nidx_t(random() % n);
             if (random() % 3) {
                 T delta = T(random() % 31);
                 auto old = brute(a, b);
@@ -59,5 +59,5 @@ void random_test(G group, uint64_t seed) {
 
 int main() {
     random_test<long long>(nsum_group<long long>{}, 0x51ed5eedULL);
-    random_test<int>(xor_group{}, 0xa11ceULL);
+    random_test<nidx_t>(xor_group{}, 0xa11ceULL);
 }

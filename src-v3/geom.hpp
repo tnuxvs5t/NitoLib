@@ -45,7 +45,7 @@ template <class V>
 auto npolygon_area2(V polygon) {
     using R = decltype(ncross(polygon[0], polygon[0]));
     R area{};
-    for (int i = 0; i < polygon.len(); ++i)
+    for (nidx_t i = 0; i < polygon.len(); ++i)
         area += ncross(polygon[i], polygon[(i + 1) % polygon.len()]);
     return area;
 }
@@ -56,18 +56,18 @@ auto nconvex_hull(V points) {
     using P = remove_cvref_t<decltype(points[0])>;
     vector<P> sorted;
     sorted.reserve(points.len());
-    for (int i = 0; i < points.len(); ++i) sorted.push_back(points[i]);
+    for (nidx_t i = 0; i < points.len(); ++i) sorted.push_back(points[i]);
     sort(sorted.begin(), sorted.end());
     sorted.erase(unique(sorted.begin(), sorted.end()), sorted.end());
     if (sorted.size() <= 1) return sorted;
     vector<P> hull(2 * sorted.size());
-    int size = 0;
+    nidx_t size = 0;
     for (const P& point : sorted) {
         while (size >= 2 && ncross(hull[size - 2], hull[size - 1], point) <= 0) --size;
         hull[size++] = point;
     }
-    int lower = size;
-    for (int i = int(sorted.size()) - 2; i >= 0; --i) {
+    nidx_t lower = size;
+    for (nidx_t i = nidx_t(sorted.size()) - 2; i >= 0; --i) {
         const P& point = sorted[i];
         while (size > lower && ncross(hull[size - 2], hull[size - 1], point) <= 0) --size;
         hull[size++] = point;

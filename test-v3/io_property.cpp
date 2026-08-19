@@ -33,7 +33,7 @@ int main() {
           got_unsigned_maximum == unsigned_maximum);
 
     stringstream mixed("12 1000000000000000000000000000000000000 -7 42");
-    int a = 0, c = 0;
+    nidx_t a = 0, c = 0;
     i128 huge = 0;
     long long d = 0;
     mixed >> a;
@@ -59,7 +59,7 @@ int main() {
     auto* old_input = cin.rdbuf(default_input.rdbuf());
     auto* old_output = cout.rdbuf(default_output.rdbuf());
     cin.clear();
-    int default_left = 0, default_right = 0;
+    nidx_t default_left = 0, default_right = 0;
     i128 default_huge = 0;
     cin >> default_left;
     CHECK(nread(default_huge));
@@ -87,17 +87,17 @@ int main() {
     boundary.clear();
     CHECK(!nread(boundary, negative_unsigned) && negative_unsigned == 9 && boundary.fail());
     boundary.clear();
-    int plus = 0;
+    nidx_t plus = 0;
     CHECK(nread(boundary, plus) && plus == 42 && boundary.eof() && !boundary.fail());
 
     stringstream malformed("+ x");
-    int unchanged = 17;
+    nidx_t unchanged = 17;
     CHECK(!nread(malformed, unchanged) && unchanged == 17 && malformed.fail());
     malformed.clear();
     CHECK(!nread(malformed, unchanged) && unchanged == 17 && malformed.fail());
 
     mt19937_64 rng(0x10f45a57);
-    for (int round = 0; round < 100000; ++round) {
+    for (nidx_t round = 0; round < 100000; ++round) {
         u128 bits = u128(rng()) << 64 | rng();
         i128 signed_value = i128(bits >> 1);
         if (rng() & 1) signed_value = -signed_value;

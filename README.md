@@ -49,7 +49,8 @@ fallback。`nfunc_bind(keys,values)` 优先复用结构 inverse，否则自动�
 ## 施工原则
 
 - 128 KiB 语义源码预算；注释和布局空白不计入。
-- 有符号 `int` 位置，半开区间 `[left,right)`。
+- 有符号 `nidx_t` 位置，半开区间 `[left,right)`；默认 `int`，全程序定义
+  `NITORI_INDEX_64` 时切换为 `long long`。
 - 不建立 concept/trait/npre 森林。
 - 算法依赖最小端口，不依赖默认 owner。
 - 一个 kernel 可以承载多个普通整数根；merge/split 的共享与 destructive 契约显式书写。

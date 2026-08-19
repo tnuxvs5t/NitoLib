@@ -11,23 +11,23 @@ void check(bool condition, const char* message) {
 
 int main() {
     mt19937 random(0x1c72026U);
-    for (int trial = 0; trial < 500; ++trial) {
-        int n = 1 + int(random() % 24);
+    for (nidx_t trial = 0; trial < 500; ++trial) {
+        nidx_t n = 1 + nidx_t(random() % 24);
         vector<string> value(n);
-        for (int i = 0; i < n; ++i) value[i] = char('a' + random() % 26);
+        for (nidx_t i = 0; i < n; ++i) value[i] = char('a' + random() % 26);
         nlct forest(nall(value), concat{});
-        vector<set<int>> adjacency(n);
-        set<pair<int, int>> edges;
+        vector<set<nidx_t>> adjacency(n);
+        set<pair<nidx_t, nidx_t>> edges;
 
-        auto path = [&](int source, int target) {
-            vector<int> parent(n, -1), queue{source};
+        auto path = [&](nidx_t source, nidx_t target) {
+            vector<nidx_t> parent(n, -1), queue{source};
             parent[source] = source;
-            for (int at = 0; at < int(queue.size()); ++at)
-                for (int to : adjacency[queue[at]]) if (parent[to] < 0)
+            for (nidx_t at = 0; at < nidx_t(queue.size()); ++at)
+                for (nidx_t to : adjacency[queue[at]]) if (parent[to] < 0)
                     parent[to] = queue[at], queue.push_back(to);
-            vector<int> result;
+            vector<nidx_t> result;
             if (parent[target] < 0) return result;
-            for (int at = target;; at = parent[at]) {
+            for (nidx_t at = target;; at = parent[at]) {
                 result.push_back(at);
                 if (at == source) break;
             }
@@ -35,9 +35,9 @@ int main() {
             return result;
         };
 
-        for (int step = 0; step < 1200; ++step) {
-            int operation = int(random() % 5);
-            int a = int(random() % n), b = int(random() % n);
+        for (nidx_t step = 0; step < 1200; ++step) {
+            nidx_t operation = nidx_t(random() % 5);
+            nidx_t a = nidx_t(random() % n), b = nidx_t(random() % n);
             auto route = path(a, b);
             if (operation == 0 && a != b && route.empty()) {
                 forest.link(a, b);
@@ -60,9 +60,9 @@ int main() {
                 check(forest.connected(a, b) == !route.empty(), "connectivity");
                 if (!route.empty()) {
                     string expected;
-                    for (int vertex : route) expected += value[vertex];
+                    for (nidx_t vertex : route) expected += value[vertex];
                     check(forest.fold(a, b) == expected, "ordered path fold");
-                    check(forest.path_size(a, b) == int(route.size()), "path size");
+                    check(forest.path_size(a, b) == nidx_t(route.size()), "path size");
                     reverse(expected.begin(), expected.end());
                     check(forest.fold(b, a) == expected, "reverse path fold");
                 }
@@ -70,13 +70,13 @@ int main() {
         }
     }
 
-    int n = 10000;
+    nidx_t n = 10000;
     vector<long long> value(n, 1);
     nlct<long long> chain(nall(value));
-    for (int i = 1; i < n; ++i) chain.link(i - 1, i);
+    for (nidx_t i = 1; i < n; ++i) chain.link(i - 1, i);
     check(chain.fold(0, n - 1) == n, "deep chain fold");
-    for (int i = 0; i < 20000; ++i) {
-        int a = int(random() % n), b = int(random() % n);
+    for (nidx_t i = 0; i < 20000; ++i) {
+        nidx_t a = nidx_t(random() % n), b = nidx_t(random() % n);
         check(chain.path_size(a, b) == abs(a - b) + 1, "deep chain path size");
     }
 }

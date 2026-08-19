@@ -35,6 +35,19 @@ V3 使用 C++23，直接包含需要的模块：
 #include "src-v3/segment.hpp"
 ```
 
+位置宽度由一个全程序开关决定。默认模式保持竞赛常用的 32 位位置；如果有限对象、节点池
+或稠密编号可能超过 `INT_MAX`，在**每个**包含 V3 头文件的翻译单元中提前定义
+`NITORI_INDEX_64`，或统一加入编译参数：
+
+```bash
+g++ -std=c++23 -DNITORI_INDEX_64 solution.cpp
+```
+
+此时 `nidx_t` 为 `long long`；否则为 `int`。`nuidx_t` 是对应无符号类型。两种模式不能在
+同一程序的不同翻译单元中混用，否则公共模板和布局会违反 ODR。V3 不保存平行的
+`int`/`long long` 实现，所有长度、位置、稠密顶点编号、节点 handle 与根都沿同一个
+`nidx_t` 类型传播。
+
 模块可以正常依赖其他模块，用户不需要手工补齐传递依赖。当前依赖骨架是：
 
 ```text
@@ -59,7 +72,10 @@ core
 
 ## 2. 全局约定
 
-- 长度、位置和稠密顶点编号使用 `int`。
+- 长度、位置、稠密顶点编号、节点 handle 与根使用 `nidx_t`。
+- `nidx_t` 默认是 `int`；全程序定义 `NITORI_INDEX_64` 后是 `long long`。
+- 32 位模式下，`ntabulate/nrange/nsub/nslice/nstride` 拒绝更宽的整数参数，避免把本应开启
+  64 位模式的范围静默截断；其他由容器或 descriptor 导出的长度仍由调用者保证可表示。
 - 区间统一为半开区间 `[left,right)`。
 - `len()` 是 V3 有限对象的长度接口；`nlen(x)` 也能读取普通容器的 `size()`。
 - `nchmin(target,candidate)` / `nchmax(target,candidate)` 在严格序更优时原地赋值，并返回是否发生更新。
@@ -191,7 +207,7 @@ ndebug("p =", p);
 属于语义的一部分：
 
 ```cpp
-auto square = nfunc{nrange(3), [](int key) { return key * key; }};
+auto square = nfunc{nrange(3), [](nidx_t key) { return key * key; }};
 ndebug("square =", square);
 // square = nfunc[(0, 0), (1, 1), (2, 4)]
 ```
@@ -211,12 +227,12 @@ ndebug("square =", square);
 ```cpp
 template<class Access>
 struct nview {
-    int length;
+    nidx_t length;
     Access access;
-    int len() const;
-    decltype(auto) operator[](int position) const;
+    nidx_t len() const;
+    decltype(auto) operator[](nidx_t position) const;
     // 仅当 accessor 提供该表达式时存在
-    int inverse(Key&& key) const;
+    nidx_t inverse(Key&& key) const;
 };
 ```
 
@@ -237,7 +253,7 @@ inverse 只对 view 的像内 key 有定义，不做 membership 或边界恢复�
 vector<int> a{10, 20, 30, 40};
 auto all = nall(a);             // 只接受 lvalue，借用 a
 auto ids = nrange(2, 6);        // 2,3,4,5
-auto sq = ntabulate(5, [](int i) { return i * i; });
+auto sq = ntabulate(5, [](nidx_t i) { return i * i; });
 auto mid = nsub(all, 1, 3);     // a[1],a[2]
 auto rev = nreverse(all);
 ```
@@ -259,7 +275,7 @@ assert(ids.inverse(ids[2]) == 2);
 ```cpp
 auto arithmetic = ntabulate(
     6,
-    [](int position) { return 10 + 3 * position; },
+    [](nidx_t position) { return 10 + 3 * position; },
     [](int key) { return (key - 10) / 3; }
 );
 ```
@@ -287,15 +303,15 @@ int x = doubled[0];                    // 本次访问产生一个值
 ### 3.4 组合器
 
 ```cpp
-auto picked = ngather(nall(a), ntabulate(2, [](int i) { return 1 - i; }));
-auto zipped = nzip(nrange(3), ntabulate(3, [](int i) { return i * i; }));
+auto picked = ngather(nall(a), ntabulate(2, [](nidx_t i) { return 1 - i; }));
+auto zipped = nzip(nrange(3), ntabulate(3, [](nidx_t i) { return i * i; }));
 auto cells = nproduct(nrange(2), nrange(3));
 auto cube = nproduct(nrange(2), nrange(3), nrange(4));
 ```
 
 - `ngather(values,positions)` 按位置重排或重复访问。
 - `nzip` 取最短输入长度，tuple 元素保留引用。
-- `nproduct` 是左主序笛卡尔积，最后一维变化最快，长度乘积必须能放进 `int`。
+- `nproduct` 是左主序笛卡尔积，最后一维变化最快，长度乘积必须能放进 `nidx_t`。
   二维结果保持 `pair`，三维及以上结果是 tuple；tuple 元素保留输入 view 的返回类别。
 
 `nproduct` 在所有轴可逆时同时提供坐标到 flat position 的 inverse，不再要求调用者另外
@@ -314,9 +330,9 @@ template<class Domain, class Eval>
 struct nfunc {
     Domain domain;
     Eval eval;
-    int len() const;
-    decltype(auto) key(int position) const;
-    decltype(auto) operator[](int position) const;
+    nidx_t len() const;
+    decltype(auto) key(nidx_t position) const;
+    decltype(auto) operator[](nidx_t position) const;
     decltype(auto) operator()(Key&& key) const;
 };
 ```
@@ -340,7 +356,7 @@ assert(f("alice") == 80);      // 按 key
 ```cpp
 auto f = nfunc{
     nproduct(nrange(2), nrange(3)),
-    [](const pair<int, int>& cell) { return 3 * cell.first + cell.second; }
+    [](const pair<nidx_t, nidx_t>& cell) { return 3 * cell.first + cell.second; }
 };
 assert(f[5] == 5);
 assert(f(1, 2) == f(pair{1, 2}));
@@ -379,9 +395,10 @@ assert(scores("bob") == 95);     // nall 无结构 inverse，构造一次 hash f
 其他 keys                           -> 物化静态 hash inverse
 ```
 
-hash fallback 把 owned key 紧凑存放，并使用 8-byte slot：高 32 位是 fingerprint，低 32 位是
-`position+1`，零表示空槽。它是一次构建、只查询的静态 inverse，不提供 erase、节点迭代器
-或增量 rehash。构造期望 O(n)，查询期望 O(1)，额外空间 O(n)。`nhash` 对普通叶子使用
+hash fallback 把 owned key 紧凑存放；每个 slot 保存 32 位 fingerprint 和一个 `nidx_t`
+position，负 position 表示空槽。由于对齐，slot 在 32 位模式下为 8 bytes、64 位模式下通常
+为 16 bytes。它是一次构建、只查询的静态 inverse，不提供 erase、节点迭代器或增量
+rehash。构造期望 O(n)，查询期望 O(1)，额外空间 O(n)。`nhash` 对普通叶子使用
 `std::hash`，递归支持 `pair/tuple`，并给每张默认表独立 salt。
 
 自定义 hash/equality 使用四参数 overload，并强制走 hash fallback：
@@ -436,13 +453,13 @@ nfunc + 计划  -> 重排 domain、保留 evaluator 的 nfunc
 #include "src-v3/discrete.hpp"
 
 vector<int> a{40, 10, 30, 20};
-auto picked = nselect(nall(a), vector<int>{3, 1, 3}); // 20,10,20
+auto picked = nselect(nall(a), vector<nidx_t>{3, 1, 3}); // 20,10,20
 auto odd = nfilter(nall(a), [](int x) { return x & 1; });
 auto sorted_view = norder(nall(a));                  // 懒重排，a 未变
 auto materialized = ncollect(sorted_view);           // vector<int>{10,20,30,40}
 ```
 
-`vector<int>` 位置计划会被移入返回的 descriptor，所以 `nfilter/norder` 不会借用已销毁的
+`vector<nidx_t>` 位置计划会被移入返回的 descriptor，所以 `nfilter/norder` 不会借用已销毁的
 局部下标容器。重复位置是合法的；若 source 产生左值，它们会别名到同一元素。
 `ncollect` 是明确物化边界，会递归移除 `nzip/nproduct` 所产生 pair/tuple 内部的引用。
 
@@ -468,7 +485,7 @@ nstride(source,first,last,step)       非零步长
 nstride(source,step)                  正数从左，负数从右
 nfilter(source,predicate)             稳定保留命中位置
 nindexed(source)                      (position,value) 惰性 view
-nargsort(source,compare,projection)   vector<int> 排序计划
+nargsort(source,compare,projection)   vector<nidx_t> 排序计划
 norder(source,compare,projection)     应用计划，不移动值
 ```
 
@@ -497,7 +514,7 @@ nlower / nupper                       已排序位置序列的插入位置
 
 ```cpp
 vector<int> a(6), b(6);
-nassign(nall(a), [](int i) { return i * i; });
+nassign(nall(a), [](nidx_t i) { return i * i; });
 nfill(nstride(nall(a), 2), -1);            // 只填偶数 position
 ncopy(nall(a), nreverse(nall(b)));         // 复制到重排后的目标
 ntransform(nall(a), nall(b), [](int x) { return x + 1; });
@@ -573,7 +590,7 @@ argsort/order/sort 为 `O(n log n)`；blocks/windows 的 interval domain 是惰�
 
 头文件：`src-v3/arena.hpp`
 
-`narena<T>` 是 append-only `vector<T>`，`make(...)` 返回 `int` handle。handle 在 vector
+`narena<T>` 是 append-only `vector<T>`，`make(...)` 返回 `nidx_t` handle。handle 在 vector
 扩容后仍有效，引用和指针不保证有效。它没有 generation、epoch、owner、自动回收或
 跨类型身份协议。
 
@@ -590,10 +607,10 @@ argsort/order/sort 为 `O(n log n)`；blocks/windows 的 interval domain 是惰�
 ```cpp
 nfhq<int> q;
 vector<int> a{1, 2, 3, 4};
-int root = q.build(nall(a));
+nidx_t root = q.build(nall(a));
 auto [left, right] = q.split(root, 2);
 root = q.merge(right, left);        // 3,4,1,2
-int handle = q.kth(root, 1);
+nidx_t handle = q.kth(root, 1);
 ```
 
 主要接口：
@@ -645,11 +662,11 @@ root 到 leaf 的顺序访问包含 position 的路径；`cover` 按从左到右
 ```cpp
 vector<multiset<int>> tags(2 * base);
 
-nsegment_trace(base, position, [&](int node) {
+nsegment_trace(base, position, [&](nidx_t node) {
     tags[node].insert(value);               // 点插入写入所有祖先
 });
 
-nsegment_cover(base, left, right, [&](int node) {
+nsegment_cover(base, left, right, [&](nidx_t node) {
     answer += query(tags[node]);             // 区间查询规范分解
 });
 ```
@@ -659,10 +676,10 @@ nsegment_cover(base, left, right, [&](int node) {
 ```cpp
 using outer_tree = nsparse_seg<multiset<int>, monostate>;
 outer_tree outer(lo, hi);
-int root = outer.make(multiset<int>{});
+nidx_t root = outer.make(multiset<int>{});
 
-auto open_child = [&](int node, int side) {
-    int next = side ? outer[node].right : outer[node].left;
+auto open_child = [&](nidx_t node, nidx_t side) {
+    nidx_t next = side ? outer[node].right : outer[node].left;
     if (next < 0) {
         next = outer.make(multiset<int>{});
         if (side) outer[node].right = next;
@@ -671,22 +688,22 @@ auto open_child = [&](int node, int side) {
     return next;
 };
 
-nsegment_trace(root, lo, hi, x, open_child, [&](int node) {
+nsegment_trace(root, lo, hi, x, open_child, [&](nidx_t node) {
     outer[node].aggregate.insert(y);
 });
 ```
 
 内层并不需要是 STL 容器。对于**强制在线**的动态区间次序统计，应把两个维度反过来：
-`nsparse_seg<int,monostate>` 划分固定值域，每个 aggregate 保存一棵维护数组位置的 FHQ
-root，所有内层根共同使用一个 `nfhq<int>` kernel：
+`nsparse_seg<nidx_t,monostate>` 划分固定值域，每个 aggregate 保存一棵维护数组位置的 FHQ
+root，所有内层根共同使用一个 `nfhq<nidx_t>` kernel：
 
 ```cpp
-int insert_position(int root, int position) {
-    auto [a, b] = positions.split_by(root, [&](int y) { return y < position; });
+nidx_t insert_position(nidx_t root, nidx_t position) {
+    auto [a, b] = positions.split_by(root, [&](nidx_t y) { return y < position; });
     return positions.merge(positions.merge(a, positions.make(position)), b);
 }
 
-nsegment_trace(root, value_lo, value_hi, value, open_child, [&](int node) {
+nsegment_trace(root, value_lo, value_hi, value, open_child, [&](nidx_t node) {
     outer[node].aggregate = insert_position(outer[node].aggregate, position);
 });
 ```
@@ -755,10 +772,10 @@ Action.apply(aggregate,tag,length)   对区间聚合施加 tag
 
 ```cpp
 nsparse_seg<long long> seg(0, 1LL << 60);
-int a = -1;
+nidx_t a = -1;
 a = seg.set(a, 100, 7);          // destructive
-int b = seg.set_copy(a, 200, 9); // persistent path-copy
-int c = seg.merge_copy(a, b);    // 保留旧根
+nidx_t b = seg.set_copy(a, 200, 9); // persistent path-copy
+nidx_t c = seg.merge_copy(a, b);    // 保留旧根
 ```
 
 ```text
@@ -835,8 +852,8 @@ destructive 根必须独占且互不重叠；persistent 根可能共享节点，
 vector<long long> a{7, -2, 7, 4, 9};
 nwavelet wave(nall(a));
 auto x = wave.kth(1, 5, 2);          // 子数组第 2 小，0-based
-int y = wave.less(0, 5, 7);          // 严格小于 7 的数量
-int z = wave.count(0, 5, 4LL, 9LL);  // 值域 [4,9)
+nidx_t y = wave.less(0, 5, 7);          // 严格小于 7 的数量
+nidx_t z = wave.count(0, 5, 4LL, 9LL);  // 值域 [4,9)
 ```
 
 还提供 `access`、单值 `count`、`next(>=lower)` 和 `previous(<upper)`。构造
@@ -871,10 +888,10 @@ fallback。没有额外 index 参数、`ngraph_like` concept 或默认 edge trai
 ### 9.1 任意后端示例
 
 ```cpp
-vector<vector<int>> adjacency{{1, 2}, {2}, {}};
+vector<vector<nidx_t>> adjacency{{1, 2}, {2}, {}};
 auto graph = ngraph{
     nrange(3),
-    [&](int vertex) -> const vector<int>& { return adjacency[vertex]; }
+    [&](nidx_t vertex) -> const vector<nidx_t>& { return adjacency[vertex]; }
 };
 auto distance = nbfs(graph, 0);
 ```
@@ -901,7 +918,7 @@ hash inverse 由 vertex descriptor 自己拥有；其借用的 `names` 与邻接
 头文件：`src-v3/graph_store.hpp`
 
 ```cpp
-struct edge { int from, to; long long weight; };
+struct edge { nidx_t from, to; long long weight; };
 vector<edge> edges = ...;
 auto graph = nmake_csr(n, nall(edges),
                        [](const edge& e) { return e.from; },
@@ -1145,7 +1162,7 @@ nlcp             Kasai，相邻后缀 LCP
 
 ```cpp
 nac automaton(26, nlowercase{});
-vector<int> terminal;
+vector<nidx_t> terminal;
 for (string& pattern : patterns) terminal.push_back(automaton.add(nall(pattern)));
 automaton.build();
 auto count = automaton.occurrences(nall(text));
@@ -1182,7 +1199,7 @@ nline_intersection     无限直线交点，平行/重合返回 nullopt
 
 ```cpp
 nlichao<nline<long long>, long long, long long> tree(-1000000, 1000001, INF);
-int root = -1;
+nidx_t root = -1;
 root = tree.add(root, {2, 7});
 root = tree.add_segment(root, -10, 20, {-3, 5});
 long long answer = tree.query(root, x);
@@ -1201,7 +1218,7 @@ auto rooted = nroot(graph.view(), roots);
 auto hld = nhld(rooted);
 
 vector<long long> base(n);
-for (int p = 0; p < n; ++p)
+for (nidx_t p = 0; p < n; ++p)
     base[p] = vertex_value[hld.order()[p]];
 nseg<long long> seg(nall(base));
 ```
@@ -1283,7 +1300,7 @@ python3 bench-v3/run.py
 python3 test-v3/measure.py
 ```
 
-`run.py` 对每个测试分别执行：
+`run.py` 对每个测试分别在默认 32 位与 `NITORI_INDEX_64` 两种位置模式下执行：
 
 ```text
 debug + _GLIBCXX_ASSERTIONS
@@ -1291,7 +1308,10 @@ debug + _GLIBCXX_ASSERTIONS
 ASan + UBSan
 ```
 
-并启用 `-Wall -Wextra -Wpedantic -Wshadow -Werror`。性质测试使用独立朴素模型、随机操作、
+即每个测试共经过 `2 × 3` 个构建运行，并启用
+`-Wall -Wextra -Wpedantic -Wshadow -Werror`。`index_mode_contract` 另外固定覆盖
+`10^18` 起点 re-domain、`5×10^9` 惰性 range、超过 `INT_MAX` 的笛卡尔积长度与 stride。
+性质测试使用独立朴素模型、随机操作、
 非交换操作、空结构、重复值、多组件、深链、星形、根共享和 destructive/persistent 混用
 边界。测试通过只证明已经覆盖的契约内行为，不等于所有模板实例都天然正确。
 
@@ -1300,10 +1320,11 @@ ASan + UBSan
 `10240` 语义字节的局部闸门，防止它再长成包装森林。
 
 `audit.py` 检查旧源码是否回流到活动路径、历史归档校验和是否被解包、V2 include
-泄漏、会在 `NDEBUG` 消失的 assert 测试、concept/domain 压力回流、文档本地链接以及
-每个头文件能否独立 include。
+泄漏、会在 `NDEBUG` 消失的 assert 测试、concept/domain 压力回流、绕过 `nidx_t` 的结构
+`int`、文档本地链接，以及每个头文件能否在两种位置模式下独立 include。
 
-benchmark 是 deterministic workload，用于观察直接排序与投影排序、结构 order/runs、
+benchmark 的结构与 hash workload 会分别构建 32/64 位位置模式；I/O workload 与位置宽度
+无关，只构建一次。它是 deterministic workload，用于观察直接排序与投影排序、结构 order/runs、
 静态 hash inverse 与 `unordered_map`、FHQ 节点大小、split/merge、线段树、Wavelet Matrix、
 LCT 路径、直接邻接与 graph port、CSR 构造/BFS、rooted projection、稀疏节点数和峰值
 RSS。时间值受机器波动影响，checksum 与规模必须稳定；跨运行的单个毫秒值不能代替同一

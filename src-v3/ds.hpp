@@ -18,47 +18,47 @@ struct nfenwick {
     [[no_unique_address]] mutable G group;
     vector<T> tree;
 
-    explicit nfenwick(int n = 0, G operation = {})
+    explicit nfenwick(nidx_t n = 0, G operation = {})
         : group(move(operation)), tree(n + 1, group.id()) {}
 
     template <class V>
     explicit nfenwick(V source, G operation = {}) : nfenwick(source.len(), move(operation)) {
-        for (int i = 0; i < source.len(); ++i) tree[i + 1] = source[i];
-        for (int i = 1; i < int(tree.size()); ++i) {
-            int parent = i + (i & -i);
-            if (parent < int(tree.size())) tree[parent] = invoke(this->group, tree[parent], tree[i]);
+        for (nidx_t i = 0; i < source.len(); ++i) tree[i + 1] = source[i];
+        for (nidx_t i = 1; i < nidx_t(tree.size()); ++i) {
+            nidx_t parent = i + (i & -i);
+            if (parent < nidx_t(tree.size())) tree[parent] = invoke(this->group, tree[parent], tree[i]);
         }
     }
 
-    int len() const { return int(tree.size()) - 1; }
+    nidx_t len() const { return nidx_t(tree.size()) - 1; }
 
-    void add(int position, const T& delta) {
-        for (++position; position < int(tree.size()); position += position & -position)
+    void add(nidx_t position, const T& delta) {
+        for (++position; position < nidx_t(tree.size()); position += position & -position)
             tree[position] = invoke(group, move(tree[position]), delta);
     }
 
-    T prefix(int right) const {
+    T prefix(nidx_t right) const {
         T result = group.id();
         for (; right; right -= right & -right) result = invoke(group, move(result), tree[right]);
         return result;
     }
 
-    T fold(int left, int right) const {
+    T fold(nidx_t left, nidx_t right) const {
         return invoke(group, group.inverse(prefix(left)), prefix(right));
     }
 
-    T get(int position) const { return fold(position, position + 1); }
+    T get(nidx_t position) const { return fold(position, position + 1); }
 
-    void set(int position, const T& value) {
+    void set(nidx_t position, const T& value) {
         add(position, invoke(group, group.inverse(get(position)), value));
     }
 
     template <class Less = less<>>
-    int lower(const T& target, Less less = {}) const {
-        int position = 0;
+    nidx_t lower(const T& target, Less less = {}) const {
+        nidx_t position = 0;
         T prefix_value = group.id();
-        for (int step = int(bit_floor(unsigned(len()))); step; step >>= 1) {
-            int next = position + step;
+        for (nidx_t step = nidx_t(bit_floor(nuidx_t(len()))); step; step >>= 1) {
+            nidx_t next = position + step;
             if (next <= len()) {
                 T candidate = invoke(group, prefix_value, tree[next]);
                 if (invoke(less, candidate, target)) position = next, prefix_value = move(candidate);
@@ -69,15 +69,15 @@ struct nfenwick {
 };
 
 struct ndsu {
-    vector<int> parent;
-    explicit ndsu(int n = 0) : parent(n, -1) {}
-    int len() const { return int(parent.size()); }
-    int find(int vertex) {
+    vector<nidx_t> parent;
+    explicit ndsu(nidx_t n = 0) : parent(n, -1) {}
+    nidx_t len() const { return nidx_t(parent.size()); }
+    nidx_t find(nidx_t vertex) {
         return parent[vertex] < 0 ? vertex : parent[vertex] = find(parent[vertex]);
     }
-    bool same(int a, int b) { return find(a) == find(b); }
-    int size(int vertex) { return -parent[find(vertex)]; }
-    int merge(int a, int b) {
+    bool same(nidx_t a, nidx_t b) { return find(a) == find(b); }
+    nidx_t size(nidx_t vertex) { return -parent[find(vertex)]; }
+    nidx_t merge(nidx_t a, nidx_t b) {
         a = find(a), b = find(b);
         if (a == b) return a;
         if (parent[a] > parent[b]) swap(a, b);
@@ -95,34 +95,34 @@ consistent (true also when it was already implied).  difference is nullopt acros
 template <class T, class G = nsum_group<T>>
 struct npotential_dsu {
     [[no_unique_address]] mutable G group;
-    vector<int> parent;
+    vector<nidx_t> parent;
     vector<T> potential;
 
-    explicit npotential_dsu(int n = 0, G operation = {})
+    explicit npotential_dsu(nidx_t n = 0, G operation = {})
         : group(move(operation)), parent(n, -1), potential(n, group.id()) {}
 
-    int len() const { return int(parent.size()); }
-    int find(int vertex) {
+    nidx_t len() const { return nidx_t(parent.size()); }
+    nidx_t find(nidx_t vertex) {
         if (parent[vertex] < 0) return vertex;
-        int old_parent = parent[vertex];
-        int root = find(old_parent);
+        nidx_t old_parent = parent[vertex];
+        nidx_t root = find(old_parent);
         potential[vertex] = invoke(group, move(potential[vertex]), potential[old_parent]);
         return parent[vertex] = root;
     }
-    T weight(int vertex) {
+    T weight(nidx_t vertex) {
         find(vertex);
         return potential[vertex];
     }
-    bool same(int a, int b) { return find(a) == find(b); }
-    int size(int vertex) { return -parent[find(vertex)]; }
+    bool same(nidx_t a, nidx_t b) { return find(a) == find(b); }
+    nidx_t size(nidx_t vertex) { return -parent[find(vertex)]; }
 
-    optional<T> difference(int a, int b) {
+    optional<T> difference(nidx_t a, nidx_t b) {
         if (find(a) != find(b)) return nullopt;
         return invoke(group, group.inverse(potential[a]), potential[b]);
     }
 
-    bool merge(int a, int b, const T& delta) {
-        int root_a = find(a), root_b = find(b);
+    bool merge(nidx_t a, nidx_t b, const T& delta) {
+        nidx_t root_a = find(a), root_b = find(b);
         T relation = invoke(group, invoke(group, delta, potential[a]),
                             group.inverse(potential[b]));
         if (root_a == root_b) return relation == group.id();
@@ -139,18 +139,18 @@ struct npotential_dsu {
 
 /* time() counts successful merges; failed same-component merges write no history. */
 struct nrollback_dsu {
-    struct change { int child, old_size; };
-    vector<int> parent;
+    struct change { nidx_t child, old_size; };
+    vector<nidx_t> parent;
     vector<change> history;
-    explicit nrollback_dsu(int n = 0) : parent(n, -1) {}
-    int find(int vertex) const {
+    explicit nrollback_dsu(nidx_t n = 0) : parent(n, -1) {}
+    nidx_t find(nidx_t vertex) const {
         while (parent[vertex] >= 0) vertex = parent[vertex];
         return vertex;
     }
-    bool same(int a, int b) const { return find(a) == find(b); }
-    int size(int vertex) const { return -parent[find(vertex)]; }
-    int time() const { return int(history.size()); }
-    bool merge(int a, int b) {
+    bool same(nidx_t a, nidx_t b) const { return find(a) == find(b); }
+    nidx_t size(nidx_t vertex) const { return -parent[find(vertex)]; }
+    nidx_t time() const { return nidx_t(history.size()); }
+    bool merge(nidx_t a, nidx_t b) {
         a = find(a), b = find(b);
         if (a == b) return false;
         if (parent[a] > parent[b]) swap(a, b);
@@ -162,11 +162,11 @@ struct nrollback_dsu {
     void undo() {
         auto [child, old_size] = history.back();
         history.pop_back();
-        int root = parent[child];
+        nidx_t root = parent[child];
         parent[root] -= old_size;
         parent[child] = old_size;
     }
-    void rollback(int target) {
+    void rollback(nidx_t target) {
         while (time() > target) undo();
     }
 };
@@ -179,7 +179,7 @@ struct nqueue_agg {
     vector<node> input, output;
 
     explicit nqueue_agg(M operation = {}) : merge(move(operation)) {}
-    int len() const { return int(input.size() + output.size()); }
+    nidx_t len() const { return nidx_t(input.size() + output.size()); }
     bool empty() const { return input.empty() && output.empty(); }
 
     void push(T value) {
@@ -234,13 +234,13 @@ private:
 
     void ensure_front() {
         if (!left.empty() || right.empty()) return;
-        int n = int(right.size()), left_count = (n + 1) / 2;
+        nidx_t n = nidx_t(right.size()), left_count = (n + 1) / 2;
         vector<node> next_left, next_right;
         next_left.reserve(left_count);
         next_right.reserve(n - left_count);
-        for (int i = left_count; i > 0; --i)
+        for (nidx_t i = left_count; i > 0; --i)
             add_left(next_left, move(right[i - 1].value));
-        for (int i = left_count; i < n; ++i)
+        for (nidx_t i = left_count; i < n; ++i)
             add_right(next_right, move(right[i].value));
         left.swap(next_left);
         right.swap(next_right);
@@ -248,13 +248,13 @@ private:
 
     void ensure_back() {
         if (!right.empty() || left.empty()) return;
-        int n = int(left.size()), right_count = (n + 1) / 2;
+        nidx_t n = nidx_t(left.size()), right_count = (n + 1) / 2;
         vector<node> next_left, next_right;
         next_left.reserve(n - right_count);
         next_right.reserve(right_count);
-        for (int i = right_count; i < n; ++i)
+        for (nidx_t i = right_count; i < n; ++i)
             add_left(next_left, move(left[i].value));
-        for (int i = right_count; i > 0; --i)
+        for (nidx_t i = right_count; i > 0; --i)
             add_right(next_right, move(left[i - 1].value));
         left.swap(next_left);
         right.swap(next_right);
@@ -262,11 +262,11 @@ private:
 
 public:
     explicit ndeque_agg(M operation = {}) : merge(move(operation)) {}
-    int len() const { return int(left.size() + right.size()); }
+    nidx_t len() const { return nidx_t(left.size() + right.size()); }
     bool empty() const { return left.empty() && right.empty(); }
 
-    const T& operator[](int position) const {
-        int left_count = int(left.size());
+    const T& operator[](nidx_t position) const {
+        nidx_t left_count = nidx_t(left.size());
         return position < left_count ? left[left_count - 1 - position].value
                                      : right[position - left_count].value;
     }
@@ -293,25 +293,26 @@ struct nsparse_table {
 
     template <class V>
     explicit nsparse_table(V source, O merge = {}) : operation(move(merge)) {
-        int n = source.len(), levels = n ? bit_width(unsigned(n)) : 0;
+        nidx_t n = source.len(), levels = n ? bit_width(nuidx_t(n)) : 0;
         if (!n) return;
         vector<T> first;
         first.reserve(n);
-        for (int i = 0; i < n; ++i) first.push_back(source[i]);
+        for (nidx_t i = 0; i < n; ++i) first.push_back(source[i]);
         table.push_back(move(first));
-        for (int level = 1; level < levels; ++level) {
+        for (nidx_t level = 1; level < levels; ++level) {
             table.push_back(table[0]);
-            for (int i = 0; i + (1 << level) <= n; ++i)
+            for (nidx_t i = 0; i + (nidx_t(1) << level) <= n; ++i)
                 table[level][i] = invoke(this->operation, table[level - 1][i],
-                                          table[level - 1][i + (1 << (level - 1))]);
+                                          table[level - 1][i + (nidx_t(1) << (level - 1))]);
         }
     }
 
-    int len() const { return table.empty() ? 0 : int(table[0].size()); }
-    const T& get(int position) const { return table[0][position]; }
-    T fold(int left, int right) const {
-        int level = bit_width(unsigned(right - left)) - 1;
-        return invoke(operation, table[level][left], table[level][right - (1 << level)]);
+    nidx_t len() const { return table.empty() ? 0 : nidx_t(table[0].size()); }
+    const T& get(nidx_t position) const { return table[0][position]; }
+    T fold(nidx_t left, nidx_t right) const {
+        nidx_t level = bit_width(nuidx_t(right - left)) - 1;
+        return invoke(operation, table[level][left],
+                      table[level][right - (nidx_t(1) << level)]);
     }
 };
 
