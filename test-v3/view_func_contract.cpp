@@ -76,7 +76,7 @@ int main() {
     auto transformed = nmap_values(move(keyed), [](nidx_t value) { return value + 1; });
     CHECK(transformed(1, 2) == 13);
 
-    auto bound = nfunc_bind(
+    auto bound = nanchors(
         nproduct(nrange(2), nrange(3)), nrange(6),
         [](const pair<nidx_t, nidx_t>& key) { return 3 * key.first + key.second; }
     );

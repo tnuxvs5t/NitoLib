@@ -22,7 +22,7 @@ int main() {
     vector<nidx_t> semantic_keys{80, 10, 70, 20, 60, 30, 50, 40};
     array<nidx_t, 81> locate{};
     for (nidx_t i = 0; i < nidx_t(semantic_keys.size()); ++i) locate[semantic_keys[i]] = i;
-    auto function = nfunc_bind(nall(semantic_keys), nall(values),
+    auto function = nanchors(nall(semantic_keys), nall(values),
                                [&](nidx_t key) { return locate[key]; });
     auto function_blocks = nblocks(function, 3);
     auto inner = function_blocks[1];

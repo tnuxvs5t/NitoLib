@@ -39,7 +39,7 @@ g++ -std=c++23 -O2 -I/path/to/NitoriSTL solution.cpp
 
 `nview` 可选提供 `inverse(key)->position`：range/sub/reverse/product 等结构组合直接传播
 代数 inverse，任意离散 key 可由 `hash.hpp` 的 `ninvert` 一次性附加紧凑静态 hash
-fallback。`nfunc_bind(keys,values)` 优先复用结构 inverse，否则自动建表，图与树算法因此
+fallback。`nanchors(keys,values)` 优先复用结构 inverse，否则自动建表，图与树算法因此
 不再携带平行的 index 参数。
 
 `discrete.hpp` 用位置计划统一装配 `nview/nfunc`，并提供结构排序、值排序、序列折叠与

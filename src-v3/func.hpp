@@ -120,7 +120,7 @@ constexpr auto nselect_positions(G function, I positions) {
 
 /* locate(key) returns the position used to index values. */
 template <class K, class V, class L>
-constexpr auto nfunc_bind(K keys, V values, L locate) {
+constexpr auto nanchors(K keys, V values, L locate) {
     return nfunc{move(keys),
                  [values = move(values), locate = move(locate)](auto&& key) mutable
                          -> decltype(auto) {
@@ -129,13 +129,13 @@ constexpr auto nfunc_bind(K keys, V values, L locate) {
 }
 
 /*
-Aligned binding requires unique stable keys and equal key/value lengths.  A copyable
+Aligned anchors require unique stable keys and equal key/value lengths.  A copyable
 structurally invertible domain keeps O(1) algebraic lookup; every other domain is
 materialized once into a static hash inverse.  Queried keys exist.  The explicit
 three-argument overload remains the escape hatch for a problem-specific locator.
 */
 template <class K, class V>
-auto nfunc_bind(K keys, V values) {
+auto nanchors(K keys, V values) {
     if constexpr (copy_constructible<K> && requires(K& domain) {
                       domain.inverse(domain[0]);
                   }) {
@@ -157,7 +157,7 @@ auto nfunc_bind(K keys, V values) {
 
 /* Explicit hash/equality rules force the static fallback. */
 template <class K, class V, class H, class E>
-auto nfunc_bind(K keys, V values, H hash, E equal) {
+auto nanchors(K keys, V values, H hash, E equal) {
     auto locate = nmake_hash_inverse(keys, move(hash), move(equal));
     return nfunc{move(keys),
                  [values = move(values), locate = move(locate)](const auto& key) mutable
@@ -166,9 +166,9 @@ auto nfunc_bind(K keys, V values, H hash, E equal) {
                  }};
 }
 
-/* Dense ordinal binding is the common zero-locator case. */
+/* Dense ordinal anchoring is the common zero-locator case. */
 template <class V>
-constexpr auto nfunc_bind(V values) {
+constexpr auto nanchors(V values) {
     nidx_t n = values.len();
     return nfunc{nrange(n), [values = move(values)](nidx_t i) mutable -> decltype(auto) {
                      return values[i];

@@ -75,7 +75,7 @@ int main() {
     vector<nidx_t> payload{4, 1, 3, 2};
     array<nidx_t, 41> locate{};
     for (nidx_t i = 0; i < 4; ++i) locate[keys[i]] = i;
-    auto function = nfunc_bind(nall(keys), nall(payload),
+    auto function = nanchors(nall(keys), nall(payload),
                                [&](nidx_t key) { return locate[key]; });
     nsort(function, greater<>{});
     CHECK((keys == vector<nidx_t>{40, 10, 30, 20}));

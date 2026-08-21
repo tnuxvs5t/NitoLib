@@ -343,7 +343,7 @@ struct nfunc {
 vector<string> names{"alice", "bob"};
 vector<int> score{80, 95};
 
-auto f = nfunc_bind(nall(names), nall(score));
+auto f = nanchors(nall(names), nall(score));
 
 assert(f.key(1) == "bob");
 assert(f[1] == 95);             // 按 position
@@ -367,24 +367,26 @@ assert(f(1, 2) == f(pair{1, 2}));
 稠密下标是常见特例：
 
 ```cpp
-auto dense = nfunc_bind(nall(score));  // key 就是 0..n-1
+auto dense = nanchors(nall(score));  // key 就是 0..n-1
 ```
 
 `nfunc` 本身不要求 domain key 唯一。一般 evaluator 可以在重复 domain 上枚举同一个 key
 多次；只有把两组按 position 对齐的 keys/values 绑定起来时，才需要 key 唯一。
 
-### 4.2 binding：结构 inverse 优先，hash fallback 兜底
+### 4.2 `nanchors`：结构 inverse 优先，hash fallback 兜底
 
-两参数 binding 表示 `keys[position]` 与 `values[position]` 对齐：
+两参数 `nanchors` 表示 `keys[position]` 与 `values[position]` 对齐。它专门把按 position
+对齐的 value 锚定到 semantic key；直接写 `nfunc{domain, evaluator}` 仍然表示自定义求值，
+两者不是同一个入口：
 
 ```cpp
 auto grid = nproduct(nrange(10, 13), nrange(-2, 2));
-auto cells = nfunc_bind(grid, nrange(12));
+auto cells = nanchors(grid, nrange(12));
 assert(cells(12, 1) == 11);       // 使用 nproduct 的结构 inverse
 
 vector<string> names{"alice", "bob"};
 vector<int> score{80, 95};
-auto scores = nfunc_bind(nall(names), nall(score));
+auto scores = nanchors(nall(names), nall(score));
 assert(scores("bob") == 95);     // nall 无结构 inverse，构造一次 hash fallback
 ```
 
@@ -404,16 +406,16 @@ rehash。构造期望 O(n)，查询期望 O(1)，额外空间 O(n)。`nhash` 对
 自定义 hash/equality 使用四参数 overload，并强制走 hash fallback：
 
 ```cpp
-auto f = nfunc_bind(nall(keys), nall(values), key_hash, key_equal);
+auto f = nanchors(nall(keys), nall(values), key_hash, key_equal);
 ```
 
 若题目已经有坐标压缩数组或其他更紧凑 locator，继续使用三参数 overload：
 
 ```cpp
-auto f = nfunc_bind(keys, values, locate);
+auto f = nanchors(keys, values, locate);
 ```
 
-所有 binding 都要求两组序列等长、key 唯一且查询 key 存在。hash/equality 必须一致；借用
+所有 `nanchors` 形式都要求两组序列等长、key 唯一且查询 key 存在。hash/equality 必须一致；借用
 owner 必须存活，建表后 key 的长度、次序和值保持稳定，payload value 可以修改。
 
 ### 4.3 组合接口
@@ -1248,7 +1250,7 @@ V3 不以“恢复全部 V2 公共符号”为目标。当前取舍如下。
 
 ```text
 位置投影：nview、range/sub/reverse/project/map/gather/zip/product、结构 inverse
-离散函数：nfunc、bind/keys/values/entries/redomain/restrict/map_values/compose、hash fallback
+离散函数：nfunc、anchors/keys/values/entries/redomain/restrict/map_values/compose、hash fallback
 离散算法：select/slice/stride/filter/collect/order/sort、assign/fill/copy/transform、序列折叠、区间键 chunks/blocks/windows/runs
 节点内核：narena、隐式 FHQ、多根 destructive split/merge
 区间结构：Fenwick、迭代/懒/稀疏/持久根线段树、聚合队列、Sparse Table、Wavelet Matrix
@@ -1366,7 +1368,7 @@ debug:      ndebug
 view:       nview nall ntabulate nrange nsub nreverse nproject nmap ngather nzip nproduct nlocate
 hash:       nhash nhash_inverse nmake_hash_inverse ninvert
 func:       nfunc nkeys nvalues nentries nredomain nrestrict nmap_values ncompose
-            nselect_positions nfunc_bind
+            nselect_positions nanchors
 discrete:   nselect nslice nstride nfilter nindexed ncollect nprefix nsuffix
             nassign nfill ncopy ntransform naccumulate neach nfind_if ncount_if
             nall_of nany_of nnone_of

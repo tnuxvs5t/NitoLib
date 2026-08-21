@@ -25,7 +25,7 @@ int main() {
 
     vector<string> keys{"gamma", "alpha", "beta"};
     vector<nidx_t> payload{3, 1, 2};
-    auto function = nfunc_bind(nall(keys), nall(payload));
+    auto function = nanchors(nall(keys), nall(payload));
     nfill(function, 5);
     CHECK((keys == vector<string>{"gamma", "alpha", "beta"}));
     CHECK((payload == vector<nidx_t>{5, 5, 5}));

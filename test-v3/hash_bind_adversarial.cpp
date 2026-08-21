@@ -42,7 +42,7 @@ int main() {
             values[i] = static_cast<long long>(keys[i].item * 17 + 3);
 
         long long hash_calls = 0, equal_calls = 0;
-        auto function = nfunc_bind(nall(keys), nall(values),
+        auto function = nanchors(nall(keys), nall(values),
                                    key_hash{&hash_calls}, key_equal{&equal_calls});
         CHECK(function.len() == n);
         for (nidx_t i = 0; i < n; ++i) {
@@ -66,7 +66,7 @@ int main() {
         values[i] = i * 3;
     }
     long long hash_calls = 0, equal_calls = 0;
-    auto large = nfunc_bind(nall(keys), nall(values),
+    auto large = nanchors(nall(keys), nall(values),
                             key_hash{&hash_calls}, key_equal{&equal_calls});
     hash_calls = equal_calls = 0;
     hash_key copied = keys.back();
@@ -78,7 +78,7 @@ int main() {
         2, [data = make_unique<array<nidx_t, 2>>(array<nidx_t, 2>{40, 90})](nidx_t i) -> nidx_t& {
             return (*data)[i];
         }};
-    auto move_only = nfunc_bind(nall(owned_keys), move(owned_values),
+    auto move_only = nanchors(nall(owned_keys), move(owned_values),
                                 key_hash{&hash_calls}, key_equal{&equal_calls});
     static_assert(!copy_constructible<decltype(move_only)>);
     CHECK(move_only(owned_keys[1]) == 90);

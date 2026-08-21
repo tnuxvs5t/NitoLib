@@ -7,7 +7,7 @@ int main() {
     vector<nidx_t> values{10, 20, 30, 40};
     unordered_map<string, nidx_t> locate{{"alpha", 0}, {"beta", 1}, {"gamma", 2}, {"delta", 3}};
 
-    auto f = nfunc_bind(nall(keys), nall(values),
+    auto f = nanchors(nall(keys), nall(values),
                         [&](const string& key) { return locate.at(key); });
     static_assert(same_as<decltype(nkeys(f)), decltype(f.domain)&>);
     static_assert(same_as<decltype(nkeys(as_const(f))), const decltype(f.domain)&>);
@@ -47,12 +47,12 @@ int main() {
     values_view[2] = 42;
     CHECK(values[3] == 42);
 
-    auto dense = nfunc_bind(nall(values));
+    auto dense = nanchors(nall(values));
     CHECK(dense.key(3) == 3 && dense(3) == 42 && dense[1] == 22);
 
     vector<string> anchor_keys{"north", "east", "south", "west"};
     vector<nidx_t> anchor_values{2, 3, 5, 7};
-    auto anchored = nfunc_bind(nall(anchor_keys), nall(anchor_values));
+    auto anchored = nanchors(nall(anchor_keys), nall(anchor_values));
     static_assert(same_as<decltype(anchored(string("north"))), nidx_t&>);
     CHECK(anchored.len() == 4 && anchored.key(2) == "south");
     CHECK(anchored[1] == 3 && anchored("west") == 7);
@@ -64,7 +64,7 @@ int main() {
 
     vector<string> no_keys;
     vector<nidx_t> no_values;
-    auto empty_binding = nfunc_bind(nall(no_keys), nall(no_values));
+    auto empty_binding = nanchors(nall(no_keys), nall(no_values));
     CHECK(empty_binding.len() == 0);
 
     auto move_only = nfunc{nrange(5),

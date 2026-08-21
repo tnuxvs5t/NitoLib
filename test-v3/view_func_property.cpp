@@ -50,7 +50,7 @@ int main() {
         for (long long& x : payload) x = nidx_t(rng() % 100000);
         vector<nidx_t> inverse(n);
         for (nidx_t i = 0; i < n; ++i) inverse[permutation[i]] = i;
-        auto function = nfunc_bind(nall(permutation), nall(payload),
+        auto function = nanchors(nall(permutation), nall(payload),
                                    [&](nidx_t key) { return inverse[key]; });
         CHECK(function.len() == n);
         for (nidx_t i = 0; i < n; ++i) {

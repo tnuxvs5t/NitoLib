@@ -17,7 +17,7 @@ struct counted_hash {
 
 int main() {
     auto grid = nproduct(nrange(10, 13), nrange(-2, 2));
-    auto structural = nfunc_bind(move(grid), nrange(12));
+    auto structural = nanchors(move(grid), nrange(12));
     for (nidx_t i = 0; i < 3; ++i)
         for (nidx_t j = 0; j < 4; ++j) {
             pair key{10 + i, -2 + j};
@@ -25,7 +25,7 @@ int main() {
             CHECK(structural(10 + i, -2 + j) == 4 * i + j);
         }
 
-    auto cube = nfunc_bind(
+    auto cube = nanchors(
         nproduct(nrange(5, 7), nrange(-1, 2), nrange(4)), nrange(24)
     );
     CHECK(cube(5, -1, 0) == 0);
@@ -33,7 +33,7 @@ int main() {
 
     vector<string> names{"alice", "bob", "carol", "dave"};
     vector<nidx_t> score{3, 5, 8, 13};
-    auto fallback = nfunc_bind(nall(names), nall(score));
+    auto fallback = nanchors(nall(names), nall(score));
     CHECK(fallback("alice") == 3);
     CHECK(fallback(string_view("carol")) == 8);
     fallback("dave") = 21;
@@ -41,7 +41,7 @@ int main() {
 
     nidx_t hash_calls = 0;
     vector<counted_key> custom_keys{{7}, {11}, {19}};
-    auto custom = nfunc_bind(
+    auto custom = nanchors(
         nall(custom_keys), nrange(3), counted_hash{&hash_calls}, equal_to<>{}
     );
     CHECK(hash_calls == 3);
@@ -53,7 +53,7 @@ int main() {
     array<nidx_t, 31> position{};
     for (nidx_t i = 0; i < nidx_t(explicit_keys.size()); ++i)
         position[explicit_keys[i]] = i;
-    auto explicit_locator = nfunc_bind(
+    auto explicit_locator = nanchors(
         nall(explicit_keys), nall(explicit_values),
         [&](nidx_t key) { return position[key]; }
     );
@@ -67,7 +67,7 @@ int main() {
         shuffle(keys.begin(), keys.end(), rng);
         for (nidx_t& value : values) value = nidx_t(rng());
 
-        auto function = nfunc_bind(nall(keys), nall(values));
+        auto function = nanchors(nall(keys), nall(values));
         for (nidx_t i = 0; i < n; ++i) {
             CHECK(function[i] == values[i]);
             CHECK(function(keys[i]) == values[i]);

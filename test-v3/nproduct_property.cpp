@@ -14,7 +14,7 @@ int main() {
     for (nidx_t i = 0; i < product.len(); ++i)
         CHECK(product[i] == expected[i]);
 
-    auto anchored = nfunc_bind(move(product), nrange(nidx_t(expected.size())));
+    auto anchored = nanchors(move(product), nrange(nidx_t(expected.size())));
     for (nidx_t i = 0; i < nidx_t(expected.size()); ++i) {
         CHECK(anchored.key(i) == expected[i]);
         CHECK(anchored[i] == i);
@@ -35,6 +35,6 @@ int main() {
     get<2>(references[7]) = 90;
     CHECK(a[0] == 40 && b[0] == 'z' && c[1] == 90);
 
-    auto owned_anchor = nfunc_bind(move(references), nrange(8));
+    auto owned_anchor = nanchors(move(references), nrange(8));
     CHECK(owned_anchor(tuple{40, 'z', 90}) == 1);
 }

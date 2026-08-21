@@ -6,7 +6,7 @@ int main() {
     vector<string> keys{"delta", "alpha", "gamma", "beta"};
     vector<nidx_t> values{40, 10, 30, 20};
     unordered_map<string, nidx_t> locate{{"alpha", 1}, {"beta", 3}, {"gamma", 2}, {"delta", 0}};
-    auto function = nfunc_bind(nall(keys), nall(values),
+    auto function = nanchors(nall(keys), nall(values),
                                [&](const string& key) { return locate.at(key); });
 
     auto selected = nselect(function, vector<nidx_t>{3, 1, 3, 0});
@@ -64,7 +64,7 @@ int main() {
         iota(domain.begin(), domain.end(), 0);
         shuffle(domain.begin(), domain.end(), rng);
         for (nidx_t i = 0; i < n; ++i) inverse[domain[i]] = i;
-        auto f = nfunc_bind(nall(domain), nall(payload),
+        auto f = nanchors(nall(domain), nall(payload),
                             [&](nidx_t key) { return inverse[key]; });
 
         nidx_t q = n ? nidx_t(rng() % 60) : 0;

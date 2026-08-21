@@ -95,25 +95,25 @@ struct nrooted {
     auto positions() const { return nfunc{keys(), locate()}; }
 
     auto parents() const {
-        return nmap_values(nfunc_bind(keys(), nall(parent_position)),
+        return nmap_values(nanchors(keys(), nall(parent_position)),
                            [this](nidx_t position) -> decltype(auto) {
                                return vertices[position];
                            });
     }
 
     auto depths() const {
-        return nfunc_bind(keys(), nall(depth_value));
+        return nanchors(keys(), nall(depth_value));
     }
 
     auto components() const {
-        return nmap_values(nfunc_bind(keys(), nall(component_position)),
+        return nmap_values(nanchors(keys(), nall(component_position)),
                            [this](nidx_t position) -> decltype(auto) {
                                return vertices[position];
                            });
     }
 
     auto subtree_sizes() const {
-        return nfunc_bind(keys(), nall(subtree_value));
+        return nanchors(keys(), nall(subtree_value));
     }
 
     auto order() const {

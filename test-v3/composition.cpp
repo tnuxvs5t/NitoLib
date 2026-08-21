@@ -24,7 +24,7 @@ int main() {
     };
     vector<nidx_t> values{2, 3, 5, 7, 11, 13};
 
-    auto doubled = nmap_values(nfunc_bind(nall(values)), [](nidx_t value) { return 2 * value; });
+    auto doubled = nmap_values(nanchors(nall(values)), [](nidx_t value) { return 2 * value; });
     auto grid = nproduct(nrange(2), nrange(3));
     require(doubled[4] == 22 && grid.len() == 6 && grid[4] == pair(1, 1));
     auto descending = norder(nall(values), greater<>{});

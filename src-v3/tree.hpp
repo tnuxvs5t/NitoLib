@@ -31,19 +31,19 @@ struct nhld_layout {
     auto locate() const {
         return nlocate(vertices);
     }
-    auto positions() const { return nfunc_bind(keys(), nall(position_value)); }
-    auto depths() const { return nfunc_bind(keys(), nall(depth_value)); }
-    auto subtree_sizes() const { return nfunc_bind(keys(), nall(subtree_value)); }
+    auto positions() const { return nanchors(keys(), nall(position_value)); }
+    auto depths() const { return nanchors(keys(), nall(depth_value)); }
+    auto subtree_sizes() const { return nanchors(keys(), nall(subtree_value)); }
 
     auto parents() const {
-        return nmap_values(nfunc_bind(keys(), nall(parent_position)),
+        return nmap_values(nanchors(keys(), nall(parent_position)),
                            [this](nidx_t position) -> decltype(auto) {
                                return vertices[position];
                            });
     }
 
     auto heads() const {
-        return nmap_values(nfunc_bind(keys(), nall(head_position)),
+        return nmap_values(nanchors(keys(), nall(head_position)),
                            [this](nidx_t position) -> decltype(auto) {
                                return vertices[position];
                            });

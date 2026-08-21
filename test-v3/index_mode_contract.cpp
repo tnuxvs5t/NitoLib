@@ -18,7 +18,7 @@ int main() {
 
     constexpr long long X = 1'000'000'000'000'000'000LL;
     vector<long long> bucket(40000);
-    auto dp = nfunc_bind(nrange(X - 20000, X + 20000), nall(bucket));
+    auto dp = nanchors(nrange(X - 20000, X + 20000), nall(bucket));
     dp(X) = 7;
     CHECK(bucket[20000] == 7 && dp.key(20000) == X);
 
@@ -43,7 +43,7 @@ int main() {
 #endif
 
     vector<long long> keys{11, 17, 23}, values{1, 2, 3};
-    auto function = nfunc_bind(nall(keys), nall(values));
+    auto function = nanchors(nall(keys), nall(values));
     static_assert(same_as<decltype(function(11)), long long&>);
     CHECK(function(23) == 3);
 }
