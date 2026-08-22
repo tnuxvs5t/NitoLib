@@ -664,12 +664,26 @@ source 构造器会把每个元素显式转成 `T` 后再保存。`C` 必须是�
 insert / emplace                 插入并返回 nfhq handle
 erase_one / erase_all            按值删一个 / 删除全部并返回数量
 erase_at / erase_handle          按位置 / 当前有效 handle 删除
-lower_bound / upper_bound        返回位置
+lower_bound / upper_bound        返回位置；可传兼容的 compare / projection
 equal_range / count / find       返回 [left,right) / 数量 / 位置（未找到为 len）
 contains / order_of_key          存在性 / 小于 key 的数量
 kth / front / back               只读元素访问
 sequence                         只读 nview
 ```
+
+边界查询还有与 `nlower/nupper` 对齐的重载：
+
+```cpp
+bag.lower_bound(key, order, projection);
+bag.upper_bound(key, order, projection);
+```
+
+它们分别寻找第一个 `!order(projection(value),key)` 与第一个
+`order(key,projection(value))` 的位置，允许异构 key，也避免为结构体字段手造哨兵值。
+承重前提是投影后的中序序列已经按 `order` 排好；不能拿与建树顺序无关的任意比较器搜索。
+例如默认按 `pair` 字典序保存时，中序对 `pair::first` 仍然单调，因此可以直接按第一维 bound。
+这两个重载直接沿树下降，仍是期望 `O(log n)`；对 `bag.sequence()` 调 `nlower/nupper` 则因
+每次 positional access 本身为期望 `O(log n)`，总计期望 `O(log^2 n)`。
 
 插入和删除复用 destructive split/merge；边界与排名查询只沿 BST 和子树大小下降，不拆根。
 因此插入、删除和值查询均为期望 `O(log n)`，包括 `kth` 与 `sequence` 的每次访问；纯查询

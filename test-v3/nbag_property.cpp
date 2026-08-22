@@ -9,6 +9,16 @@ using integer_bag = nbag<nidx_t>;
 static_assert(is_const_v<remove_reference_t<decltype((declval<const integer_bag&>().tree))>>);
 static_assert(is_const_v<remove_reference_t<decltype((declval<const integer_bag&>().root))>>);
 
+struct pair_first_order {
+    bool operator()(const pair<nidx_t, nidx_t>& left, nidx_t right) const {
+        return left.first < right;
+    }
+
+    bool operator()(nidx_t left, const pair<nidx_t, nidx_t>& right) const {
+        return left < right.first;
+    }
+};
+
 int main() {
     vector<nidx_t> initial{4, 1, 4, -2, 7};
     static_assert(!nbag_ctad<decltype(nall(initial))>);
@@ -77,6 +87,31 @@ int main() {
     nbag<bool> bit_bag(nall(bits));
     bits.assign(bits.size(), false);
     CHECK(bit_bag.count(false) == 2 && bit_bag.count(true) == 2);
+
+    vector<pair<nidx_t, nidx_t>> records{{2, 4}, {1, 8}, {2, 1}, {3, 0}};
+    nbag<pair<nidx_t, nidx_t>> projected(nall(records));
+    auto first_member = &pair<nidx_t, nidx_t>::first;
+    CHECK(projected.lower_bound(2, pair_first_order{}) == 1);
+    CHECK(projected.upper_bound(2, pair_first_order{}) == 3);
+    CHECK(projected.lower_bound(2, less<>{}, first_member) == 1);
+    CHECK(projected.upper_bound(2, less<>{}, first_member) == 3);
+
+    mt19937 projected_rng(0xB0A1D);
+    records.clear();
+    for (nidx_t i = 0; i < 2000; ++i)
+        records.push_back({nidx_t(projected_rng() % 41) - 20, i});
+    nbag<pair<nidx_t, nidx_t>> random_projected(nall(records));
+    ranges::sort(records);
+    for (nidx_t key = -25; key <= 25; ++key) {
+        nidx_t left = 0;
+        while (left < nidx_t(records.size()) && records[left].first < key) ++left;
+        nidx_t right = left;
+        while (right < nidx_t(records.size()) && records[right].first == key) ++right;
+        CHECK(random_projected.lower_bound(key, pair_first_order{}) == left);
+        CHECK(random_projected.upper_bound(key, pair_first_order{}) == right);
+        CHECK(random_projected.lower_bound(key, less<>{}, first_member) == left);
+        CHECK(random_projected.upper_bound(key, less<>{}, first_member) == right);
+    }
 
     nbag<nidx_t> handles;
     nidx_t handle = handles.emplace(7);

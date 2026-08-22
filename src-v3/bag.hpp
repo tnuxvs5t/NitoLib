@@ -14,6 +14,10 @@ read queries; insert/emplace, erase operations and clear invalidate it.  Insert,
 and value queries are expected O(log n), including each kth/sequence access.  The arena
 is append-only between clear calls, so erased nodes consume storage until clear().
 Handles survive arena relocation; element references do not.
+
+The comparator/projection bound overloads mirror nlower/nupper.  The projected inorder
+sequence must already be sorted by the supplied order; an unrelated alternate ordering
+is not searchable through this tree topology.
 */
 template <class T, class C = less<>>
 struct nbag {
@@ -46,12 +50,12 @@ struct nbag {
     void reserve(nidx_t count) { tree.reserve(count); }
 
 private:
-    nidx_t cut(const T& key, bool upper) const {
+    template <class F>
+    nidx_t cut(F before) const {
         nidx_t answer = 0;
         for (nidx_t handle = root; handle >= 0;) {
             const auto& node = tree[handle];
-            if (invoke(compare, node.value, key) ||
-                (upper && !invoke(compare, key, node.value))) {
+            if (invoke(before, node.value)) {
                 answer += tree.size(node.left) + 1;
                 handle = node.right;
             } else {
@@ -104,8 +108,32 @@ public:
         return insert(T(forward<A>(args)...));
     }
 
-    nidx_t lower_bound(const T& key) const { return cut(key, false); }
-    nidx_t upper_bound(const T& key) const { return cut(key, true); }
+    nidx_t lower_bound(const T& key) const {
+        return cut([this, &key](const T& value) {
+            return invoke(compare, value, key);
+        });
+    }
+
+    nidx_t upper_bound(const T& key) const {
+        return cut([this, &key](const T& value) {
+            return !invoke(compare, key, value);
+        });
+    }
+
+    template <class K, class D, class P = identity>
+    nidx_t lower_bound(const K& key, D order, P projection = {}) const {
+        return cut([&](const T& value) {
+            return invoke(order, invoke(projection, value), key);
+        });
+    }
+
+    template <class K, class D, class P = identity>
+    nidx_t upper_bound(const K& key, D order, P projection = {}) const {
+        return cut([&](const T& value) {
+            return !invoke(order, key, invoke(projection, value));
+        });
+    }
+
     nidx_t order_of_key(const T& key) const { return lower_bound(key); }
 
     pair<nidx_t, nidx_t> equal_range(const T& key) const {
