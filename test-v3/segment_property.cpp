@@ -1,4 +1,5 @@
 #include "../src-v3/segment.hpp"
+#include "../src-v3/discrete.hpp"
 
 #define CHECK(x) do { if (!(x)) { cerr << __FILE__ << ':' << __LINE__ << ": " #x "\n"; abort(); } } while (false)
 
@@ -28,7 +29,64 @@ struct assign_string {
 };
 
 int main() {
+    vector<long long> extrema{-8, 4, -3, 12, 1};
+    nseg<long long, nmin<long long>> min_tree(nall(extrema));
+    nseg<long long, nmax<long long>> max_tree(nall(extrema));
+    CHECK(min_tree.fold() == -8 && min_tree.fold(1, 4) == -3);
+    CHECK(max_tree.fold() == 12 && max_tree.fold(0, 3) == 4);
+    CHECK(naccumulate(nall(extrema), nmin<long long>{}.id(), nmin<long long>{}) == -8);
+    CHECK(naccumulate(nall(extrema), nmax<long long>{}.id(), nmax<long long>{}) == 12);
+    min_tree.set(1, -20);
+    max_tree.set(3, 30);
+    CHECK(min_tree.fold() == -20 && max_tree.fold() == 30);
+    nseg<long long, nmin<long long>> empty_min;
+    nseg<long long, nmax<long long>> empty_max;
+    CHECK(empty_min.fold() == numeric_limits<long long>::max());
+    CHECK(empty_max.fold() == numeric_limits<long long>::lowest());
+
     mt19937 rng(0x5E6);
+    const double infinity = numeric_limits<double>::infinity();
+    vector<double> positive_infinity(3, infinity);
+    vector<double> negative_infinity(3, -infinity);
+    nseg<double, nmin<double>> infinity_min(nall(positive_infinity));
+    nseg<double, nmax<double>> infinity_max(nall(negative_infinity));
+    CHECK(infinity_min.fold() == infinity && infinity_min.fold(1, 1) == infinity);
+    CHECK(infinity_max.fold() == -infinity && infinity_max.fold(2, 2) == -infinity);
+    CHECK((nseg<double, nmin<double>>{}.fold() == infinity));
+    CHECK((nseg<double, nmax<double>>{}.fold() == -infinity));
+
+    for (nidx_t round = 0; round < 3000; ++round) {
+        nidx_t n = nidx_t(rng() % 65);
+        vector<double> values(n);
+        for (double& value : values) {
+            nidx_t kind = nidx_t(rng() % 17);
+            value = kind == 0 ? infinity : kind == 1 ? -infinity
+                                                    : double(nidx_t(rng() % 201) - 100);
+        }
+        nseg<double, nmin<double>> floating_min(nall(values));
+        nseg<double, nmax<double>> floating_max(nall(values));
+        for (nidx_t step = 0; step < 100; ++step) {
+            if (n && rng() % 4 == 0) {
+                nidx_t position = nidx_t(rng() % n);
+                nidx_t kind = nidx_t(rng() % 17);
+                values[position] = kind == 0 ? infinity : kind == 1 ? -infinity
+                                                                   : double(nidx_t(rng() % 201) - 100);
+                floating_min.set(position, values[position]);
+                floating_max.set(position, values[position]);
+            } else {
+                nidx_t left = n ? nidx_t(rng() % (n + 1)) : 0;
+                nidx_t right = left + nidx_t(rng() % (n - left + 1));
+                double expected_min = infinity, expected_max = -infinity;
+                for (nidx_t i = left; i < right; ++i) {
+                    if (values[i] < expected_min) expected_min = values[i];
+                    if (expected_max < values[i]) expected_max = values[i];
+                }
+                CHECK(floating_min.fold(left, right) == expected_min);
+                CHECK(floating_max.fold(left, right) == expected_max);
+            }
+        }
+    }
+
     for (nidx_t round = 0; round < 5000; ++round) {
         nidx_t n = nidx_t(rng() % 45);
         vector<string> values(n);

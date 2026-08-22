@@ -8,6 +8,33 @@ struct nadd {
     constexpr T operator()(T left, const T& right) const { return left += right; }
 };
 
+/* Numeric extrema adapters.  T has numeric_limits bounds; values exclude NaN. */
+template <class T>
+struct nmin {
+    constexpr T id() const {
+        if constexpr (numeric_limits<T>::has_infinity)
+            return numeric_limits<T>::infinity();
+        else
+            return numeric_limits<T>::max();
+    }
+    constexpr T operator()(T left, const T& right) const {
+        return right < left ? right : move(left);
+    }
+};
+
+template <class T>
+struct nmax {
+    constexpr T id() const {
+        if constexpr (numeric_limits<T>::has_infinity)
+            return -numeric_limits<T>::infinity();
+        else
+            return numeric_limits<T>::lowest();
+    }
+    constexpr T operator()(T left, const T& right) const {
+        return left < right ? right : move(left);
+    }
+};
+
 namespace nsegment_detail {
 template <class F, class I>
 constexpr void emit(F& visit, nidx_t node, I left, I right) {

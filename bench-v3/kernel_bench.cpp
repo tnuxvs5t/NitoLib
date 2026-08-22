@@ -1,3 +1,4 @@
+#include "../src-v3/bag.hpp"
 #include "../src-v3/discrete.hpp"
 #include "../src-v3/fhq.hpp"
 #include "../src-v3/graph.hpp"
@@ -68,6 +69,29 @@ int main() {
         for (nidx_t i = 0; i < 2000; ++i)
             checksum += sequence[sequence.kth(root, i * 97 % n)].value;
     });
+
+    unique_ptr<nbag<nidx_t>> ordered;
+    auto bag_build = timed([&] {
+        ordered = make_unique<nbag<nidx_t>>();
+        ordered->reserve(n + n / 8);
+        for (nidx_t value : shuffled) ordered->insert(value);
+    });
+    auto bag_work = timed([&] {
+        uint64_t state = 5;
+        for (nidx_t i = 0; i < 500000; ++i) {
+            state = state * 2862933555777941757ULL + 3037000493ULL;
+            nidx_t key = nidx_t(state % (n + n / 10));
+            checksum += ordered->lower_bound(key) + ordered->upper_bound(key);
+            nidx_t position = nidx_t((state >> 32) % n);
+            if (!(i & 31)) {
+                nidx_t value = ordered->erase_at(position);
+                ordered->insert(value);
+            } else {
+                checksum += (*ordered)[position];
+            }
+        }
+    });
+    if (ordered->len() != n || ordered->front() != 0 || ordered->back() != n - 1) return 4;
 
     vector<long long> numbers(n);
     iota(numbers.begin(), numbers.end(), 1);
@@ -172,6 +196,8 @@ int main() {
          << " structural_order_ms=" << structural_order << " runs_20x_ms=" << run_projection << '\n';
     cout << "fhq_node_bytes=" << sizeof(nfhq<nidx_t>::node)
          << " build_ms=" << fhq_build << " split_merge_ms=" << fhq_transactions << '\n';
+    cout << "bag_nodes=" << ordered->nodes() << " build_ms=" << bag_build
+         << " query_mutate_ms=" << bag_work << '\n';
     cout << "fixed_seg_build_ms=" << seg_build << " workload_ms=" << seg_work << '\n';
     cout << "wavelet_build_ms=" << wavelet_build << " workload_ms=" << wavelet_work << '\n';
     cout << "lct_node_bytes=" << sizeof(nlct<long long>::node)

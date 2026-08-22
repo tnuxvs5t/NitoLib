@@ -60,7 +60,7 @@ core
 │   ├── ds ── flow
 │   └── string / automata / wavelet / linear / geom
 ├── arena
-│   ├── fhq ── dynamic_tree
+│   ├── fhq ── bag / dynamic_tree
 │   ├── segment ── dynamic_tree / link_cut
 │   └── opt
 ├── math ── poly
@@ -527,6 +527,16 @@ ntransform(nall(a), nall(b), [](int x) { return x + 1; });
 从左到右执行，不隐藏分配；若输入与目标重叠，后续读取会观察到前面已经完成的写入。需要
 快照语义时先显式 `ncollect`。四者均为 O(写入位置数)，目标必须产生可赋值左值。
 
+V3 不提供统一的“极值元素物化”包装：`nzip` 会返回嵌套引用，`vector<bool>` 会返回代理，
+单靠 `remove_cvref` 不能可靠推出调用者需要的拥有类型。需要位置时使用 `nargmin/nargmax`；
+需要显式值类型和空源兜底时，先判断返回位置，再写 `T(source[position])`。高频的纯数值归约
+可以在同时引入 `segment.hpp` 后直接复用 merge：
+
+```cpp
+T minimum = naccumulate(source, nmin<T>{}.id(), nmin<T>{});
+T maximum = naccumulate(source, nmax<T>{}.id(), nmax<T>{});
+```
+
 `nprefix/nsuffix` 不是切片别名，而是物化全部前后缀折叠值。默认 accumulator 是 source
 元素的去引用值类型，默认 ID 为该类型的 `{}`，默认 OP 为 `plus<>`：
 
@@ -641,6 +651,36 @@ sequence(root)               按中序访问 payload 的 nview
 这解决了 V2 merge/split 卡手的根因：交易对象是同一 kernel 中的普通整数根，不再由
 每棵树的 owner/domain 类型阻止组合。安全边界放在清楚的 destructive contract 中。
 
+### 6.1 `nbag`：用一个 FHQ 根装配有序多重集
+
+头文件：`src-v3/bag.hpp`
+
+`nbag<T,C>` 是 `nfhq<T>` 的薄适配器：`T` 必须显式给出，不能依靠 CTAD 从 source 推断。
+这是所有权边界，不是语法限制：`nzip` 的元素可能是嵌套引用，`vector<bool>` 的元素是代理；
+source 构造器会把每个元素显式转成 `T` 后再保存。`C` 必须是稳定的严格弱序，等价值仍作为
+不同节点保留，并插入到已有等价值之后。它提供：
+
+```text
+insert / emplace                 插入并返回 nfhq handle
+erase_one / erase_all            按值删一个 / 删除全部并返回数量
+erase_at / erase_handle          按位置 / 当前有效 handle 删除
+lower_bound / upper_bound        返回位置
+equal_range / count / find       返回 [left,right) / 数量 / 位置（未找到为 len）
+contains / order_of_key          存在性 / 小于 key 的数量
+kth / front / back               只读元素访问
+sequence                         只读 nview
+```
+
+插入和删除复用 destructive split/merge；边界与排名查询只沿 BST 和子树大小下降，不拆根。
+因此插入、删除和值查询均为期望 `O(log n)`，包括 `kth` 与 `sequence` 的每次访问；纯查询
+不会改变 root 或树形，已有 `sequence` 仍有效。`insert/emplace`、任一 erase 和 `clear()` 是
+结构修改，会使旧 `sequence` 失效。handle 在对应节点被删除前保持有效，arena 重分配不影响
+整数 handle，但会使既有元素引用失效；`clear()` 还会使所有 handle 失效，并按已分配节点数
+析构存储。arena 在删除后不会自动回收，节点存储保留到 `clear()`；不同 kernel 的根不能 merge。
+
+这个适配器只复用 FHQ 真正有用的机关：arena、随机平衡、父指针、子树大小与 destructive
+根代数。它不增加 owner/domain 外壳；同时也不为了“复用 split”而让只读查询物理改树。
+
 ## 7. 区间结构：按真正不同的 merge 语义拆分
 
 头文件：`src-v3/segment.hpp`
@@ -737,6 +777,10 @@ FHQ 对位置做 `count_less(right)-count_less(left)`，即可判断某个值域
 ### 7.2 `nseg`
 
 `nseg<T,M>` 是迭代线段树。`M` 只需单位元和结合律，合并保持左到右顺序，允许非交换。
+
+`segment.hpp` 还提供数值 merge 适配器：`nadd<T>` 使用 `T{}` 加法。`nmin<T>` / `nmax<T>`
+在 `numeric_limits<T>::has_infinity` 时分别以正/负无穷为单位元，否则使用 `max()` / `lowest()`。
+它们要求数值边界可用且 `<` 构成严格顺序；浮点输入必须排除 NaN。
 
 ```cpp
 vector<long long> a{1, 2, 3, 4};
@@ -1327,7 +1371,8 @@ ASan + UBSan
 
 benchmark 的结构与 hash workload 会分别构建 32/64 位位置模式；I/O workload 与位置宽度
 无关，只构建一次。它是 deterministic workload，用于观察直接排序与投影排序、结构 order/runs、
-静态 hash inverse 与 `unordered_map`、FHQ 节点大小、split/merge、线段树、Wavelet Matrix、
+静态 hash inverse 与 `unordered_map`、FHQ 节点大小、split/merge、`nbag` 查询与删除重插、
+线段树、Wavelet Matrix、
 LCT 路径、直接邻接与 graph port、CSR 构造/BFS、rooted projection、稀疏节点数和峰值
 RSS。时间值受机器波动影响，checksum 与规模必须稳定；跨运行的单个毫秒值不能代替同一
 workload 下的结构、内存和 checksum 对照。
@@ -1376,8 +1421,9 @@ discrete:   nselect nslice nstride nfilter nindexed ncollect nprefix nsuffix
             nchunks nblock nblocks nwindows nruns
 memory:     narena
 fhq:        nfhq nfhq_noop nmake_fhq
-segment:    nsegment_trace nsegment_cover nadd nseg nlazyseg naddsum_action
+segment:    nsegment_trace nsegment_cover nadd nmin nmax nseg nlazyseg naddsum_action
             nlazy_addsum nsparse_seg
+bag:        nbag
 ds:         nsum_group nfenwick ndsu npotential_dsu nrollback_dsu nqueue_agg ndeque_agg
             nsparse_table nwavelet
 graph:      ngraph nto_self nbfs nbfs_many nrooted nroot ncsr nmake_csr
