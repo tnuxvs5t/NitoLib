@@ -792,9 +792,11 @@ FHQ 对位置做 `count_less(right)-count_less(left)`，即可判断某个值域
 
 `nseg<T,M>` 是迭代线段树。`M` 只需单位元和结合律，合并保持左到右顺序，允许非交换。
 
-`segment.hpp` 还提供数值 merge 适配器：`nadd<T>` 使用 `T{}` 加法。`nmin<T>` / `nmax<T>`
-在 `numeric_limits<T>::has_infinity` 时分别以正/负无穷为单位元，否则使用 `max()` / `lowest()`。
-它们要求数值边界可用且 `<` 构成严格顺序；浮点输入必须排除 NaN。
+`segment.hpp` 还提供数值 merge 适配器：`nadd<T>` 使用 `T{}` 加法。对 `pair` / `tuple`，
+`nadd` 递归逐分量相加；`nmin` / `nmax` 保持标准字典序比较，并递归构造每个数值分量的
+上界 / 下界单位元。标量 `nmin<T>` / `nmax<T>` 在 `numeric_limits<T>::has_infinity` 时分别
+以正 / 负无穷为单位元，否则使用 `max()` / `lowest()`。数值叶子的边界必须可用，且 `<`
+构成严格顺序；任一浮点分量都必须排除 NaN。
 
 ```cpp
 vector<long long> a{1, 2, 3, 4};

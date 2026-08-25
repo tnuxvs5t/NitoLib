@@ -29,6 +29,35 @@ struct assign_string {
 };
 
 int main() {
+    using pair_value = pair<long long, int>;
+    using tuple_value = tuple<int, pair<long long, int>, double>;
+    const auto pair_high = pair_value{numeric_limits<long long>::max(),
+                                      numeric_limits<int>::max()};
+    const auto pair_low = pair_value{numeric_limits<long long>::lowest(),
+                                     numeric_limits<int>::lowest()};
+    CHECK((nadd<pair_value>{}.id() == pair_value{}));
+    CHECK((nadd<pair_value>{}({2, -5}, {7, 3}) == pair_value{9, -2}));
+    CHECK((nmin<pair_value>{}.id() == pair_high));
+    CHECK((nmax<pair_value>{}.id() == pair_low));
+
+    const tuple_value tuple_zero{};
+    const tuple_value tuple_high{numeric_limits<int>::max(), pair_high,
+                                 numeric_limits<double>::infinity()};
+    const tuple_value tuple_low{numeric_limits<int>::lowest(), pair_low,
+                                -numeric_limits<double>::infinity()};
+    CHECK((nadd<tuple_value>{}.id() == tuple_zero));
+    CHECK((nadd<tuple_value>{}({1, {2, 3}, 4.5}, {5, {6, 7}, 8.5}) ==
+           tuple_value{6, {8, 10}, 13.0}));
+    CHECK((nmin<tuple_value>{}.id() == tuple_high));
+    CHECK((nmax<tuple_value>{}.id() == tuple_low));
+
+    vector<pair_value> pair_boundary{{numeric_limits<long long>::max(), 7}};
+    nseg<pair_value, nmin<pair_value>> pair_min_tree(nall(pair_boundary));
+    CHECK((pair_min_tree.fold(0, 1) == pair_boundary[0]));
+    pair_boundary[0] = {numeric_limits<long long>::lowest(), -7};
+    nseg<pair_value, nmax<pair_value>> pair_max_tree(nall(pair_boundary));
+    CHECK((pair_max_tree.fold(0, 1) == pair_boundary[0]));
+
     vector<long long> extrema{-8, 4, -3, 12, 1};
     nseg<long long, nmin<long long>> min_tree(nall(extrema));
     nseg<long long, nmax<long long>> max_tree(nall(extrema));

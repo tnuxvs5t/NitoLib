@@ -8,6 +8,25 @@ struct nadd {
     constexpr T operator()(T left, const T& right) const { return left += right; }
 };
 
+template <class A, class B>
+struct nadd<pair<A, B>> {
+    constexpr pair<A, B> id() const { return {nadd<A>{}.id(), nadd<B>{}.id()}; }
+    constexpr pair<A, B> operator()(pair<A, B> left, const pair<A, B>& right) const {
+        return {nadd<A>{}(move(left.first), right.first),
+                nadd<B>{}(move(left.second), right.second)};
+    }
+};
+
+template <class... T>
+struct nadd<tuple<T...>> {
+    constexpr tuple<T...> id() const { return {nadd<T>{}.id()...}; }
+    constexpr tuple<T...> operator()(tuple<T...> left, const tuple<T...>& right) const {
+        return [&]<size_t... I>(index_sequence<I...>) {
+            return tuple<T...>{nadd<T>{}(move(get<I>(left)), get<I>(right))...};
+        }(index_sequence_for<T...>{});
+    }
+};
+
 /* Numeric extrema adapters.  T has numeric_limits bounds; values exclude NaN. */
 template <class T>
 struct nmin {
@@ -22,6 +41,22 @@ struct nmin {
     }
 };
 
+template <class A, class B>
+struct nmin<pair<A, B>> {
+    constexpr pair<A, B> id() const { return {nmin<A>{}.id(), nmin<B>{}.id()}; }
+    constexpr pair<A, B> operator()(pair<A, B> left, const pair<A, B>& right) const {
+        return right < left ? right : move(left);
+    }
+};
+
+template <class... T>
+struct nmin<tuple<T...>> {
+    constexpr tuple<T...> id() const { return {nmin<T>{}.id()...}; }
+    constexpr tuple<T...> operator()(tuple<T...> left, const tuple<T...>& right) const {
+        return right < left ? right : move(left);
+    }
+};
+
 template <class T>
 struct nmax {
     constexpr T id() const {
@@ -31,6 +66,22 @@ struct nmax {
             return numeric_limits<T>::lowest();
     }
     constexpr T operator()(T left, const T& right) const {
+        return left < right ? right : move(left);
+    }
+};
+
+template <class A, class B>
+struct nmax<pair<A, B>> {
+    constexpr pair<A, B> id() const { return {nmax<A>{}.id(), nmax<B>{}.id()}; }
+    constexpr pair<A, B> operator()(pair<A, B> left, const pair<A, B>& right) const {
+        return left < right ? right : move(left);
+    }
+};
+
+template <class... T>
+struct nmax<tuple<T...>> {
+    constexpr tuple<T...> id() const { return {nmax<T>{}.id()...}; }
+    constexpr tuple<T...> operator()(tuple<T...> left, const tuple<T...>& right) const {
         return left < right ? right : move(left);
     }
 };
