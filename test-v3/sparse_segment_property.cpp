@@ -15,7 +15,21 @@ struct mod_add {
     }
 };
 
+struct immutable_value { const long long value; };
+struct immutable_sum {
+    immutable_value id() const { return {0}; }
+    immutable_value operator()(const immutable_value& a, const immutable_value& b) const {
+        return {a.value + b.value};
+    }
+};
+
 int main() {
+    nsparse_seg<immutable_value, immutable_sum> immutable(0, 8);
+    nidx_t first = immutable.set_copy(-1, 2, {7});
+    nidx_t second = immutable.combine_copy(first, 2, {11});
+    nidx_t both = immutable.merge_copy(first, second);
+    CHECK(immutable.fold(first).value == 7);
+    CHECK(immutable.fold(second).value == 18 && immutable.fold(both).value == 25);
     mt19937 rng(0xD15EA5E);
     constexpr nidx_t lo = -40, hi = 61, width = hi - lo;
 
@@ -106,6 +120,11 @@ int main() {
     right = ordered.set(right, 1, "d");
     nidx_t joined = ordered.merge(left, right);
     CHECK(ordered.fold(joined, 0, 2) == "abcd");
+    nidx_t old = ordered.clone(joined);
+    nidx_t changed = ordered.combine_copy(old, 0, "x");
+    CHECK(ordered.fold(old) == "abcd" && ordered.fold(changed) == "abxcd");
+    changed = ordered.set_copy(changed, 1, "y");
+    CHECK(ordered.fold(changed) == "abxy" && ordered.fold(old) == "abcd");
 
     nsparse_seg<long long> extreme(LLONG_MIN, LLONG_MAX);
     nidx_t root = -1;

@@ -78,15 +78,7 @@ struct nrooted {
 
     nidx_t len() const { return vertices.len(); }
 
-    auto keys() const {
-        return ntabulate(
-            len(),
-            [this](nidx_t i) -> decltype(auto) { return vertices[i]; },
-            [this](auto&& key) {
-                return vertices.inverse(forward<decltype(key)>(key));
-            }
-        );
-    }
+    auto keys() const { return nall(vertices); }
 
     auto locate() const {
         return nlocate(vertices);

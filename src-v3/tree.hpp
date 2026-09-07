@@ -19,15 +19,7 @@ struct nhld_layout {
     vector<nidx_t> head_position, position_value, vertex_at_position, root_position;
 
     nidx_t len() const { return vertices.len(); }
-    auto keys() const {
-        return ntabulate(
-            len(),
-            [this](nidx_t i) -> decltype(auto) { return vertices[i]; },
-            [this](auto&& key) {
-                return vertices.inverse(forward<decltype(key)>(key));
-            }
-        );
-    }
+    auto keys() const { return nall(vertices); }
     auto locate() const {
         return nlocate(vertices);
     }
@@ -64,27 +56,79 @@ struct nhld_layout {
         return vertices[depth_value[a] < depth_value[b] ? a : b];
     }
 
-    template <class X, class Y>
-    vector<npath_piece> path(X&& x, Y&& y) const {
+    /* Ordered streaming path decomposition, without heap allocation. */
+    template <class X, class Y, class F>
+    void visit_path(X&& x, Y&& y, F visit) const {
         nidx_t a = vertices.inverse(forward<X>(x)), b = vertices.inverse(forward<Y>(y));
-        vector<npath_piece> left, right;
+        array<npath_piece, numeric_limits<nidx_t>::digits + 1> right;
+        nidx_t count = 0;
         while (head_position[a] != head_position[b]) {
             if (depth_value[head_position[a]] >= depth_value[head_position[b]]) {
-                left.push_back({position_value[head_position[a]], position_value[a] + 1, true});
+                invoke(visit, npath_piece{position_value[head_position[a]], position_value[a] + 1, true});
                 a = parent_position[head_position[a]];
             } else {
-                right.push_back({position_value[head_position[b]], position_value[b] + 1, false});
+                right[count++] = {position_value[head_position[b]], position_value[b] + 1, false};
                 b = parent_position[head_position[b]];
             }
         }
         if (depth_value[a] >= depth_value[b])
-            left.push_back({position_value[b], position_value[a] + 1, true});
+            invoke(visit, npath_piece{position_value[b], position_value[a] + 1, true});
         else
-            right.push_back({position_value[a], position_value[b] + 1, false});
-        while (!right.empty()) left.push_back(right.back()), right.pop_back();
-        return left;
+            right[count++] = {position_value[a], position_value[b] + 1, false};
+        while (count) invoke(visit, right[--count]);
+    }
+
+    template <class X, class Y>
+    vector<npath_piece> path(X&& x, Y&& y) const {
+        vector<npath_piece> result;
+        visit_path(forward<X>(x), forward<Y>(y), [&](npath_piece piece) { result.push_back(piece); });
+        return result;
     }
 };
+
+namespace nhld_detail {
+template <class V, class C>
+auto layout(V&& vertices, vector<nidx_t> roots, C children,
+            vector<nidx_t> parent, vector<nidx_t> depth, vector<nidx_t> subtree,
+            vector<nidx_t> heavy) {
+    nidx_t n = vertices.len(), timer = 0;
+    vector<nidx_t> head(n), position(n), at(n);
+    for (nidx_t root : roots) {
+        vector<pair<nidx_t, nidx_t>> tasks{{root, root}};
+        while (!tasks.empty()) {
+            auto [start, chain] = tasks.back();
+            tasks.pop_back();
+            for (nidx_t vertex = start; vertex >= 0; vertex = heavy[vertex]) {
+                head[vertex] = chain;
+                position[vertex] = timer;
+                at[timer++] = vertex;
+                invoke(children, vertex, [&](nidx_t child) {
+                    if (child != heavy[vertex]) tasks.emplace_back(child, child);
+                });
+            }
+        }
+    }
+    return nhld_layout<remove_cvref_t<V>>{forward<V>(vertices), move(parent), move(depth),
+        move(subtree), move(heavy), move(head), move(position), move(at), move(roots)};
+}
+
+template <class R, class V>
+auto rooted(R&& tree, V&& vertices) {
+    vector<nidx_t> heavy(tree.len(), -1);
+    for (nidx_t child : tree.child_position) {
+        nidx_t parent = tree.parent_position[child];
+        if (heavy[parent] < 0 || tree.subtree_value[heavy[parent]] < tree.subtree_value[child])
+            heavy[parent] = child;
+    }
+    auto children = [&](nidx_t position, auto visit) {
+        for (nidx_t child : nsub(nall(tree.child_position), tree.child_offset[position],
+                                 tree.child_offset[position + 1])) invoke(visit, child);
+    };
+    return layout(forward<V>(vertices), forward<R>(tree).root_position, children,
+                  forward<R>(tree).parent_position, forward<R>(tree).depth_value,
+                  forward<R>(tree).subtree_value, move(heavy));
+}
+}
 
 /*
 The construction port is invertible vertices, roots and children(vertex).  children
@@ -121,35 +165,23 @@ auto nhld(V vertices, R roots, C children) {
         if (heavy[p] < 0 || subtree[heavy[p]] < subtree[vertex]) heavy[p] = vertex;
     }
 
-    vector<nidx_t> head(n), position(n), at(n);
-    nidx_t timer = 0;
-    for (nidx_t root : root_position) {
-        vector<pair<nidx_t, nidx_t>> tasks{{root, root}};
-        while (!tasks.empty()) {
-            auto [start, chain] = tasks.back();
-            tasks.pop_back();
-            for (nidx_t vertex = start; vertex >= 0; vertex = heavy[vertex]) {
-                head[vertex] = chain;
-                position[vertex] = timer;
-                at[timer++] = vertex;
-                for (auto&& child_key : invoke(children, vertices[vertex])) {
-                    nidx_t child = vertices.inverse(child_key);
-                    if (child != heavy[vertex]) tasks.emplace_back(child, child);
-                }
-            }
-        }
-    }
-    return nhld_layout<V>{move(vertices), move(parent), move(depth), move(subtree),
-                          move(heavy), move(head), move(position), move(at),
-                          move(root_position)};
+    auto child_positions = [&](nidx_t vertex, auto visit) {
+        for (auto&& key : invoke(children, vertices[vertex]))
+            invoke(visit, vertices.inverse(key));
+    };
+    return nhld_detail::layout(move(vertices), move(root_position), child_positions,
+                               move(parent), move(depth), move(subtree), move(heavy));
 }
 
 template <class V>
 auto nhld(const nrooted<V>& tree) {
-    auto children = [&tree](auto&& vertex) {
-        return tree.children(forward<decltype(vertex)>(vertex));
-    };
-    return nhld(tree.keys(), tree.roots(), move(children));
+    return nhld_detail::rooted(tree, tree.keys());
+}
+
+/* Consume rooted metadata; the result no longer borrows the nrooted object. */
+template <class V>
+auto nhld(nrooted<V>&& tree) {
+    return nhld_detail::rooted(move(tree), move(tree.vertices));
 }
 
 /*

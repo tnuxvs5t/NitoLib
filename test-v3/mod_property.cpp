@@ -13,7 +13,36 @@ constexpr i128 power10(nidx_t exponent) {
     return value;
 }
 
+template <long long Mod>
+void check_decimal_input() {
+    mt19937 rng(1701);
+    for (nidx_t trial = 0; trial < 300; ++trial) {
+        string token;
+        bool negative = rng() & 1;
+        if (negative) token += '-';
+        long long expected = 0;
+        nidx_t digits = 1 + nidx_t(rng() % 100);
+        for (nidx_t i = 0; i < digits; ++i) {
+            nidx_t digit = nidx_t(rng() % 10);
+            token += char('0' + digit);
+            expected = (expected * 10 + digit) % Mod;
+        }
+        if (negative && expected) expected = Mod - expected;
+        istringstream input(token);
+        nmodint<Mod> actual;
+        input >> actual;
+        CHECK(!input.fail() && actual.value == expected);
+    }
+}
+
 int main() {
+    istringstream tiny_input("9");
+    nmodint<2> tiny;
+    tiny_input >> tiny;
+    CHECK(tiny.value == 1);
+    []<size_t... I>(index_sequence<I...>) {
+        (check_decimal_input<1 + I>(), ...);
+    }(make_index_sequence<16>{});
     constexpr i128 huge = power10(36);
     constexpr u128 widest = ~u128(0);
     static_assert(nmod_add(3, 4, 5) == 2);

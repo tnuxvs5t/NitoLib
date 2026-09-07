@@ -202,102 +202,144 @@ template <class V, class M>
 nseg(V, M) -> nseg<remove_cvref_t<decltype(declval<V>()[0])>, M>;
 
 /*
-A supplies tag_id(), compose(newer,older), and apply(aggregate,tag,length).
-Composition means older executes first.  apply must distribute over interval merge.
-Queries push tags and therefore are logically const but physically mutating.
+One policy owns node semantics: identity(), make(value), join(left,right), and optional
+init(tree), pull(tree,node), push(tree,node,left,right).  Missing pull uses join.
+try_apply(tree,node,left,right,command) completes a whole node or returns false without
+changing its semantic state; valid commands must succeed at leaves.  Deferred state
+belongs to the policy/payload, not to the traversal.  Padding is identity, never updated.
+All query ranges lie in [0,len()).  Cost is visited nodes times local policy cost;
+extra descent requires an algorithm-specific amortized proof.  Queries may push.
 */
-template <class S, class F, class M, class A>
+template <class T, class Ops>
 struct nlazyseg {
-    [[no_unique_address]] M merge;
-    [[no_unique_address]] A action;
+    [[no_unique_address]] Ops ops;
     nidx_t length = 0, base = 1;
-    vector<S> tree;
-    vector<F> lazy;
-    vector<unsigned char> pending;
+    vector<T> tree;
 
-    explicit nlazyseg(nidx_t n = 0, M operation = {}, A action_policy = {})
-        : merge(move(operation)), action(move(action_policy)), length(n),
+    /* n identity leaves; use a source when identity is not a valid element. */
+    explicit nlazyseg(nidx_t n = 0, Ops policy = {})
+        : ops(move(policy)), length(n),
           base(nidx_t(bit_ceil(nuidx_t(max(nidx_t(1), n))))),
-          tree(size_t(2) * base, merge.id()),
-          lazy(size_t(2) * base, this->action.tag_id()), pending(size_t(2) * base) {}
+          tree(size_t(2) * base, ops.identity()) {
+        if constexpr (requires { ops.init(*this); }) ops.init(*this);
+    }
 
     template <class V>
-    explicit nlazyseg(V source, M operation = {}, A action_policy = {})
-        : nlazyseg(source.len(), move(operation), move(action_policy)) {
-        for (nidx_t i = 0; i < length; ++i) tree[base + i] = source[i];
+    requires requires(V& source) { source.len(); source[0]; }
+    explicit nlazyseg(V source, Ops policy = {})
+        : nlazyseg(source.len(), move(policy)) {
+        for (nidx_t i = 0; i < length; ++i) tree[base + i] = ops.make(source[i]);
         for (nidx_t i = base; --i;) pull(i);
     }
 
     nidx_t len() const { return length; }
     bool empty() const { return !length; }
-
-    void put(nidx_t node, nidx_t width, const F& tag) {
-        tree[node] = action.apply(move(tree[node]), tag, width);
-        if (pending[node])
-            lazy[node] = action.compose(tag, lazy[node]);
-        else
-            lazy[node] = tag, pending[node] = true;
-    }
+    T& operator[](nidx_t node) { return tree[node]; }
+    const T& operator[](nidx_t node) const { return tree[node]; }
 
     void push(nidx_t node, nidx_t left, nidx_t right) {
-        if (!pending[node] || left + 1 == right) return;
-        nidx_t middle = midpoint(left, right);
-        put(node << 1, middle - left, lazy[node]);
-        put(node << 1 | 1, right - middle, lazy[node]);
-        lazy[node] = action.tag_id();
+        if constexpr (requires { ops.push(*this, node, left, right); })
+            if (left + 1 < right) ops.push(*this, node, left, right);
+    }
+
+    void pull(nidx_t node) {
+        if constexpr (requires { ops.pull(*this, node); }) ops.pull(*this, node);
+        else tree[node] = ops.join(tree[node << 1], tree[node << 1 | 1]);
+    }
+
+    /*
+    visit(tree,node,left,right,full) returns true to prune, false to descend left then
+    right with push/pull.  It must stop at leaves.  A partial node may be inspected or
+    skipped, but must not be changed as though fully covered.  No topology mutation.
+    Public push/pull and heap indices also permit custom branch order or multi-tree walks.
+    */
+    template <class V>
+    void walk(nidx_t left, nidx_t right, V&& visit) {
+        if (left == right) return;
+        auto descend = [&](auto&& self, nidx_t node, nidx_t lo, nidx_t hi) -> void {
+            if (right <= lo || hi <= left) return;
+            if (invoke(visit, *this, node, lo, hi, left <= lo && hi <= right)) return;
+            assert(lo + 1 < hi);
+            if (lo + 1 == hi) return;
+            push(node, lo, hi);
+            nidx_t mid = midpoint(lo, hi);
+            self(self, node << 1, lo, mid);
+            self(self, node << 1 | 1, mid, hi);
+            pull(node);
+        };
+        descend(descend, 1, 0, base);
+    }
+
+    template <class C>
+    void apply(nidx_t left, nidx_t right, const C& command) {
+        walk(left, right, [&](auto&, nidx_t node, nidx_t lo, nidx_t hi, bool full) {
+            return full && ops.try_apply(*this, node, lo, hi, command);
+        });
+    }
+
+    T fold(nidx_t left, nidx_t right) {
+        T result = ops.identity();
+        walk(left, right, [&](auto&, nidx_t node, nidx_t, nidx_t, bool full) {
+            if (full) result = ops.join(move(result), tree[node]);
+            return full;
+        });
+        return result;
+    }
+
+    T fold() const { return tree[1]; }
+    T get(nidx_t position) { return fold(position, position + 1); }
+    template <class U>
+    void set(nidx_t position, U&& value) {
+        walk(position, position + 1, [&](auto&, nidx_t node, nidx_t, nidx_t, bool full) {
+            if (full) tree[node] = ops.make(forward<U>(value));
+            return full;
+        });
+    }
+};
+
+template <class V, class Ops>
+nlazyseg(V, Ops) -> nlazyseg<remove_cvref_t<decltype(declval<Ops&>().make(declval<V&>()[0]))>, Ops>;
+
+/* Ordinary lazy assembly.  M is an ordered monoid.  A supplies tag_id(),
+compose(newer,older) (older first), apply(value,tag,length), distributing over M.
+Only internal nodes store tags.  Point replacement therefore has no stale leaf tag.
+*/
+template <class M, class A>
+struct nlazy_ops {
+    using T = remove_cvref_t<decltype(declval<M&>().id())>;
+    using F = remove_cvref_t<decltype(declval<A&>().tag_id())>;
+    [[no_unique_address]] M merge;
+    [[no_unique_address]] A action;
+    vector<F> lazy;
+    vector<unsigned char> pending;
+
+    nlazy_ops(M operation = {}, A action_policy = {})
+        : merge(move(operation)), action(move(action_policy)) {}
+    T identity() { return merge.id(); }
+    T make(T value) { return value; }
+    T join(T left, const T& right) { return invoke(merge, move(left), right); }
+    template <class Q>
+    void init(Q& q) {
+        lazy.assign(q.base, action.tag_id());
+        pending.assign(q.base, 0);
+    }
+    template <class Q>
+    bool try_apply(Q& q, nidx_t node, nidx_t left, nidx_t right, const F& tag) {
+        q[node] = action.apply(move(q[node]), tag, right - left);
+        if (node < q.base) {
+            lazy[node] = pending[node] ? action.compose(tag, lazy[node]) : tag;
+            pending[node] = true;
+        }
+        return true;
+    }
+    template <class Q>
+    void push(Q& q, nidx_t node, nidx_t left, nidx_t right) {
+        if (!pending[node]) return;
+        nidx_t mid = midpoint(left, right);
+        try_apply(q, node << 1, left, mid, lazy[node]);
+        try_apply(q, node << 1 | 1, mid, right, lazy[node]);
         pending[node] = false;
     }
-
-    void pull(nidx_t node) { tree[node] = invoke(merge, tree[node << 1], tree[node << 1 | 1]); }
-
-  private:
-    void apply0(nidx_t node, nidx_t left, nidx_t right, nidx_t query_left, nidx_t query_right, const F& tag) {
-        if (query_left <= left && right <= query_right) return put(node, right - left, tag);
-        push(node, left, right);
-        nidx_t middle = midpoint(left, right);
-        if (query_left < middle) apply0(node << 1, left, middle, query_left, query_right, tag);
-        if (middle < query_right) apply0(node << 1 | 1, middle, right, query_left, query_right, tag);
-        pull(node);
-    }
-
-    S fold0(nidx_t node, nidx_t left, nidx_t right, nidx_t query_left, nidx_t query_right) {
-        if (query_left <= left && right <= query_right) return tree[node];
-        push(node, left, right);
-        nidx_t middle = midpoint(left, right);
-        if (query_right <= middle) return fold0(node << 1, left, middle, query_left, query_right);
-        if (middle <= query_left) return fold0(node << 1 | 1, middle, right, query_left, query_right);
-        return invoke(merge, fold0(node << 1, left, middle, query_left, query_right),
-                      fold0(node << 1 | 1, middle, right, query_left, query_right));
-    }
-
-    void set0(nidx_t node, nidx_t left, nidx_t right, nidx_t position, S value) {
-        if (left + 1 == right) {
-            tree[node] = move(value);
-            lazy[node] = action.tag_id();
-            pending[node] = false;
-            return;
-        }
-        push(node, left, right);
-        nidx_t middle = midpoint(left, right);
-        if (position < middle)
-            set0(node << 1, left, middle, position, move(value));
-        else
-            set0(node << 1 | 1, middle, right, position, move(value));
-        pull(node);
-    }
-
-  public:
-    void apply(nidx_t left, nidx_t right, const F& tag) {
-        if (left < right) apply0(1, 0, base, left, right, tag);
-    }
-
-    S fold(nidx_t left, nidx_t right) {
-        return left == right ? merge.id() : fold0(1, 0, base, left, right);
-    }
-
-    S fold() const { return length ? tree[1] : merge.id(); }
-    S get(nidx_t position) { return fold(position, position + 1); }
-    void set(nidx_t position, S value) { set0(1, 0, base, position, move(value)); }
 };
 
 template <class T>
@@ -308,7 +350,7 @@ struct naddsum_action {
 };
 
 template <class T>
-using nlazy_addsum = nlazyseg<T, T, nadd<T>, naddsum_action<T>>;
+using nlazy_addsum = nlazyseg<T, nlazy_ops<nadd<T>, naddsum_action<T>>>;
 
 /*
 Sparse ordered segment kernel on [lo,hi).  -1 is an absent identity subtree and roots
@@ -354,59 +396,28 @@ struct nsparse_seg {
 
   private:
 
-    nidx_t set0(nidx_t root, long long left, long long right, long long position, T value) {
-        if (root < 0) root = make(merge_values.id());
-        if (left + 1 == right) {
-            pool[root].aggregate = move(value);
+    template <bool Copy>
+    nidx_t store(nidx_t root, T value, nidx_t a = -1, nidx_t b = -1) {
+        if constexpr (Copy) return make(move(value), a, b);
+        else {
+            if (root < 0) return make(move(value), a, b);
+            pool[root] = node{move(value), a, b};
             return root;
         }
-        long long middle = midpoint(left, right);
-        if (position < middle)
-            pool[root].left = set0(pool[root].left, left, middle, position, move(value));
-        else
-            pool[root].right = set0(pool[root].right, middle, right, position, move(value));
-        pull(root);
-        return root;
     }
 
-    nidx_t combine0(nidx_t root, long long left, long long right, long long position, const T& value) {
-        if (root < 0) root = make(merge_values.id());
-        if (left + 1 == right) {
-            pool[root].aggregate = invoke(merge_values, move(pool[root].aggregate), value);
-            return root;
-        }
-        long long middle = midpoint(left, right);
-        if (position < middle)
-            pool[root].left = combine0(pool[root].left, left, middle, position, value);
-        else
-            pool[root].right = combine0(pool[root].right, middle, right, position, value);
-        pull(root);
-        return root;
-    }
-
-    nidx_t set_copy0(nidx_t root, long long left, long long right, long long position, const T& value) {
-        if (left + 1 == right) return make(value);
+    /* Only handles cross recursion: child allocation may relocate the arena. */
+    template <bool Copy, class F>
+    nidx_t update0(nidx_t root, long long left, long long right, long long position, F& edit) {
+        if (left + 1 == right) return store<Copy>(root, invoke(edit, root));
         nidx_t a = root < 0 ? -1 : pool[root].left;
         nidx_t b = root < 0 ? -1 : pool[root].right;
         long long middle = midpoint(left, right);
         if (position < middle)
-            a = set_copy0(a, left, middle, position, value);
+            a = update0<Copy>(a, left, middle, position, edit);
         else
-            b = set_copy0(b, middle, right, position, value);
-        return make(invoke(merge_values, aggregate(a), aggregate(b)), a, b);
-    }
-
-    nidx_t combine_copy0(nidx_t root, long long left, long long right, long long position,
-                      const T& value) {
-        if (left + 1 == right) return make(invoke(merge_values, aggregate(root), value));
-        nidx_t a = root < 0 ? -1 : pool[root].left;
-        nidx_t b = root < 0 ? -1 : pool[root].right;
-        long long middle = midpoint(left, right);
-        if (position < middle)
-            a = combine_copy0(a, left, middle, position, value);
-        else
-            b = combine_copy0(b, middle, right, position, value);
-        return make(invoke(merge_values, aggregate(a), aggregate(b)), a, b);
+            b = update0<Copy>(b, middle, right, position, edit);
+        return store<Copy>(root, invoke(merge_values, aggregate(a), aggregate(b)), a, b);
     }
 
     T fold0(nidx_t root, long long left, long long right,
@@ -419,31 +430,21 @@ struct nsparse_seg {
                       fold0(pool[root].right, middle, right, query_left, query_right));
     }
 
+    template <bool Copy>
     nidx_t merge0(nidx_t left_root, nidx_t right_root, long long left, long long right) {
         if (left_root < 0) return right_root;
         if (right_root < 0) return left_root;
         if (left + 1 == right) {
-            pool[left_root].aggregate = invoke(merge_values, move(pool[left_root].aggregate),
-                                               pool[right_root].aggregate);
-            return left_root;
+            if constexpr (Copy)
+                return make(invoke(merge_values, pool[left_root].aggregate, pool[right_root].aggregate));
+            else
+                return store<false>(left_root, invoke(merge_values, move(pool[left_root].aggregate),
+                                                     pool[right_root].aggregate));
         }
         long long middle = midpoint(left, right);
-        pool[left_root].left = merge0(pool[left_root].left, pool[right_root].left, left, middle);
-        pool[left_root].right = merge0(pool[left_root].right, pool[right_root].right, middle, right);
-        pull(left_root);
-        return left_root;
-    }
-
-    nidx_t merge_copy0(nidx_t left_root, nidx_t right_root, long long left, long long right) {
-        if (left_root < 0) return right_root;
-        if (right_root < 0) return left_root;
-        if (left + 1 == right)
-            return make(invoke(merge_values, pool[left_root].aggregate,
-                               pool[right_root].aggregate));
-        long long middle = midpoint(left, right);
-        nidx_t a = merge_copy0(pool[left_root].left, pool[right_root].left, left, middle);
-        nidx_t b = merge_copy0(pool[left_root].right, pool[right_root].right, middle, right);
-        return make(invoke(merge_values, aggregate(a), aggregate(b)), a, b);
+        nidx_t a = merge0<Copy>(pool[left_root].left, pool[right_root].left, left, middle);
+        nidx_t b = merge0<Copy>(pool[left_root].right, pool[right_root].right, middle, right);
+        return store<Copy>(left_root, invoke(merge_values, aggregate(a), aggregate(b)), a, b);
     }
 
     nidx_t clone0(nidx_t root) {
@@ -454,19 +455,25 @@ struct nsparse_seg {
 
   public:
     nidx_t set(nidx_t root, long long position, T value) {
-        return set0(root, lo, hi, position, move(value));
+        auto edit = [&](nidx_t) { return move(value); };
+        return update0<false>(root, lo, hi, position, edit);
     }
 
     nidx_t combine(nidx_t root, long long position, const T& value) {
-        return combine0(root, lo, hi, position, value);
+        auto edit = [&](nidx_t leaf) {
+            return invoke(merge_values, leaf < 0 ? merge_values.id() : move(pool[leaf].aggregate), value);
+        };
+        return update0<false>(root, lo, hi, position, edit);
     }
 
     nidx_t set_copy(nidx_t root, long long position, const T& value) {
-        return set_copy0(root, lo, hi, position, value);
+        auto edit = [&](nidx_t) { return value; };
+        return update0<true>(root, lo, hi, position, edit);
     }
 
     nidx_t combine_copy(nidx_t root, long long position, const T& value) {
-        return combine_copy0(root, lo, hi, position, value);
+        auto edit = [&](nidx_t leaf) { return invoke(merge_values, aggregate(leaf), value); };
+        return update0<true>(root, lo, hi, position, edit);
     }
 
     T fold(nidx_t root, long long left, long long right) const {
@@ -477,11 +484,11 @@ struct nsparse_seg {
     T get(nidx_t root, long long position) const { return fold(root, position, position + 1); }
 
     nidx_t merge(nidx_t left_root, nidx_t right_root) {
-        return merge0(left_root, right_root, lo, hi);
+        return merge0<false>(left_root, right_root, lo, hi);
     }
 
     nidx_t merge_copy(nidx_t left_root, nidx_t right_root) {
-        return merge_copy0(left_root, right_root, lo, hi);
+        return merge0<true>(left_root, right_root, lo, hi);
     }
 
     nidx_t clone(nidx_t root) { return clone0(root); }

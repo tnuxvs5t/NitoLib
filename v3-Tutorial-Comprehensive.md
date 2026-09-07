@@ -55,7 +55,7 @@ core
 ├── io
 ├── view
 │   ├── hash ── func ─┬─ debug（同时依赖 io）
-│   │                  ├─ discrete
+│   │                  ├─ discrete ── vec_bag
 │   │                  └─ graph ── graph_algo / graph_store / tree
 │   ├── ds ── flow
 │   └── string / automata / wavelet / linear / geom
@@ -81,6 +81,7 @@ core
 - `nchmin(target,candidate)` / `nchmax(target,candidate)` 在严格序更优时原地赋值，并返回是否发生更新。
 - V3 默认不做边界检查、溢出检查和契约恢复。
 - view、func、graph descriptor 都可能只是借用；owner 移动、销毁或结构修改后，旧投影可能失效。
+- `nall(lvalue)` 保留原对象可用的 inverse，仍然只借用；descriptor 可能持有位置数组或 hash，复制成本不一定是常数。
 - 操作对象通常用 `id()` 给单位元，用 `operator()(left,right)` 合并。
 - 结合、交换、幂等、可逆、单调等要求由具体算法的注释决定，不由统一 concept 宣称。
 - `[[no_unique_address]]` 让无状态策略通常不占额外空间。
@@ -393,7 +394,7 @@ assert(scores("bob") == 95);     // nall 无结构 inverse，构造一次 hash f
 选择顺序是：
 
 ```text
-可复制且具有结构 inverse 的 keys  -> 复制轻量 descriptor，保持代数定位
+可复制且具有 inverse 的 keys      -> 复制 descriptor，复用已有定位
 其他 keys                           -> 物化静态 hash inverse
 ```
 
@@ -417,6 +418,11 @@ auto f = nanchors(keys, values, locate);
 
 所有 `nanchors` 形式都要求两组序列等长、key 唯一且查询 key 存在。hash/equality 必须一致；借用
 owner 必须存活，建表后 key 的长度、次序和值保持稳定，payload value 可以修改。
+
+已有 hash inverse 的 descriptor 本身可能拥有整张表。需要复用同一张表时，先保存
+`auto keys = ninvert(nall(names));`，再用 `nanchors(nall(keys), nall(score))`；这里
+`nall(keys)` 保留 inverse，只复制借用描述，不复制 hash。`keys` 必须比绑定结果活得更久。
+lookup 的复杂度继承实际 inverse；自定义 inverse 不必是常数时间。
 
 ### 4.3 组合接口
 
@@ -465,6 +471,12 @@ auto materialized = ncollect(sorted_view);           // vector<int>{10,20,30,40}
 局部下标容器。重复位置是合法的；若 source 产生左值，它们会别名到同一元素。
 `ncollect` 是明确物化边界，会递归移除 `nzip/nproduct` 所产生 pair/tuple 内部的引用。
 
+`npositions(source,predicate)` 返回可复用的命中位置数组，`nfilter` 复用该计划生成内核。
+同一计划可通过 `nselect(nall(a), nall(plan))` 应用于多组对齐数据；其顺序稳定，每个位置
+只调用一次 predicate。`ncollect/nprefix/nsuffix/naccumulate/neach`、查找、计数、极值和
+二分算法只在调用期间借用 source，不复制它拥有的位置数组或 hash，也接受 move-only 左值。
+有状态 accessor 的调用会作用于原 descriptor；这些终结算法不延长输入寿命。
+
 `nindexed` 只是 `nrange + nzip` 的命名结构内核，不分配也不物化：
 
 ```cpp
@@ -486,6 +498,8 @@ nslice(source,left,right)             [left,right)
 nstride(source,first,last,step)       非零步长
 nstride(source,step)                  正数从左，负数从右
 nfilter(source,predicate)             稳定保留命中位置
+npositions(source,predicate)          vector<nidx_t> 筛选计划，可供多个序列复用
+nunique(source,together={})           稳定保留每个相邻归并段的首位置
 nindexed(source)                      (position,value) 惰性 view
 nargsort(source,compare,projection)   vector<nidx_t> 排序计划
 norder(source,compare,projection)     应用计划，不移动值
@@ -505,7 +519,7 @@ nsort(source,compare,projection)      原地排序 source[position] 左值
 nreverse_inplace(source)              原地反转值
 naccumulate(source,initial,operation) 从左到右折叠
 neach(source,action)                  按序调用并返回 action
-nfind_if / ncount_if                  返回位置（未找到为 len）/数量
+nfind_if / ncontains / ncount_if      返回位置 / 是否存在匹配值 / 数量
 nall_of / nany_of / nnone_of         量词
 nargmin / nargmax                     极值位置（空序列为 len）
 nlower / nupper                       已排序位置序列的插入位置
@@ -571,6 +585,18 @@ OP 根据保存的 accumulator 构造一个新值，不应修改旧 accumulator�
 `norder(nfunc)` 正好相反：后者重排 domain，但 evaluator 与底层值都不变。原地操作要求
 source 产生可交换左值；对重复别名位置排序没有有用的排列语义，调用者应避免它。
 
+`nunique(source,together)` 不移动值，也不做全局集合去重；它按原位置顺序比较每一对相邻
+元素，并保留第一个位置以及所有满足 `!together(previous,current)` 的位置。默认
+`together` 是 `equal_to<>`，所以常见的 `nunique(norder(source))` 会得到排序后的不同值视图。
+返回结果仍别名到各段的首元素；构造时保存的位置计划不会因后续值修改而重算。对 `nfunc`
+比较的是枚举到的 value，保留下来的 domain key 与原 evaluator 关系不变。
+
+`ncontains(source,target,compare,projection)` 是线性值查询，按位置检查
+`compare(projection(source[i]),target)`，命中后立即停止；默认使用 `equal_to<>` 和
+`identity`。它检查 source 枚举到的 value，而不是 `nfunc` 的 semantic key；空序列返回
+`false`，时间复杂度为 `O(n)`、额外空间为 `O(1)`。需要已排序序列上的对数查询时使用
+`nlower/nupper`，不要把 `ncontains` 当成二分查找。
+
 分块不伪造“起点 key”，而是返回以完整 `[left,right)` 为 domain key 的 `nfunc`：
 
 ```cpp
@@ -590,13 +616,18 @@ nwindows(source,width,step=1)   width/step > 0，只枚举完整窗口
 nruns(source,together={})       together(previous,current) 定义相邻归并
 ```
 
-chunk 的每次求值都会复制普通 source descriptor，这使取出的子块可与外层
-chunk function 分离，代价是 descriptor 必须可复制。owner 的寿命仍然不会被延长：
-普通容器应传 `nall(owner)`，不应把 owner 本身作为 source 期待隐式共享。
+chunk 构造时把 source descriptor 移入一次共享存储，子块保留该存储，因此可以脱离外层
+chunk function；每次取子块只复制常数大小的描述，不分配、不复制整个位置计划或 hash。
+move-only source 也能分块。子块共享 accessor 的可变状态；底层外部 owner 的借用寿命仍
+不会延长。普通容器传 `nall(owner)`，source 为左值时构造分块仍按值复制一次。
 
-主要复杂度：已有计划的 select/slice/stride 构造 `O(1)`；filter/runs 构造 `O(n)`；
+例如 `nblocks(norder(nall(a)), 1)` 只保存一份排序计划，取完所有子块的描述成本为 `O(n)`。
+原来的子块脱离能力保留，但带内部可变状态的 accessor 从“每个子块独立复制”改为共享。
+这类共享分块在运行期构造，不再支持常量求值；`nblock` 的单个普通切片仍可用于常量求值。
+
+以下均另计 descriptor 捕获成本和源访问成本：已有借用计划的 select/slice/stride 构造 `O(1)`；filter/unique/runs 构造 `O(n)`；
 argsort/order/sort 为 `O(n log n)`；blocks/windows 的 interval domain 是惰性
-`O(1)` 描述，但枚举全部子块当然与子块数成正比。
+`O(1)` 描述，分块额外分配一次共享源；枚举全部子块与子块数成正比。
 
 ## 5. `narena` 与根代数
 
@@ -613,7 +644,7 @@ argsort/order/sort 为 `O(n log n)`；blocks/windows 的 interval domain 是惰�
 
 头文件：`src-v3/fhq.hpp`
 
-`nfhq<T,Pull,Push>` 把节点池、随机优先级和策略放在一个 kernel 中。`-1` 是空根；
+`nfhq<T,Ops>` 把节点池、随机优先级和一个策略对象放在一个 kernel 中。`-1` 是空根；
 同一 kernel 可以同时持有任意多棵互不相交的树。
 
 ```cpp
@@ -638,6 +669,9 @@ rank(handle)                 节点在当前根中的位置
 root_of(handle)              当前根
 expose(handle) / rebuild(h)  保存 handle 的修改协议
 sequence(root)               按中序访问 payload 的 nview
+edit(root,left,right,fn)     隔离区间，将 fn(q,middle) 返回的根拼回
+apply(root,command)          尝试整棵子树更新，失败则下钻
+walk(root,visit,element)     自定义剪枝与中序访问
 ```
 
 承重契约：
@@ -645,11 +679,134 @@ sequence(root)               按中序访问 payload 的 nview
 - merge 的两棵树必须来自同一个 kernel 且节点集合不相交。
 - split/merge 消耗旧的根语义；不要把输入 root 继续当独立树使用。
 - `split_by` 的谓词沿中序必须先真后假。
-- `Pull`/`Push` 接收 `(*this,handle)`，不能跨分配保存节点引用。
-- 复杂度是随机优先级下的期望 `O(log n)`。
+- 可选的 `ops.pull(q,handle)` / `ops.push(q,handle)` 不能跨分配保存节点引用。
+- 单次 split/merge/kth/rank 的复杂度是随机优先级下期望 `O(log n)`，假定每次策略调用 `O(1)`。
+  当前 build 连续 merge，保守界为期望 `O(n log n)`。apply/walk 另按实际访问量计费。
 
 这解决了 V2 merge/split 卡手的根因：交易对象是同一 kernel 中的普通整数根，不再由
 每棵树的 owner/domain 类型阻止组合。安全边界放在清楚的 destructive contract 中。
+
+#### 先学区间交易，再写策略
+
+`edit` 相当于 split 两次、处理片段、merge 两次。回调接收 `q` 和隔离后的普通整数根，
+**必须返回要拼回的根**，外面也必须保存返回值。可以修改、替换、删除或重新拼接片段。
+
+```cpp
+// q 和 root 接上面的例子。删除位置 [1,3)，得到 3,2。
+root = q.edit(root, 1, 3, [](auto&, nidx_t) { return nidx_t(-1); });
+// 空区间也调用回调，因此可以在位置 1 插入新节点，得到 3,9,2。
+root = q.edit(root, 1, 1, [](auto& tree, nidx_t middle) {
+    assert(middle == -1);
+    return tree.make(9);
+});
+```
+
+旧 root 已被消费。返回的片段不能与保留的左右两侧共享节点；被丢弃的节点仍占 arena
+空间。回调可以扩容节点池，整数 handle 不失效，但引用/指针可能失效。`edit` 没有异常回滚。
+这里的区间是调用时的秩区间，要求 `0 <= left <= right <= size(root)`。
+
+#### 一个策略如何维护区间加与和
+
+以下是可独立编译的完整例子。先只看 `pull/push`：`up(h)` 先重算结构 size，再调用
+`ops.pull`；`down(h)` 调用 `ops.push`。两者都可省略，默认 `nfhq<T>` 就不维护额外摘要。
+
+```cpp
+#include "src-v3/fhq.hpp"
+
+struct sum_item { long long x, sum, add = 0; };
+struct sum_ops {
+    void pull(auto& q, nidx_t h) const {
+        auto& node = q[h];
+        node.value.sum = node.value.x;
+        if (node.left >= 0) node.value.sum += q[node.left].value.sum;
+        if (node.right >= 0) node.value.sum += q[node.right].value.sum;
+    }
+    bool try_apply(auto& q, nidx_t h, long long delta) const {
+        auto& s = q[h].value;
+        s.x += delta;
+        s.sum += delta * q.size(h);
+        s.add += delta;
+        return true;
+    }
+    void push(auto& q, nidx_t h) const {
+        long long delta = q[h].value.add;
+        if (!delta) return;
+        for (nidx_t child : {q[h].left, q[h].right})
+            if (child >= 0) try_apply(q, child, delta);
+        q[h].value.add = 0;
+    }
+    void apply_one(auto& q, nidx_t h, long long delta) const {
+        q[h].value.x += delta;
+    }
+};
+
+int main() {
+    auto q = nmake_fhq<sum_item>(sum_ops{});
+    vector<sum_item> a{{1, 1}, {2, 2}, {3, 3}, {4, 4}};
+    nidx_t root = q.build(nall(a));
+    root = q.edit(root, 1, 4, [](auto& tree, nidx_t middle) {
+        tree.apply(middle, 5LL);
+        return middle;
+    });
+    assert(q[root].value.sum == 25);
+    nidx_t h = q.kth(root, 2); // kth 已经 push 到目标节点
+    q[h].value.x = 10;
+    q.rebuild(h);
+    assert(q[root].value.sum == 27);
+}
+```
+
+策略对象实际存放在 `q.ops`，可以携带运行期参数和 move-only 状态。`T` 仍显式指定，
+以免把 proxy/reference 初值误推导成节点拥有的值。`nmake_fhq<T>(ops,seed)` 推导策略类型。
+如果修改的是早先保存的 handle，先 `expose(h)` 下推祖先，再改自身值，再 `rebuild(h)`。
+不要在尚有未下传状态的节点上直接 pull，否则孩子的旧摘要会覆盖父节点的新摘要。
+
+#### 不能整段完成时发生什么
+
+`apply(root,command)` 只把 command 当作当前操作，不要求它具有 `tag_id/compose`：
+
+```text
+空根：结束
+ops.try_apply(q,h,command) == true：结束
+否则：down(h) → 更新左子树 → ops.apply_one(q,h,command)
+      → 更新右子树 → up(h)
+```
+
+成功必须同时维护摘要、自身元素和延迟表示；失败必须保持语义状态不变，合法命令必须
+在叶子成功。`apply_one` 只更新当前节点自身元素，不重复更新左右子树，不记录整段 tag；
+随后由 `up` 重建摘要。上面的加法总是成功，所以不会执行 fallback，但 `apply` 实例化时
+仍需提供 `apply_one` 表达式。对 chmin/取模，这个钩子会实际执行。
+
+固定线段树的内部节点一般只合并两个孩子；FHQ 的每个内部节点还拥有一个元素。
+因此共享的是 command 的数学含义，不是节点布局。两种树共用 chmin/取模 command 的
+完整对拍见 [conditional_tree_property.cpp](./test-v3/conditional_tree_property.cpp)。
+
+`walk(root,visit,element)` 不要求 command。`visit(q,h)` 返回 true 就剪掉子树；返回 false
+则 `down → 左子树 → element(q,h) → 右子树 → up`。可用摘要剪枝，在 element 中收集或修改
+自身元素。与 segment 的 walk 不同，FHQ 的叶子可以返回 false，再交给 element 处理。
+回调不能改变当前遍历的拓扑；需要选择不同分支顺序或联动多棵根时，直接使用
+`q[h].left/right`、`down/up` 写递归。剪枝不会自动终止其他分支，找到答案后可捕获一个
+found 标志，让后续 visit 返回 true。
+
+#### 反转、位置标记与摊还界
+
+反转会改变中序，是结构操作。策略需要配合 `swap_children(h)`，维护反向摘要或一个
+已证明正确的摘要反转变换，并下传反转状态。交换聚合（例如 sum）不必保存双份摘要；
+非交换聚合则不能只交换孩子、保留原摘要。核心不会替策略实现反转。
+
+位置相关标记还必须变换坐标。长度 `L` 的子树上加 `p*i+b`，反转后延迟标记变成
+`(-p)*i + b+p*(L-1)`；向右孩子下传时，截距还要加 `p*(left_size+1)`。
+先反转再更新与先更新再反转一般不同。可参考
+[fhq_position_property.cpp](./test-v3/fhq_position_property.cpp)：它测试仿射复合、位置偏移、
+反转、切分重排和非交换摘要，逐项与 vector 对拍。
+
+按秩维护序列可以自由改值；按 key 排序的根若用于 split_by/有序搜索，改值后必须保持
+比较器下的中序顺序，否则应重新插入或重建。parent 指针也意味着这仍是 destructive
+结构，不能直接共享节点做持久化。
+
+`apply/walk` 的成本是访问节点数乘局部操作成本，递归栈深度等于树高。
+固定线段树的 Beats 势能证明依赖固定分组；FHQ 的 split/merge/reorder 会改变分组，
+不能仅因为对拍通过，就照搬其摊还界。`edit` 只保证自身期望 `O(log n)` 的结构成本。
 
 ### 6.1 `nbag`：用一个 FHQ 根装配有序多重集
 
@@ -694,6 +851,40 @@ bag.upper_bound(key, order, projection);
 
 这个适配器只复用 FHQ 真正有用的机关：arena、随机平衡、父指针、子树大小与 destructive
 根代数。它不增加 owner/domain 外壳；同时也不为了“复用 split”而让只读查询物理改树。
+
+### 6.2 `nvec_bag`：vector 后端的朴素基线
+
+头文件：`src-v3/vec_bag.hpp`
+
+`nvec_bag<T,C>` 用一个 `vector<T>` 保存同样的有序多重集语义，主要面向启发式/局部搜索中
+复制与随机访问远多于插入、且需要连续内存和缓存友好的场景；也适合作为题解、对拍和
+benchmark 中的朴素参照。它仍要求显式的 `T`、稳定严格弱序，并把 source 的每个元素显式
+递归 owning 后物化为 `T`；`T` 本身应是 owning value type。source 构造先稳定排序，因此等价值保留 source 顺序。动态插入使用 `nupper`，
+边界查询使用 `nlower/nupper`：
+
+```text
+insert / emplace                 插入并返回当时的位置
+erase_one / erase_all / erase_at 按值删除 / 按位置删除
+lower_bound / upper_bound        返回位置；可传 compare / projection
+equal_range / count / find       返回 [left,right) / 数量 / 位置
+contains / order_of_key          存在性 / 小于 key 的数量
+kth / front / back / sequence    只读访问 / 只读 nview
+```
+
+vector 的位置会被插入和删除移动，因此这里没有 `erase_handle` 或 `nodes`：`insert/emplace`
+返回的是当时的位置，不是可跨修改保存的 handle。`insert`、任一 erase 和 `clear()` 会使旧
+sequence 失效；`reserve` 可能使已经取得的元素引用失效。`kth/front/back/operator[]` 使用
+`decltype(auto)`，所以普通 `T` 返回 `const T&`，`T = bool` 则返回安全的 `vector<bool>` 值。
+复制 `nvec_bag` 本身会复制其 `vector<T>`，因此两个 bag 的元素存储互不共享；但
+`sequence()` 是借用的只读 view，不是脱离 bag 的副本。
+
+边界查询的投影序列必须已经按传入 order 排好，和 `nbag` 的 bounds 重载具有相同前提。
+`lower_bound/upper_bound/order_of_key/find/contains` 是 `O(log n)`，`kth` 与 sequence 每次
+访问是 `O(1)`；vector 插入、删除需要移动后缀，均为 `O(n)`。source 构造的稳定排序为
+`O(n log n)`，存储只保留当前元素，删除会立即释放被删除元素但 vector capacity 可能保留。
+
+这是故意保留的基线，不是通用 `nvector` 或 `nbag` 的 drop-in 替换：需要稳定 handle、
+期望对数插入/删除或 FHQ 根操作时应使用 `nbag`。
 
 ## 7. 区间结构：按真正不同的 merge 语义拆分
 
@@ -808,15 +999,32 @@ seg.set(2, 10);
 `pointwise(other)` 对同位置叶子逐点 destructive merge，再重建内部节点。两棵树必须长度
 相同，且操作对象具有同样的数学意义。复杂度 `O(n)`，不是伪装成 `O(log n)` 的根合并。
 
-### 7.3 `nlazyseg`
+### 7.3 `nlazyseg`：从普通 lazy 到条件下钻
+
+先按需求选入口，不必一开始就编写所有策略钩子：
+
+| 需求 | 入口 |
+| --- | --- |
+| 点改与区间结合聚合 | 保留更紧凑的迭代 `nseg` |
+| 区间加、区间和 | `nlazy_addsum<T>` |
+| 普通可复合 lazy 动作 | `nlazyseg(source, nlazy_ops{merge,action})` |
+| Beats、取模、自定义节点不变量 | `nlazyseg(source, ops)` |
+| 剪枝、找位置、临时修改叶子 | `walk`；更特殊的递归用公开 `push/pull` |
+
+#### 普通 lazy：一个策略参数
 
 ```cpp
+vector<long long> a{1, 2, 3, 4};
 nlazy_addsum<long long> seg(nall(a));
 seg.apply(1, 4, 5);
 assert(seg.fold(0, 4) == 25);
+seg.set(2, 10);
+assert(seg.get(2) == 10);
 ```
 
-一般形式是 `nlazyseg<State,Tag,Merge,Action>`：
+`nlazyseg<Node,Ops>` 是底层形式，普通使用由初值和策略推导 Node 与 Ops。
+`nlazy_ops{merge,action}` 是常规 lazy 的装配器，自动从 `merge.id()`、`action.tag_id()`
+推导聚合与 tag 类型，并管理内部节点的待下传状态。
 
 ```text
 Merge.id()
@@ -826,7 +1034,162 @@ Action.compose(newer,older)          先执行 older，再执行 newer
 Action.apply(aggregate,tag,length)   对区间聚合施加 tag
 ```
 
-`apply` 必须对 Merge 可分配。查询会 push lazy，因此逻辑上是查询、物理上可能修改内部缓存。
+`Merge` 满足结合律和单位元律，按左到右合并，允许非交换。Action 的恒等动作不改值；
+动作需对区间合并可分配，且 `apply(apply(s,older),newer)` 与 compose 的结果相同。
+下面是可独立编译的区间仿射和示例，系数顺序刻意写全：
+
+```cpp
+#include "src-v3/segment.hpp"
+
+struct affine_tag { long long a = 1, b = 0; };
+struct affine_sum {
+    affine_tag tag_id() const { return {}; }
+    affine_tag compose(affine_tag newer, affine_tag older) const {
+        return {newer.a * older.a, newer.a * older.b + newer.b};
+    }
+    long long apply(long long sum, affine_tag f, nidx_t length) const {
+        return f.a * sum + f.b * length;
+    }
+};
+
+int main() {
+    vector<long long> a{1, 2, 3, 4};
+    nlazyseg seg(nall(a), nlazy_ops{nadd<long long>{}, affine_sum{}});
+    seg.apply(0, 4, affine_tag{2, 1}); // 3,5,7,9
+    seg.apply(1, 3, affine_tag{3, 4}); // 3,19,25,9
+    assert(seg.fold() == 56);
+    seg.set(2, 7);
+    assert(seg.fold(1, 3) == 26);
+}
+```
+
+数值范围必须保证计算不溢出，也可使用满足这些定律的模数类型。`nlazy_ops` 原样将同一
+tag 传给两个孩子，适合逐元素同构动作；依赖子段相对位置的动作需要自定义 push/偏移。
+
+旧的四参数 `nlazyseg<S,F,M,A>(source,m,a)` 已替换为
+`nlazyseg(source,nlazy_ops{m,a})`，不保留第二套递归实现。`nlazy_addsum<T>` 的常见写法不变。
+旧 FHQ 的两个回调则迁入一个 Ops 的 `pull/push` 方法；策略状态经 `.ops` 访问。
+
+#### Node、Command、Tag 各自是什么
+
+Node 是当前区间的信息；Command 是这次要求做的事；Tag 是留给孩子以后兑现的状态。
+三者不必同型。普通仿射可以把 command 本身复合成 tag；chmin 可以用父节点最大值
+隐式保存约束；取模只能剪枝或下钻，不需要保存“取模历史”。
+
+自定义策略只在实际调用对应操作时检查表达式，没有统一 traits 或继承基类：
+
+| 策略表达式 | 用途 |
+| --- | --- |
+| `ops.identity()` | 空区间和补齐叶子的 Node；join 的单位元 |
+| `ops.make(value)` | 将初值或 set 的值构造为一个叶子 Node |
+| `ops.join(left,right)` | 左右区间保序合并；fold 使用它 |
+| `ops.init(q)`，可省略 | 分配策略自身所需的状态；建叶之前调用 |
+| `ops.pull(q,h)`，可省略 | 从孩子重建节点；省略时使用 join |
+| `ops.push(q,h,lo,hi)`，可省略 | 将父节点的延迟状态兑现到两个孩子 |
+| `ops.try_apply(q,h,lo,hi,cmd)` | 尝试完成本次整段更新，返回 bool |
+
+`q[h]` 直接访问 Node，根为 1、孩子为 `2*h` 与 `2*h+1`，根覆盖 `[0,q.base)`，
+`base` 是至少为 1 的二次幂。真实区间只有 `[0,q.len())`，其余叶子是 identity；
+必须正确合并它们，不能给 padding 应用真实元素的更新。`fold()` 返回根 Node，
+`fold(l,r)` 返回按左到右合并的 Node，用户从中读取 sum/max 等字段。
+
+节点存储是一个 vector；不用 tag 的策略不会产生任何通用 lazy 数组。常规装配器则
+只为内部节点保存 tag/pending。Ops 可持有运行期状态或 move-only 成员，不能在移动树后
+继续依赖旧树地址。当前构造需要可复制的 identity Node；move-only 策略不等于 move-only
+Node 支持。没有 source 的显式 `nlazyseg<Node,Ops>(n,ops)` 创建 n 个 identity 叶子，
+仅在 identity 也能表示合法元素时使用，否则提供 source。
+
+`set` 调用 make 替换叶子；叶子的延迟语义必须随 payload 一起重置，不能在外部另藏旧
+叶子 tag。默认装配器不保存叶子 tag，因此自动满足这一条。
+
+#### 一个没有 Tag 的例子：区间取模
+
+下面完整程序维护非负整数的区间取模、区间和与点赋值。这里的 `long long mod`
+就是 Command，没有 compose，也没有 push：
+
+```cpp
+#include "src-v3/segment.hpp"
+
+struct mod_info { long long sum = 0, maximum = 0; };
+struct mod_ops {
+    mod_info identity() const { return {}; }
+    mod_info make(long long x) const { return {x, x}; }
+    mod_info join(mod_info a, mod_info b) const {
+        return {a.sum + b.sum, max(a.maximum, b.maximum)};
+    }
+    bool try_apply(auto& q, nidx_t h, nidx_t lo, nidx_t hi, long long mod) const {
+        if (q[h].maximum < mod) return true;
+        if (hi - lo != 1) return false;
+        q[h] = make(q[h].sum % mod);
+        return true;
+    }
+};
+
+int main() {
+    vector<long long> a{17, 8, 23, 4};
+    nlazyseg seg(nall(a), mod_ops{});
+    seg.apply(0, 3, 7LL); // 3,1,2,4
+    assert(seg.fold().sum == 10);
+    seg.set(1, 20LL);
+    seg.apply(1, 4, 6LL); // 3,2,2,4
+    assert(seg.fold(1, 4).sum == 8);
+}
+```
+
+要求值非负、模数正。一次真正改变 `x` 的取模使它小于原值的一半：若 `m <= x/2`，
+余数小于 m；否则余数为 `x-m < x/2`。势能取各元素 `log2(x+1)` 之和，每次有效改变
+消耗常数量级势能，点赋值重新注入势能。设初值与赋值都不超过 V，s 次点赋值、q 次操作，
+总时间可界为 `O(n + (q + (n+s) log(V+1)) log n)`，而非每次修改都 `O(log n)`。
+
+#### try_apply 的三条承重约定
+
+1. 返回 true：整个节点已经正确，包括摘要、叶子值和延迟表示；也可以只是无须修改。
+2. 返回 false：语义状态必须保持不变。框架随后 push、下钻、pull，不能留下半次更新。
+3. 合法命令必须在真实叶子成功。debug 有断言辅助发现错误，但违反契约不承诺恢复。
+
+`apply(l,r,cmd)` 只对**完全覆盖**的节点调用 try_apply。部分覆盖会继续下钻，不会因
+父区间碰巧满足整段更新条件就改掉区间外的元素。时间是实际访问节点数乘局部代价。
+push 还要有自己的正确性证明：父节点成功存下的约束必须能在孩子上兑现。
+
+chmin 的常见节点为 `sum/max1/max2/count_max1`：`max1 <= cap` 无须修改；
+`max2 < cap < max1` 时只降低最大值组，否则返回 false。第二大值必须是**严格次大值**，
+判断也必须是严格不等号。更新 sum 后还要保存对孩子的约束，可直接用父节点 max1
+隐式下传；若无元素则按 identity 处理。完整可运行实现见
+[conditional_tree_property.cpp](./test-v3/conditional_tree_property.cpp)。
+
+仅含区间 chmin、点赋值、sum/max 查询的固定树，可用所有节点中不同值个数之和作势能，
+初始 `O(n log n)`。一次失败的完整覆盖会合并至少两个值层；部分覆盖的边界节点与点赋值
+每次最多在 `O(log n)` 个祖先上增加值层。由此总成本为 `O((n+q) log n)`，假定节点操作
+常数时间。这一证明没有覆盖区间加、chmax 或任意其他新命令，也没有覆盖任意 FHQ 重排。
+
+#### walk：查询剪枝与 adhoc 下钻
+
+`walk(l,r,visit)` 只访问相交节点，调用 `visit(q,h,lo,hi,full)`；true 表示当前子树已处理
+或应跳过，false 表示由框架 push 后从左到右递归并 pull。叶子必须返回 true。
+`full` 明确区分部分覆盖：允许根据整个节点 maximum 判断“这一段里肯定没有答案”并剪枝，
+但只有完整覆盖时才能修改整个节点。
+
+例如在上面的 mod_ops 树中找 `[left,right)` 内第一个大于 threshold 的位置，未找到返回 right：
+
+```cpp
+nidx_t found = right;
+seg.walk(left, right, [&](auto& q, nidx_t h, nidx_t lo, nidx_t hi, bool) {
+    if (found < right || q[h].maximum <= threshold) return true;
+    if (hi - lo != 1) return false;
+    found = lo;
+    return true;
+});
+```
+
+这个查询只在可能有答案的分支下降，找到后停止后续分支；在常数时间摘要操作下为
+`O(log n)`。它没有伪装成一个“查询 tag”。需要从右向左选分支、多棵同域树联动、
+回溯自定义信息时，可以直接操作 `push(h,lo,hi)`、孩子索引和 `pull(h)`；读取孩子前
+先 push，修改后再 pull。walk 本身不能改变拓扑、base 或存储长度。
+
+`apply/fold/set` 复用同一 walk；查询也会 push/pull，因此物理上修改内部状态。
+常规常数时间 lazy 的区间更新、fold、set 为 `O(log n)`，根聚合 `fold()` 为 `O(1)`；
+存储 `O(n)`，递归栈 `O(log n)`。若 Node 是字符串，复制、join、pull 的实际代价必须另算，
+不能只数树高。空区间 apply 不调用策略，空区间 fold 返回 identity。
 
 ### 7.4 `nsparse_seg`
 
@@ -902,7 +1265,8 @@ destructive 根必须独占且互不重叠；persistent 根可能共享节点，
 
 ### `nsparse_table<T,O>`
 
-要求结合、交换、幂等，查询必须非空。预处理 `O(n log n)`，查询 `O(1)`。
+要求结合、幂等，查询必须非空，合并保留从左到右顺序，不要求交换律。
+重叠部分的聚合连续出现两次，由幂等律消去。预处理 `O(n log n)`，查询 `O(1)`。
 
 ### `nwavelet<T>`
 
@@ -1006,8 +1370,9 @@ ndinic                Dinic 最大流与残量 cut
 nhopcroft_karp        二分图最大匹配
 ```
 
-`nscc(forward,reverse)` 要求两张图的 vertex descriptor 在相同 position 上表示同一个
-key；第二遍仍以正图的 inverse 解释反图 edge target。V3 不替用户偷偷构造反图，因为反图
+`nscc(forward,reverse)` 要求两张图表示相同的 key 集合，但 vertex 枚举顺序可以不同。
+第二遍以正图的 key 访问反图邻接，并以正图 inverse 解释反图 edge target；结果按正图
+position 存储。V3 不替用户偷偷构造反图，因为反图
 的存储策略本来就是自由度的一部分。
 
 `ndinic<C>` 的容量类型要支持零值、比较、加减与 `min`。DFS 是递归实现，极深层次图需要
@@ -1042,16 +1407,23 @@ auto layout = nhld(vertices, roots, children);
 
 其中 `vertices` 自身必须提供 inverse；核心入口没有独立 `index` 参数。
 
-便利入口 `nhld(rooted)` 只是把 `nrooted` 投影接入同一个核心，不制造另一套树 owner。
+`nhld(rooted)` 直接复用已经计算的 parent/depth/subtree 数值构造布局；左值入口复制这些
+数组，顶点 descriptor 仍借用 rooted。`nhld(move(rooted))` 转移这些数组与原顶点
+descriptor，结果不再借用 rooted 本身，所以 `nhld(nroot(graph, roots))` 也有效；原
+descriptor 借用的外部 owner 仍须存活。两种入口保留未覆盖顶点的原始 metadata。
 
 ```text
 parents() depths() subtree_sizes() heads() positions()
-order() lca(a,b) path(a,b)
+order() lca(a,b) path(a,b) visit_path(a,b,visitor)
 ```
 
 `path(a,b)` 返回按 a 到 b 的遍历顺序排列的 `npath_piece{left,right,reverse}`。reverse 为真
 表示该 HLD 基区间要从右向左读取。这一位不能在字符串拼接、矩阵乘法等非交换路径聚合中
 丢掉。
+
+`visit_path(a,b,visitor)` 以相同顺序直接发出这些 piece，使用有界局部缓冲，不进行堆分配。
+visitor 只消费结果，不得修改或销毁正在遍历的布局。`path` 是在该访问内核上收集 vector
+的便利入口。
 
 HLD 需要 roots/children 真正描述一片 rooted forest，每个非根恰好出现一次；`lca/path`
 的两个顶点必须在同一组件。构造 `O(n)`，LCA 和分段数 `O(log n)`。
@@ -1267,8 +1639,8 @@ root = tree.add_segment(root, -10, 20, {-3, 5});
 long long answer = tree.query(root, x);
 ```
 
-同一 kernel 可持有多棵互不共享节点的普通整数根，更新是 destructive。整条函数和线段
-函数插入、单点查询均为 `O(log(hi-lo))`；空根返回构造时给出的 infinity。
+同一 kernel 可持有多棵互不共享节点的普通整数根，更新是 destructive。整条函数插入与
+单点查询为 `O(log(hi-lo))`，线段函数插入为 `O(log^2(hi-lo))`；空根返回构造时给出的 infinity。
 
 ## 16. 跨结构装配
 
@@ -1387,11 +1759,15 @@ ASan + UBSan
 
 benchmark 的结构与 hash workload 会分别构建 32/64 位位置模式；I/O workload 与位置宽度
 无关，只构建一次。它是 deterministic workload，用于观察直接排序与投影排序、结构 order/runs、
-静态 hash inverse 与 `unordered_map`、FHQ 节点大小、split/merge、`nbag` 查询与删除重插、
-线段树、Wavelet Matrix、
+静态 hash inverse 与 `unordered_map`、FHQ 节点大小、split/merge、`nbag` 与 `nvec_bag` 查询与删除重插、
+vector 基线与 FHQ 后端的差异、线段树、Wavelet Matrix、
 LCT 路径、直接邻接与 graph port、CSR 构造/BFS、rooted projection、稀疏节点数和峰值
 RSS。时间值受机器波动影响，checksum 与规模必须稳定；跨运行的单个毫秒值不能代替同一
 workload 下的结构、内存和 checksum 对照。
+
+`composition_cost_property` 额外检查排序后分块的逐块零分配、终结算法不复制持有计划的
+descriptor、move-only 源的子块脱离、共享 accessor 状态、已有 hash inverse 的显式借用，
+以及 HLD visitor 的零堆分配。benchmark 也包含完整的排序后分块遍历与连续 HLD 路径访问。
 
 ## 19. 扩展 V3 的自检流程
 
@@ -1430,16 +1806,16 @@ view:       nview nall ntabulate nrange nsub nreverse nproject nmap ngather nzip
 hash:       nhash nhash_inverse nmake_hash_inverse ninvert
 func:       nfunc nkeys nvalues nentries nredomain nrestrict nmap_values ncompose
             nselect_positions nanchors
-discrete:   nselect nslice nstride nfilter nindexed ncollect nprefix nsuffix
-            nassign nfill ncopy ntransform naccumulate neach nfind_if ncount_if
+discrete:   nselect nslice nstride nfilter nunique nindexed ncollect nprefix nsuffix
+            npositions nassign nfill ncopy ntransform naccumulate neach nfind_if ncontains ncount_if
             nall_of nany_of nnone_of
             nargmin nargmax nlower nupper nargsort norder nsort nreverse_inplace
             nchunks nblock nblocks nwindows nruns
 memory:     narena
 fhq:        nfhq nfhq_noop nmake_fhq
-segment:    nsegment_trace nsegment_cover nadd nmin nmax nseg nlazyseg naddsum_action
+segment:    nsegment_trace nsegment_cover nadd nmin nmax nseg nlazyseg nlazy_ops naddsum_action
             nlazy_addsum nsparse_seg
-bag:        nbag
+bag:        nbag nvec_bag
 ds:         nsum_group nfenwick ndsu npotential_dsu nrollback_dsu nqueue_agg ndeque_agg
             nsparse_table nwavelet
 graph:      ngraph nto_self nbfs nbfs_many nrooted nroot ncsr nmake_csr

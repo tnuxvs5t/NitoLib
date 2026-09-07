@@ -211,7 +211,7 @@ struct nmodint {
         for (; at < nidx_t(token.size()); ++at) {
             nidx_t digit = token[at] - '0';
             if (digit < 0 || digit > 9) return in.setstate(ios::failbit), in;
-            residue = nmod_add_canonical(nmod_mul_canonical(residue, 10, mod()), digit, mod());
+            residue = nmod_add_canonical(nmod_mul_canonical(residue, 10 % mod(), mod()), digit % mod(), mod());
         }
         x.value = negative ? nmod_neg_canonical(residue, mod()) : residue;
         return in;

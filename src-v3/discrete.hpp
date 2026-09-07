@@ -7,9 +7,11 @@ to an nview reorders positions; applying it to an nfunc reorders its semantic do
 and keeps the evaluator.  A vector<nidx_t> plan is moved into the returned descriptor,
 so a locally computed filter/order never leaves a dangling index view.
 
-Sources are descriptors passed by value.  Borrow an ordinary owner with nall(owner).
+Structural combinators capture descriptors by value; terminal algorithms borrow them
+for the call, including move-only lvalues.  Borrow ordinary owners with nall(owner).
 All positions and [left,right) intervals must be valid; stride is nonzero.  Selection
-is lazy, O(1) per access, and repeated positions deliberately alias the same lvalue.
+is lazy, with one plan access plus one source access per result.  Repeated positions
+deliberately alias the same lvalue; construction also pays the descriptor capture cost.
 */
 template <class S, class I>
 constexpr auto nselect(S source, I positions) {
@@ -17,6 +19,7 @@ constexpr auto nselect(S source, I positions) {
 }
 
 template <class D, class F, class I>
+requires requires(I& positions) { positions.len(); }
 constexpr auto nselect(nfunc<D, F> function, I positions) {
     auto domain = ngather(move(function.domain), move(positions));
     return nfunc{move(domain), move(function.eval)};
@@ -25,14 +28,9 @@ constexpr auto nselect(nfunc<D, F> function, I positions) {
 template <class S>
 constexpr auto nselect(S source, vector<nidx_t> positions) {
     nidx_t n = nidx_t(positions.size());
-    return nview{n, [source = move(source), positions = move(positions)](nidx_t i) mutable
-                        -> decltype(auto) { return source[positions[i]]; }};
-}
-
-template <class D, class F>
-constexpr auto nselect(nfunc<D, F> function, vector<nidx_t> positions) {
-    auto domain = nselect(move(function.domain), move(positions));
-    return nfunc{move(domain), move(function.eval)};
+    return nselect(move(source), ntabulate(n, [positions = move(positions)](nidx_t i) {
+        return positions[i];
+    }));
 }
 
 template <class S>
@@ -52,7 +50,7 @@ one; prefix uses operation(accumulator,value), suffix operation(value,accumulato
 */
 template <class S, class T = remove_cvref_t<decltype(declval<S&>()[0])>,
           class F = plus<>>
-constexpr vector<T> nprefix(S source, T identity = {}, F operation = {}) {
+constexpr vector<T> nprefix(S&& source, T identity = {}, F operation = {}) {
     nidx_t n = nlen(source);
     vector<T> result;
     result.reserve(size_t(n) + 1);
@@ -66,7 +64,7 @@ constexpr vector<T> nprefix(S source, T identity = {}, F operation = {}) {
 
 template <class S, class T = remove_cvref_t<decltype(declval<S&>()[0])>,
           class F = plus<>>
-constexpr vector<T> nsuffix(S source, T identity = {}, F operation = {}) {
+constexpr vector<T> nsuffix(S&& source, T identity = {}, F operation = {}) {
     nidx_t n = nlen(source);
     vector<T> result;
     result.reserve(size_t(n) + 1);
@@ -107,12 +105,34 @@ template <class S, class I>
 requires nidx_wider_v<I>
 constexpr auto nstride(S, I) = delete;
 
+/* Reusable selected positions, in source order; the predicate runs once per position. */
 template <class S, class P>
-auto nfilter(S source, P predicate) {
+vector<nidx_t> npositions(S&& source, P predicate) {
     vector<nidx_t> positions;
     positions.reserve(nlen(source));
     for (nidx_t i = 0; i < nlen(source); ++i)
         if (invoke(predicate, source[i])) positions.push_back(i);
+    return positions;
+}
+
+template <class S, class P>
+auto nfilter(S source, P predicate) {
+    auto positions = npositions(source, move(predicate));
+    return nselect(move(source), move(positions));
+}
+
+/*
+Stable run-head selection.  together(previous,current) is evaluated once for every
+adjacent pair; the first position and each position starting a new run are retained.
+Construction is O(n) time and space, does not move source values, and the returned
+descriptor lazily aliases the retained source positions.  The position plan is a
+snapshot: later value changes do not recompute run boundaries.
+*/
+template <class S, class P = equal_to<>>
+auto nunique(S source, P together = {}) {
+    auto positions = npositions(nrange(nlen(source)), [&](nidx_t i) {
+        return !i || !invoke(together, source[i - 1], source[i]);
+    });
     return nselect(move(source), move(positions));
 }
 
@@ -125,7 +145,7 @@ constexpr auto nindexed(S source) {
 
 /* ncollect recursively removes references inside pair/tuple results such as nzip. */
 template <class T = void, class S>
-auto ncollect(S source) {
+auto ncollect(S&& source) {
     using inferred = nview_detail::owned_t<decltype(source[0])>;
     using result = conditional_t<is_void_v<T>, inferred, T>;
     vector<result> values;
@@ -188,7 +208,7 @@ constexpr void ntransform(A&& first, B&& second, D&& destination, F operation) {
 
 /* Left-to-right scalar fold.  operation(accumulator,value) must return assignable T. */
 template <class S, class T, class F = plus<>>
-constexpr T naccumulate(S source, T initial, F operation = {}) {
+constexpr T naccumulate(S&& source, T initial, F operation = {}) {
     for (nidx_t i = 0; i < nlen(source); ++i)
         initial = invoke(operation, move(initial), source[i]);
     return initial;
@@ -196,48 +216,57 @@ constexpr T naccumulate(S source, T initial, F operation = {}) {
 
 /* Like std::for_each, neach returns the possibly stateful action after ordered calls. */
 template <class S, class F>
-constexpr F neach(S source, F action) {
+constexpr F neach(S&& source, F action) {
     for (nidx_t i = 0; i < nlen(source); ++i) invoke(action, source[i]);
     return action;
 }
 
 template <class S, class P>
-constexpr nidx_t nfind_if(S source, P predicate) {
+constexpr nidx_t nfind_if(S&& source, P predicate) {
     nidx_t n = nlen(source);
     for (nidx_t i = 0; i < n; ++i)
         if (invoke(predicate, source[i])) return i;
     return n;
 }
 
+/* Value membership; compare(projection(value), target) is short-circuited left to right. */
+template <class S, class T, class C = equal_to<>, class P = identity>
+constexpr bool ncontains(S&& source, const T& target, C compare = {}, P projection = {}) {
+    nidx_t n = nlen(source);
+    return nfind_if(source, [&](auto&& value) {
+        return invoke(compare, invoke(projection, forward<decltype(value)>(value)), target);
+    }) != n;
+}
+
 template <class S, class P>
-constexpr nidx_t ncount_if(S source, P predicate) {
+constexpr nidx_t ncount_if(S&& source, P predicate) {
     nidx_t count = 0;
     for (nidx_t i = 0; i < nlen(source); ++i) count += bool(invoke(predicate, source[i]));
     return count;
 }
 
 template <class S, class P>
-constexpr bool nall_of(S source, P predicate) {
+constexpr bool nall_of(S&& source, P predicate) {
     nidx_t n = nlen(source);
-    return nfind_if(move(source), [&](auto&& value) {
+    return nfind_if(source, [&](auto&& value) {
                return !invoke(predicate, forward<decltype(value)>(value));
            }) == n;
 }
 
 template <class S, class P>
-constexpr bool nany_of(S source, P predicate) {
+constexpr bool nany_of(S&& source, P predicate) {
     nidx_t n = nlen(source);
-    return nfind_if(move(source), move(predicate)) != n;
+    return nfind_if(source, move(predicate)) != n;
 }
 
 template <class S, class P>
-constexpr bool nnone_of(S source, P predicate) {
-    return !nany_of(move(source), move(predicate));
+constexpr bool nnone_of(S&& source, P predicate) {
+    return !nany_of(source, move(predicate));
 }
 
 /* Extrema return the positional index, or len() for an empty source. */
 template <class S, class C = less<>, class P = identity>
-constexpr nidx_t nargmin(S source, C compare = {}, P projection = {}) {
+constexpr nidx_t nargmin(S&& source, C compare = {}, P projection = {}) {
     nidx_t n = nlen(source), best = n ? 0 : n;
     for (nidx_t i = 1; i < n; ++i)
         if (invoke(compare, invoke(projection, source[i]),
@@ -246,34 +275,39 @@ constexpr nidx_t nargmin(S source, C compare = {}, P projection = {}) {
 }
 
 template <class S, class C = less<>, class P = identity>
-constexpr nidx_t nargmax(S source, C compare = {}, P projection = {}) {
-    return nargmin(move(source), [&](auto&& left, auto&& right) {
+constexpr nidx_t nargmax(S&& source, C compare = {}, P projection = {}) {
+    return nargmin(source, [&](auto&& left, auto&& right) {
         return invoke(compare, forward<decltype(right)>(right),
                        forward<decltype(left)>(left));
     }, move(projection));
 }
 
-/* Binary bounds use positional sorted order and return an insertion position. */
-template <class S, class T, class C = less<>, class P = identity>
-constexpr nidx_t nlower(S source, const T& value, C compare = {}, P projection = {}) {
-    nidx_t left = 0, right = nlen(source);
+namespace ndiscrete_detail {
+template <class F>
+constexpr nidx_t boundary(nidx_t length, F before) {
+    nidx_t left = 0, right = length;
     while (left < right) {
         nidx_t middle = left + (right - left) / 2;
-        if (invoke(compare, invoke(projection, source[middle]), value)) left = middle + 1;
+        if (invoke(before, middle)) left = middle + 1;
         else right = middle;
     }
     return left;
 }
+}
+
+/* Binary bounds use positional sorted order and return an insertion position. */
+template <class S, class T, class C = less<>, class P = identity>
+constexpr nidx_t nlower(S&& source, const T& value, C compare = {}, P projection = {}) {
+    return ndiscrete_detail::boundary(nlen(source), [&](nidx_t i) {
+        return invoke(compare, invoke(projection, source[i]), value);
+    });
+}
 
 template <class S, class T, class C = less<>, class P = identity>
-constexpr nidx_t nupper(S source, const T& value, C compare = {}, P projection = {}) {
-    nidx_t left = 0, right = nlen(source);
-    while (left < right) {
-        nidx_t middle = left + (right - left) / 2;
-        if (!invoke(compare, value, invoke(projection, source[middle]))) left = middle + 1;
-        else right = middle;
-    }
-    return left;
+constexpr nidx_t nupper(S&& source, const T& value, C compare = {}, P projection = {}) {
+    return ndiscrete_detail::boundary(nlen(source), [&](nidx_t i) {
+        return !invoke(compare, value, invoke(projection, source[i]));
+    });
 }
 
 /* nargsort is a positional plan; norder applies it without moving source values. */
@@ -317,14 +351,32 @@ constexpr void nreverse_inplace(S&& source) {
     for (nidx_t i = 0; i < n / 2; ++i) swap(source[i], source[n - 1 - i]);
 }
 
+namespace ndiscrete_detail {
+template <class S>
+auto retain(shared_ptr<S> source) {
+    nidx_t n = nlen(*source);
+    return nview{n, nview_detail::indirect_access<shared_ptr<S>>{move(source)}};
+}
+
+template <class D, class F>
+auto retain(shared_ptr<nfunc<D, F>> source) {
+    auto domain = retain(shared_ptr<D>(source, addressof(source->domain)));
+    return nfunc{move(domain), [source = move(source)](auto&& key) -> decltype(auto) {
+                     return invoke(source->eval, forward<decltype(key)>(key));
+                 }};
+}
+}
+
 /*
-A chunk domain is keyed by its full [left,right) interval.  Evaluating that key creates
-a slice, so no fake start-key locator or lower_bound is needed.  Child slices detach
-from the chunk function; therefore its ordinary source descriptor must be copyable.
+Chunks retain one shared source descriptor, including any position plan or inverse it
+owns.  Each detached child costs O(1) descriptor copies and no allocation; move-only
+sources work too.  Children share accessor state.  External borrowed owners must still
+outlive them.  Interval keys remain the full [left,right) pair.
 */
 template <class S, class I>
-constexpr auto nchunks(S source, I intervals) {
-    return nfunc{move(intervals), [source = move(source)](pair<nidx_t, nidx_t> interval) mutable {
+auto nchunks(S source, I intervals) {
+    auto retained = ndiscrete_detail::retain(make_shared<S>(move(source)));
+    return nfunc{move(intervals), [source = move(retained)](pair<nidx_t, nidx_t> interval) mutable {
                      return nslice(source, interval.first, interval.second);
                  }};
 }

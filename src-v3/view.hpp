@@ -91,6 +91,19 @@ struct inverse_ref {
         return view->inverse(forward<K>(key));
     }
 };
+
+template <class P>
+struct indirect_access {
+    P source;
+
+    constexpr decltype(auto) operator()(nidx_t i) { return (*source)[i]; }
+
+    template <class K>
+    requires requires(P& pointer, K&& key) { pointer->inverse(forward<K>(key)); }
+    constexpr decltype(auto) inverse(K&& key) {
+        return source->inverse(forward<K>(key));
+    }
+};
 }
 
 /* nlocate borrows an invertible lvalue view; the returned callable never extends its life. */
@@ -100,10 +113,10 @@ constexpr auto nlocate(V& view) {
     return nview_detail::inverse_ref<V>{addressof(view)};
 }
 
-/* nall borrows an lvalue.  There is deliberately no temporary-owner overload. */
+/* nall borrows an lvalue and preserves its inverse.  It never extends owner lifetime. */
 template <class A>
 constexpr auto nall(A& a) {
-    return nview{nlen(a), [p = addressof(a)](nidx_t i) -> decltype(auto) { return (*p)[i]; }};
+    return nview{nlen(a), nview_detail::indirect_access<A*>{addressof(a)}};
 }
 
 template <class F>

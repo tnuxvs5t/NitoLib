@@ -130,7 +130,8 @@ constexpr auto nanchors(K keys, V values, L locate) {
 
 /*
 Aligned anchors require unique stable keys and equal key/value lengths.  A copyable
-structurally invertible domain keeps O(1) algebraic lookup; every other domain is
+structurally invertible domain reuses its inverse (and pays for one descriptor copy);
+lookup inherits that inverse's cost.  Every other domain is
 materialized once into a static hash inverse.  Queried keys exist.  The explicit
 three-argument overload remains the escape hatch for a problem-specific locator.
 */

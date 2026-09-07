@@ -1,5 +1,6 @@
 #pragma once
 #include "view.hpp"
+#include "math.hpp"
 
 template <class T>
 struct nmatrix {
@@ -38,13 +39,9 @@ auto nmatmul(const A& left, const B& right) {
 /* Square matrix; exponent is nonnegative and supports bit testing and right shift. */
 template <class T, class E>
 nmatrix<T> nmatpow(nmatrix<T> base, E exponent) {
-    nmatrix<T> result = nmatrix<T>::identity(base.rows);
-    while (exponent) {
-        if (exponent & 1) result = nmatmul(result, base);
-        exponent >>= 1;
-        if (exponent) base = nmatmul(base, base);
-    }
-    return result;
+    auto one = nmatrix<T>::identity(base.rows);
+    return npow(move(base), exponent, move(one),
+                [](const auto& a, const auto& b) { return nmatmul(a, b); });
 }
 
 template <class T>

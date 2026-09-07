@@ -19,8 +19,8 @@ struct nline_eval {
 Sparse Li Chao kernel on integral [lo,hi).  Any two admissible functions cross at most
 once; eval(line,x) returns Y and better(a,b) selects the desired minimum/maximum.
 Roots are destructive handles in one arena, -1 is empty, and distinct live roots must
-not share nodes.  add_segment accepts a valid half-open subrange.  Each operation costs
-O(log(hi-lo)); an empty-root query returns infinity.
+not share nodes.  add_segment accepts a valid half-open subrange and costs O(log^2(hi-lo));
+add/query cost O(log(hi-lo)).  An empty-root query returns infinity.
 */
 template <class Line, class X, class Y, class Eval = nline_eval, class Better = less<>>
 struct nlichao {

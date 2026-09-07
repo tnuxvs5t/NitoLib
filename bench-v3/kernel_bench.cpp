@@ -5,6 +5,8 @@
 #include "../src-v3/graph_store.hpp"
 #include "../src-v3/link_cut.hpp"
 #include "../src-v3/segment.hpp"
+#include "../src-v3/tree.hpp"
+#include "../src-v3/vec_bag.hpp"
 #include "../src-v3/wavelet.hpp"
 
 using clock_type = chrono::steady_clock;
@@ -42,6 +44,13 @@ int main() {
     auto structural_order = timed([&] {
         auto ordered = norder(nall(shuffled));
         for (nidx_t i = 0; i < n; i += 97) checksum += ordered[i];
+    });
+    auto ordered_blocks = timed([&] {
+        auto blocks = nblocks(norder(nall(shuffled)), 1);
+        uint64_t sum = 0;
+        for (nidx_t i = 0; i < n; ++i) sum += blocks[i][0];
+        if (sum != uint64_t(n) * (n - 1) / 2) abort();
+        checksum += sum;
     });
     vector<nidx_t> run_values(n);
     for (nidx_t i = 0; i < n; ++i) run_values[i] = i / 4 % 137;
@@ -92,6 +101,26 @@ int main() {
         }
     });
     if (ordered->len() != n || ordered->front() != 0 || ordered->back() != n - 1) return 4;
+
+    unique_ptr<nvec_bag<nidx_t>> vector_ordered;
+    auto vec_bag_build = timed([&] {
+        vector_ordered = make_unique<nvec_bag<nidx_t>>(nall(shuffled));
+    });
+    auto vec_bag_copy_random = timed([&] {
+        uint64_t state = 5;
+        for (nidx_t repeat = 0; repeat < 8; ++repeat) {
+            auto snapshot = *vector_ordered;
+            for (nidx_t i = 0; i < 500000; ++i) {
+                state = state * 2862933555777941757ULL + 3037000493ULL;
+                checksum += snapshot[nidx_t(state % n)];
+            }
+        }
+    });
+    if (vector_ordered->len() != n || vector_ordered->front() != 0 ||
+        vector_ordered->back() != n - 1)
+        return 5;
+    for (nidx_t i = 0; i < n; ++i)
+        if ((*ordered)[i] != (*vector_ordered)[i]) return 6;
 
     vector<long long> numbers(n);
     iota(numbers.begin(), numbers.end(), 1);
@@ -176,6 +205,15 @@ int main() {
         root_time = static_cast<long long>(forest.child_position.capacity() * sizeof(nidx_t) +
                                            forest.child_offset.capacity() * sizeof(nidx_t));
     });
+    auto hld_start = clock_type::now();
+    auto hld = nhld(nroot(graph, nrange(1)));
+    auto hld_build = chrono::duration_cast<chrono::milliseconds>(clock_type::now() - hld_start).count();
+    auto hld_paths = timed([&] {
+        for (nidx_t i = 0; i < n; ++i)
+            hld.visit_path(i, (1LL * i * 97 + 11) % n, [&](npath_piece piece) {
+                checksum += piece.right - piece.left;
+            });
+    });
 
     nsparse_seg<long long> sparse(0, 1LL << 40);
     sparse.reserve(1700000);
@@ -193,11 +231,15 @@ int main() {
 
     cout << "n=" << n << " edges=" << 4LL * n << '\n';
     cout << "direct_sort_ms=" << direct_sort << " projected_sort_ms=" << projected_sort
-         << " structural_order_ms=" << structural_order << " runs_20x_ms=" << run_projection << '\n';
+         << " structural_order_ms=" << structural_order << " ordered_blocks_ms=" << ordered_blocks
+         << " runs_20x_ms=" << run_projection << '\n';
+    cout << "hld_build_ms=" << hld_build << " hld_visit_paths_ms=" << hld_paths << '\n';
     cout << "fhq_node_bytes=" << sizeof(nfhq<nidx_t>::node)
          << " build_ms=" << fhq_build << " split_merge_ms=" << fhq_transactions << '\n';
     cout << "bag_nodes=" << ordered->nodes() << " build_ms=" << bag_build
          << " query_mutate_ms=" << bag_work << '\n';
+    cout << "vec_bag_len=" << vector_ordered->len() << " build_ms=" << vec_bag_build
+         << " copy_random_ms=" << vec_bag_copy_random << '\n';
     cout << "fixed_seg_build_ms=" << seg_build << " workload_ms=" << seg_work << '\n';
     cout << "wavelet_build_ms=" << wavelet_build << " workload_ms=" << wavelet_work << '\n';
     cout << "lct_node_bytes=" << sizeof(nlct<long long>::node)

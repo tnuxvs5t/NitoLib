@@ -29,6 +29,15 @@ struct assign_string {
 };
 
 int main() {
+    nlazy_addsum<long long> zeros(nidx_t(7));
+    zeros.apply(0, 7, 3LL);
+    zeros.set(3, -2LL);
+    CHECK(zeros.fold() == 16 && zeros.get(3) == -2);
+    CHECK(zeros.ops.lazy.size() == size_t(zeros.base));
+    nlazy_addsum<long long> empty_lazy;
+    empty_lazy.apply(0, 0, 9LL);
+    CHECK(empty_lazy.empty() && empty_lazy.fold() == 0 && empty_lazy.fold(0, 0) == 0);
+
     using pair_value = pair<long long, int>;
     using tuple_value = tuple<int, pair<long long, int>, double>;
     const auto pair_high = pair_value{numeric_limits<long long>::max(),
@@ -149,8 +158,7 @@ int main() {
         nidx_t n = 1 + nidx_t(rng() % 70);
         vector<long long> values(n);
         for (long long& value : values) value = nidx_t(rng() % 101) - 50;
-        nlazyseg<long long, affine, nadd<long long>, affine_sum>
-            tree(nall(values), {}, {});
+        nlazyseg tree(nall(values), nlazy_ops{nadd<long long>{}, affine_sum{}});
         for (nidx_t step = 0; step < 200; ++step) {
             nidx_t operation = nidx_t(rng() % 4);
             if (operation == 0) {
@@ -177,7 +185,7 @@ int main() {
         nidx_t n = 1 + nidx_t(rng() % 60);
         vector<string> values(n);
         for (string& value : values) value = char('a' + rng() % 5);
-        nlazyseg<string, char, concat, assign_string> tree(nall(values), {}, {});
+        nlazyseg tree(nall(values), nlazy_ops{concat{}, assign_string{}});
         for (nidx_t step = 0; step < 100; ++step) {
             nidx_t left = nidx_t(rng() % (n + 1));
             nidx_t right = left + nidx_t(rng() % (n - left + 1));
@@ -201,4 +209,9 @@ int main() {
     vector<string> tiny{"a", "b", "c"};
     nseg<string, move_merge> move_tree(nall(tiny), move_merge{});
     CHECK(move_tree.fold(0, 3) == "abc");
+    nlazyseg move_lazy(nall(tiny), nlazy_ops{move_merge{}, assign_string{}});
+    move_lazy.apply(0, 2, 'z');
+    auto moved_lazy = move(move_lazy);
+    moved_lazy.set(1, string("q"));
+    CHECK(moved_lazy.fold(0, 3) == "zqc" && *moved_lazy.ops.merge.calls > 0);
 }

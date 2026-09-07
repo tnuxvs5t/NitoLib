@@ -8,25 +8,28 @@ struct value {
     bool reverse = false;
 };
 
-int main() {
-    auto flip = [](auto& q, nidx_t root) {
+struct sequence_ops {
+    static void flip(auto& q, nidx_t root) {
         if (root >= 0) q[root].value.reverse ^= true;
-    };
-    auto pull = [](auto& q, nidx_t root) {
+    }
+    void pull(auto& q, nidx_t root) {
         auto& node = q[root];
         node.value.sum = node.value.x;
         if (node.left >= 0) node.value.sum += q[node.left].value.sum;
         if (node.right >= 0) node.value.sum += q[node.right].value.sum;
-    };
-    auto push = [flip](auto& q, nidx_t root) {
+    }
+    void push(auto& q, nidx_t root) {
         auto& node = q[root];
         if (!node.value.reverse) return;
         q.swap_children(root);
         flip(q, node.left);
         flip(q, node.right);
         node.value.reverse = false;
-    };
-    auto q = nmake_fhq<value>(pull, push, 123456789);
+    }
+};
+
+int main() {
+    auto q = nmake_fhq<value>(sequence_ops{}, 123456789);
     mt19937 rng(0xBAD5EED);
     vector<long long> reference;
     nidx_t root = -1;
@@ -71,7 +74,7 @@ int main() {
             nidx_t left = nidx_t(rng() % (reference.size() + 1));
             nidx_t right = left + nidx_t(rng() % (reference.size() - left + 1));
             auto [a, b, c] = split3(root, left, right);
-            flip(q, b);
+            sequence_ops::flip(q, b);
             root = q.merge(q.merge(a, b), c);
             reverse(reference.begin() + left, reference.begin() + right);
         } else if (operation == 3) {
@@ -113,8 +116,12 @@ int main() {
     CHECK(*move_only[move_only.kth(both, 0)].value == 7);
     CHECK(*move_only[move_only.kth(both, 1)].value == 9);
 
-    auto move_policy = [state = make_unique<nidx_t>()](auto&, nidx_t) mutable { ++*state; };
-    auto custom = nmake_fhq<nidx_t>(move(move_policy));
+    struct move_policy {
+        unique_ptr<nidx_t> calls = make_unique<nidx_t>();
+        void pull(nfhq<nidx_t, move_policy>&, nidx_t) { ++*calls; }
+    };
+    auto custom = nmake_fhq<nidx_t>(move_policy{});
     nidx_t custom_root = custom.merge(custom.make(1), custom.make(2));
     CHECK(custom.size(custom_root) == 2);
+    CHECK(*custom.ops.calls > 0);
 }

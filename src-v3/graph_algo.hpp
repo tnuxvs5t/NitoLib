@@ -78,7 +78,8 @@ struct nscc_result {
 };
 
 /*
-Kosaraju receives both forward and reverse descriptors over the same vertex keys.
+Kosaraju receives both forward and reverse descriptors over the same vertex keys;
+their enumeration orders may differ.  Results use forward-graph positions.
 This keeps the graph port minimal and lets CSR/forward-star callers choose whether and
 how reverse edges are stored.  Component labels are dense in second-pass discovery order.
 */
@@ -117,7 +118,7 @@ nscc_result nscc(G&& graph, R&& reverse_graph) {
         while (!stack.empty()) {
             nidx_t from = stack.back();
             stack.pop_back();
-            for (auto&& edge : reverse_graph.edges(reverse_graph.vertices[from])) {
+            for (auto&& edge : reverse_graph.edges(graph.vertices[from])) {
                 nidx_t to = graph.vertices.inverse(reverse_graph.target(edge));
                 if (component[to] < 0) component[to] = count, stack.push_back(to);
             }

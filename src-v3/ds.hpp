@@ -223,41 +223,29 @@ private:
     [[no_unique_address]] mutable M merge;
     vector<node> left, right;
 
-    void add_left(vector<node>& side, T value) {
-        T aggregate = side.empty() ? value : invoke(merge, value, side.back().aggregate);
-        side.push_back({move(value), move(aggregate)});
-    }
-    void add_right(vector<node>& side, T value) {
-        T aggregate = side.empty() ? value : invoke(merge, side.back().aggregate, value);
+    template <bool Front>
+    void add(vector<node>& side, T value) {
+        T aggregate = side.empty() ? value :
+            (Front ? invoke(merge, value, side.back().aggregate)
+                   : invoke(merge, side.back().aggregate, value));
         side.push_back({move(value), move(aggregate)});
     }
 
-    void ensure_front() {
-        if (!left.empty() || right.empty()) return;
-        nidx_t n = nidx_t(right.size()), left_count = (n + 1) / 2;
-        vector<node> next_left, next_right;
-        next_left.reserve(left_count);
-        next_right.reserve(n - left_count);
-        for (nidx_t i = left_count; i > 0; --i)
-            add_left(next_left, move(right[i - 1].value));
-        for (nidx_t i = left_count; i < n; ++i)
-            add_right(next_right, move(right[i].value));
-        left.swap(next_left);
-        right.swap(next_right);
-    }
-
-    void ensure_back() {
-        if (!right.empty() || left.empty()) return;
-        nidx_t n = nidx_t(left.size()), right_count = (n + 1) / 2;
-        vector<node> next_left, next_right;
-        next_left.reserve(n - right_count);
-        next_right.reserve(right_count);
-        for (nidx_t i = right_count; i < n; ++i)
-            add_left(next_left, move(left[i].value));
-        for (nidx_t i = right_count; i > 0; --i)
-            add_right(next_right, move(left[i - 1].value));
-        left.swap(next_left);
-        right.swap(next_right);
+    template <bool Front>
+    void ensure() {
+        auto& target = Front ? left : right;
+        auto& source = Front ? right : left;
+        if (!target.empty() || source.empty()) return;
+        nidx_t n = nidx_t(source.size()), count = (n + 1) / 2;
+        vector<node> next_target, next_source;
+        next_target.reserve(count);
+        next_source.reserve(n - count);
+        for (nidx_t i = count; i > 0; --i)
+            add<Front>(next_target, move(source[i - 1].value));
+        for (nidx_t i = count; i < n; ++i)
+            add<!Front>(next_source, move(source[i].value));
+        target.swap(next_target);
+        source.swap(next_source);
     }
 
 public:
@@ -271,12 +259,12 @@ public:
                                      : right[position - left_count].value;
     }
 
-    void push_front(T value) { add_left(left, move(value)); }
-    void push_back(T value) { add_right(right, move(value)); }
-    const T& front() { ensure_front(); return left.back().value; }
-    const T& back() { ensure_back(); return right.back().value; }
-    void pop_front() { ensure_front(); left.pop_back(); }
-    void pop_back() { ensure_back(); right.pop_back(); }
+    void push_front(T value) { add<true>(left, move(value)); }
+    void push_back(T value) { add<false>(right, move(value)); }
+    const T& front() { ensure<true>(); return left.back().value; }
+    const T& back() { ensure<false>(); return right.back().value; }
+    void pop_front() { ensure<true>(); left.pop_back(); }
+    void pop_back() { ensure<false>(); right.pop_back(); }
 
     T fold() const {
         if (left.empty()) return right.empty() ? merge.id() : right.back().aggregate;
@@ -285,7 +273,7 @@ public:
     }
 };
 
-/* O must be associative, commutative and idempotent; queries are nonempty [l,r). */
+/* O must be associative and idempotent; queries are ordered nonempty [l,r). */
 template <class T, class O>
 struct nsparse_table {
     [[no_unique_address]] mutable O operation;

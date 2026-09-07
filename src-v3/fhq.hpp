@@ -2,10 +2,7 @@
 #include "arena.hpp"
 #include "view.hpp"
 
-struct nfhq_noop {
-    template <class Q>
-    constexpr void operator()(Q&, nidx_t) const {}
-};
+struct nfhq_noop {};
 
 /*
 One nfhq is one node arena and one policy state; any number of disjoint roots may live
@@ -14,12 +11,12 @@ must belong to this kernel, merge inputs must be disjoint, and consumed root var
 must not be used as independent trees afterwards.  These contracts are intentionally
 not encoded through owners, domains, epochs or concepts.
 
-Pull and push, when present, are called as policy(*this, handle).  pull observes an
+ops.pull/ops.push, when present, are called with (*this, handle).  pull observes an
 already-correct structural size.  push may update payloads and may call swap_children;
 it must leave the same node set and valid lazy representation.  Neither callback may
 retain node references across allocation.
 */
-template <class T, class Pull = nfhq_noop, class Push = nfhq_noop>
+template <class T, class Ops = nfhq_noop>
 struct nfhq {
     struct node {
         T value;
@@ -28,13 +25,11 @@ struct nfhq {
     };
 
     narena<node> pool;
-    [[no_unique_address]] Pull puller;
-    [[no_unique_address]] Push pusher;
+    [[no_unique_address]] Ops ops;
     uint64_t random_state;
 
-    explicit nfhq(Pull pull_policy = {}, Push push_policy = {},
-                  uint64_t seed = 0x243f6a8885a308d3ULL)
-        : puller(move(pull_policy)), pusher(move(push_policy)), random_state(seed) {}
+    explicit nfhq(Ops policy = {}, uint64_t seed = 0x243f6a8885a308d3ULL)
+        : ops(move(policy)), random_state(seed) {}
 
     node& operator[](nidx_t handle) { return pool[handle]; }
     const node& operator[](nidx_t handle) const { return pool[handle]; }
@@ -58,13 +53,14 @@ struct nfhq {
     }
 
     void down(nidx_t handle) {
-        if (handle >= 0) invoke(pusher, *this, handle);
+        if constexpr (requires { ops.push(*this, handle); })
+            if (handle >= 0) ops.push(*this, handle);
     }
 
     void up(nidx_t handle) {
         if (handle < 0) return;
         pool[handle].size = 1 + size(pool[handle].left) + size(pool[handle].right);
-        invoke(puller, *this, handle);
+        if constexpr (requires { ops.pull(*this, handle); }) ops.pull(*this, handle);
     }
 
     /* Call expose before mutating a saved handle, then rebuild afterwards. */
@@ -83,51 +79,83 @@ struct nfhq {
     }
 
   private:
-    void set_left(nidx_t parent, nidx_t child) {
-        nidx_t old = pool[parent].left;
+    void set_child(nidx_t parent, nidx_t child, bool right) {
+        nidx_t& link = right ? pool[parent].right : pool[parent].left;
+        nidx_t old = link;
         if (old >= 0 && old != child && pool[old].parent == parent) pool[old].parent = -1;
-        pool[parent].left = child;
+        link = child;
         if (child >= 0) pool[child].parent = parent;
     }
 
-    void set_right(nidx_t parent, nidx_t child) {
-        nidx_t old = pool[parent].right;
-        if (old >= 0 && old != child && pool[old].parent == parent) pool[old].parent = -1;
-        pool[parent].right = child;
-        if (child >= 0) pool[child].parent = parent;
-    }
-
-    nidx_t take_left(nidx_t parent) {
-        nidx_t child = pool[parent].left;
-        set_left(parent, -1);
-        return child;
-    }
-
-    nidx_t take_right(nidx_t parent) {
-        nidx_t child = pool[parent].right;
-        set_right(parent, -1);
+    nidx_t take_child(nidx_t parent, bool right) {
+        nidx_t child = right ? pool[parent].right : pool[parent].left;
+        set_child(parent, -1, right);
         return child;
     }
 
     template <class F>
-    pair<nidx_t, nidx_t> split_by0(nidx_t root, F& goes_left) {
+    pair<nidx_t, nidx_t> split0(nidx_t root, F& goes_left) {
         if (root < 0) return {-1, -1};
         down(root);
-        if (invoke(goes_left, pool[root].value)) {
-            auto [middle, right] = split_by0(take_right(root), goes_left);
-            set_right(root, middle);
+        if (invoke(goes_left, root)) {
+            auto [middle, right] = split0(take_child(root, true), goes_left);
+            set_child(root, middle, true);
             up(root);
             pool[root].parent = -1;
             return {root, right};
         }
-        auto [left, middle] = split_by0(take_left(root), goes_left);
-        set_left(root, middle);
+        auto [left, middle] = split0(take_child(root, false), goes_left);
+        set_child(root, middle, false);
         up(root);
         pool[root].parent = -1;
         return {left, root};
     }
 
   public:
+    /*
+    visit(q,h) returns true to prune; otherwise down, left, element(q,h), right, up.
+    Callbacks may allocate disjoint nodes, but must preserve the traversed topology
+    and retain only handles across allocation.  Cost is O(visited nodes + callbacks).
+    */
+    template <class V, class E>
+    void walk(nidx_t root, V&& visit, E&& element) {
+        if (root < 0 || invoke(visit, *this, root)) return;
+        down(root);
+        walk(pool[root].left, visit, element);
+        invoke(element, *this, root);
+        walk(pool[root].right, visit, element);
+        up(root);
+    }
+
+    /*
+    Success updates aggregate, own element and deferred state; failure changes no
+    semantic state.  Leaves must succeed.  apply_one updates only the own element
+    after down, before up.  Ordered-key roots must retain inorder comparator order.
+    Reshaping does not inherit a fixed segment tree's Beats amortized bound.
+    */
+    template <class C>
+    void apply(nidx_t root, const C& command) {
+        walk(root, [&](auto&, nidx_t handle) {
+            bool done = ops.try_apply(*this, handle, command);
+            assert(done || size(handle) > 1);
+            return done;
+        }, [&](auto&, nidx_t handle) { ops.apply_one(*this, handle, command); });
+    }
+
+    /*
+    Consume root, isolate [left,right), call edit(q,middle), rejoin its returned root.
+    The callback may replace/delete the fragment (also -1 for an empty interval).
+    Its result must be disjoint from the retained sides.  No exception rollback.
+    Expected O(log n) plus callback cost; removed nodes remain in the arena.
+    */
+    template <class E>
+    nidx_t edit(nidx_t root, nidx_t left, nidx_t right, E&& change) {
+        auto [prefix, suffix] = split(root, right);
+        auto [head, middle] = split(prefix, left);
+        nidx_t replacement = invoke(change, *this, middle);
+        return merge(merge(head, replacement), suffix);
+    }
+
     nidx_t merge(nidx_t left, nidx_t right) {
         if (left < 0) {
             if (right >= 0) pool[right].parent = -1;
@@ -140,41 +168,34 @@ struct nfhq {
         down(left);
         down(right);
         if (pool[left].priority >= pool[right].priority) {
-            nidx_t joined = merge(take_right(left), right);
-            set_right(left, joined);
+            nidx_t joined = merge(take_child(left, true), right);
+            set_child(left, joined, true);
             up(left);
             pool[left].parent = -1;
             return left;
         }
-        nidx_t joined = merge(left, take_left(right));
-        set_left(right, joined);
+        nidx_t joined = merge(left, take_child(right, false));
+        set_child(right, joined, false);
         up(right);
         pool[right].parent = -1;
         return right;
     }
 
     pair<nidx_t, nidx_t> split(nidx_t root, nidx_t left_size) {
-        if (root < 0) return {-1, -1};
-        down(root);
-        nidx_t current_left = size(pool[root].left);
-        if (left_size <= current_left) {
-            auto [left, middle] = split(take_left(root), left_size);
-            set_left(root, middle);
-            up(root);
-            pool[root].parent = -1;
-            return {left, root};
-        }
-        auto [middle, right] = split(take_right(root), left_size - current_left - 1);
-        set_right(root, middle);
-        up(root);
-        pool[root].parent = -1;
-        return {root, right};
+        auto before = [&](nidx_t handle) {
+            nidx_t width = size(pool[handle].left) + 1;
+            if (left_size < width) return false;
+            left_size -= width;
+            return true;
+        };
+        return split0(root, before);
     }
 
     /* goes_left(value) must be false only after it first becomes false in inorder. */
     template <class F>
     pair<nidx_t, nidx_t> split_by(nidx_t root, F goes_left) {
-        return split_by0(root, goes_left);
+        auto before = [&](nidx_t handle) { return invoke(goes_left, pool[handle].value); };
+        return split0(root, before);
     }
 
     nidx_t kth(nidx_t root, nidx_t position) {
@@ -223,8 +244,7 @@ struct nfhq {
     }
 };
 
-template <class T, class Pull = nfhq_noop, class Push = nfhq_noop>
-auto nmake_fhq(Pull puller = {}, Push pusher = {},
-               uint64_t seed = 0x243f6a8885a308d3ULL) {
-    return nfhq<T, Pull, Push>(move(puller), move(pusher), seed);
+template <class T, class Ops = nfhq_noop>
+auto nmake_fhq(Ops policy = {}, uint64_t seed = 0x243f6a8885a308d3ULL) {
+    return nfhq<T, Ops>(move(policy), seed);
 }

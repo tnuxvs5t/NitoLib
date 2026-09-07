@@ -20,7 +20,7 @@ struct nett_forest {
     struct pull_policy {
         [[no_unique_address]] M merge;
         template <class Q>
-        void operator()(Q& tree, nidx_t handle) {
+        void pull(Q& tree, nidx_t handle) {
             auto& node = tree[handle];
             T aggregate = node.left < 0 ? merge.id() : tree[node.left].value.aggregate;
             if (node.value.token) aggregate = invoke(merge, move(aggregate), node.value.value);
@@ -41,7 +41,7 @@ struct nett_forest {
 
     explicit nett_forest(nidx_t n = 0, M merge = {})
         : sequence(pull_policy{move(merge)}), representative(n) {
-        T identity = sequence.puller.merge.id();
+        T identity = sequence.ops.merge.id();
         for (nidx_t vertex = 0; vertex < n; ++vertex)
             representative[vertex] = sequence.make(item{vertex, true, identity, identity, 1});
     }
@@ -49,7 +49,7 @@ struct nett_forest {
     template <class V>
     explicit nett_forest(V values, M merge = {})
         : sequence(pull_policy{move(merge)}), representative(values.len()) {
-        T identity = sequence.puller.merge.id();
+        T identity = sequence.ops.merge.id();
         for (nidx_t vertex = 0; vertex < values.len(); ++vertex)
             representative[vertex] = sequence.make(item{vertex, true, values[vertex], identity, 1});
     }
@@ -81,7 +81,7 @@ struct nett_forest {
     /* a and b are in different components and no parallel forest edge exists. */
     void link(nidx_t a, nidx_t b) {
         nidx_t left = reroot(a), right = reroot(b);
-        T identity = sequence.puller.merge.id();
+        T identity = sequence.ops.merge.id();
         nidx_t ab = sequence.make(item{-1, false, identity, identity, 0});
         nidx_t ba = sequence.make(item{-1, false, identity, identity, 0});
         sequence.merge(sequence.merge(sequence.merge(left, ab), right), ba);

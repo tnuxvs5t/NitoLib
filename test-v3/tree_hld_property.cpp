@@ -39,6 +39,11 @@ int main() {
         auto graph = ngraph{nrange(n), [&](nidx_t vertex) -> auto& { return adjacency[vertex]; }};
         auto rooted = nroot(graph, nrange(1));
         auto projected = nhld(rooted);
+        auto owned = nhld(nroot(graph, nrange(1)));
+        auto transferable = nroot(graph, nrange(1));
+        auto* parent_storage = transferable.parent_position.data();
+        auto transferred = nhld(move(transferable));
+        CHECK(transferred.parent_position.data() == parent_storage);
 
         vector<nidx_t> seen(n);
         auto order = direct.order();
@@ -73,6 +78,15 @@ int main() {
                                             [&](nidx_t x, nidx_t y) { return depth[x] < depth[y]; });
             CHECK(direct.lca(a, b) == expected_lca);
             CHECK(projected.lca(a, b) == expected_lca);
+            CHECK(owned.lca(a, b) == expected_lca);
+            CHECK(transferred.lca(a, b) == expected_lca);
+            vector<nidx_t> streamed;
+            owned.visit_path(a, b, [&](npath_piece piece) {
+                for (nidx_t i = 0; i < piece.right - piece.left; ++i)
+                    streamed.push_back(owned.vertex_at_position[
+                        piece.reverse ? piece.right - 1 - i : piece.left + i]);
+            });
+            CHECK(streamed == expected_vertices);
 
             vector<nidx_t> got_vertices;
             string got;

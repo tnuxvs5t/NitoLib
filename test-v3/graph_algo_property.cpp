@@ -39,7 +39,10 @@ int main() {
         CHECK(got == distance[source]);
 
         auto graph = ngraph{nrange(n), [&](nidx_t vertex) -> auto& { return plain[vertex]; }};
-        auto reverse_graph = ngraph{nrange(n),
+        vector<nidx_t> reverse_order(n);
+        iota(reverse_order.begin(), reverse_order.end(), 0);
+        shuffle(reverse_order.begin(), reverse_order.end(), rng);
+        auto reverse_graph = ngraph{ninvert(nall(reverse_order)),
                                     [&](nidx_t vertex) -> auto& { return reversed[vertex]; }};
         auto result = nscc(graph, reverse_graph);
         vector<vector<unsigned char>> reachable(n, vector<unsigned char>(n));
@@ -87,7 +90,7 @@ int main() {
     vector<vector<nidx_t>> pending_reverse{{}, {0, 2}, {0, 1}};
     auto sibling_graph = ngraph{nrange(3),
                                 [&](nidx_t vertex) -> auto& { return pending_siblings[vertex]; }};
-    auto sibling_reverse = ngraph{nrange(3),
+    auto sibling_reverse = ngraph{nreverse(nrange(3)),
                                   [&](nidx_t vertex) -> auto& { return pending_reverse[vertex]; }};
     auto sibling_scc = nscc(sibling_graph, sibling_reverse);
     CHECK(sibling_scc.component[1] == sibling_scc.component[2]);

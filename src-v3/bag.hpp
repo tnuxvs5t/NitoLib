@@ -32,7 +32,7 @@ struct nbag {
     nidx_t root = -1;
 
     explicit nbag(C order = {}, uint64_t seed = default_seed)
-        : tree(nfhq_noop{}, nfhq_noop{}, seed), compare(move(order)) {}
+        : tree(nfhq_noop{}, seed), compare(move(order)) {}
 
     template <class V>
     requires requires(V& source) {
