@@ -90,10 +90,11 @@ struct nlct {
     }
 
     void splay(nidx_t vertex) {
-        vector<nidx_t> path{vertex};
-        for (nidx_t at = vertex; !auxiliary_root(at); at = nodes[at].parent)
-            path.push_back(nodes[at].parent);
-        for (auto it = path.rbegin(); it != path.rend(); ++it) push(*it);
+        auto descend = [&](auto&& self, nidx_t at) -> void {
+            if (!auxiliary_root(at)) self(self, nodes[at].parent);
+            push(at);
+        };
+        descend(descend, vertex);
         while (!auxiliary_root(vertex)) {
             nidx_t parent = nodes[vertex].parent;
             if (!auxiliary_root(parent)) {

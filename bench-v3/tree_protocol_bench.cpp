@@ -1,5 +1,6 @@
 #include "../src-v3/segment.hpp"
 #include "../src-v3/fhq.hpp"
+#include "../src-v3/list.hpp"
 
 template <class F>
 long long timed(F&& work) {
@@ -60,9 +61,22 @@ int main() {
         if (q[q.kth(root, i)].value != initial[i]) abort();
         checksum += uint64_t(initial[i]);
     }
+    nlist<nidx_t> chain;
+    vector<nlist<nidx_t>::iterator> handles;
+    handles.reserve(n);
+    for (nidx_t i = 0; i < n; ++i) handles.push_back(chain.emplace(chain.end(), i));
+    auto list_ms = timed([&] {
+        for (nidx_t i = 0; i < n; ++i) chain.splice(chain.begin(), chain, handles[i]);
+    });
+    nidx_t expected_value = n;
+    for (auto it = chain.begin(); it != chain.end(); ++it) {
+        if (*it != --expected_value || addressof(*it) != addressof(*handles[*it])) abort();
+    }
+    if (expected_value || chain.len() != n) abort();
     cout << "n=" << n << " operations=" << operations << " index_bytes=" << sizeof(nidx_t)
          << " lazy_build_ms=" << build_ms << " lazy_work_ms=" << lazy_ms
          << " lazy_storage_bytes=" << storage
          << " old_layout_bytes=" << size_t(2) * seg->base * (2 * sizeof(long long) + 1)
-         << " fhq_edit_ms=" << fhq_ms << " checksum=" << checksum + width_sum << '\n';
+         << " fhq_edit_ms=" << fhq_ms << " list_splice_ms=" << list_ms
+         << " checksum=" << checksum + width_sum << '\n';
 }

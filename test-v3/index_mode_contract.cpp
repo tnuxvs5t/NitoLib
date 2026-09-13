@@ -12,6 +12,18 @@ int main() {
     static_assert(same_as<typename decltype(nrange(3))::iterator::difference_type, nidx_t>);
     static_assert(same_as<decltype(declval<narena<long long>&>().make(0)), nidx_t>);
 
+    constexpr nidx_t maximum = numeric_limits<nidx_t>::max();
+    auto limit = nrange(maximum);
+    nidx_t width = maximum / 2 + 1;
+    auto blocks = nblocks(limit, width);
+    CHECK(blocks.len() == 2);
+    CHECK((blocks.key(1) == pair{width, maximum}));
+    CHECK(blocks[1].len() == maximum - width);
+    CHECK(nblock(limit, width, 1).len() == maximum - width);
+    auto backwards = nstride(nrange(3), numeric_limits<nidx_t>::min());
+    CHECK(backwards.len() == 1 && backwards[0] == 2);
+    CHECK(backwards.inverse(2) == 0);
+
 #ifdef NITORI_INDEX_64
     static_assert(same_as<nidx_t, long long>);
     static_assert(can_nrange<long long>);

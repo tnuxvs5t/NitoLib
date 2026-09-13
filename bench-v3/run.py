@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "bench-v3/kernel_bench.cpp"
 HASH_SOURCE = ROOT / "bench-v3/hash_bench.cpp"
 IO_SOURCE = ROOT / "bench-v3/io_bench.cpp"
+TREE_SOURCE = ROOT / "bench-v3/tree_protocol_bench.cpp"
 INDEX_MODES = {
     "idx32": [],
     "idx64": ["-DNITORI_INDEX_64"],
@@ -35,6 +36,14 @@ with tempfile.TemporaryDirectory(prefix="nitori-v3-bench-") as tmp:
         for mode in ("node", "flat"):
             print(f"--- {index_mode} hash {mode} ---", flush=True)
             subprocess.run([str(hash_binary), mode], check=True)
+
+        tree_binary = Path(tmp) / f"tree_protocol_bench-{index_mode}"
+        tree_command = [*command[:-3], str(TREE_SOURCE), "-o", str(tree_binary)]
+        print("+", " ".join(tree_command), flush=True)
+        subprocess.run(tree_command, check=True)
+        for sample in range(3):
+            print(f"--- {index_mode} tree sample {sample + 1} ---", flush=True)
+            subprocess.run([str(tree_binary)], check=True)
 
     io_binary = Path(tmp) / "io_bench"
     io_command = [os.environ.get("CXX", "g++"), "-std=c++23", "-O2", "-DNDEBUG",

@@ -68,6 +68,7 @@ vector<nidx_t> nbfs(G&& graph, K source) {
 A rooted projection owns only traversal metadata and its invertible vertex descriptor.
 Its nfunc/nview accessors borrow *this and therefore expire when it moves or dies.
 parent[root]==root; unseen vertices have parent/depth/component/subtree == -1/0.
+Key-valued parents()/components() are only defined for covered vertices.
 */
 template <class V>
 struct nrooted {
@@ -132,6 +133,8 @@ nroot builds a first-discovery forest from the supplied roots.  It is valid on d
 or cyclic graphs: already discovered arcs are ignored.  Tree algorithms that interpret
 subtree metadata as original-tree structure must separately rely on the input being a
 forest.  Roots need not cover every vertex; uncovered metadata remains unseen.
+Discovery follows recursive DFS adjacency order and uses O(height) call stack.
+Outstanding adjacency ranges must survive nested graph.edges calls.
 */
 template <class G, class R>
 auto nroot(G graph, R roots) {
@@ -139,6 +142,19 @@ auto nroot(G graph, R roots) {
     vector<nidx_t> parent(n, -1), depth(n, -1), component(n, -1), order, subtree(n);
     vector<nidx_t> root_positions;
     order.reserve(n);
+    auto dfs = [&](auto&& self, nidx_t from) -> void {
+        order.push_back(from);
+        subtree[from] = 1;
+        for (auto&& edge : graph.edges(graph.vertices[from])) {
+            nidx_t to = graph.vertices.inverse(graph.target(edge));
+            if (parent[to] >= 0) continue;
+            parent[to] = from;
+            depth[to] = depth[from] + 1;
+            component[to] = component[from];
+            self(self, to);
+            subtree[from] += subtree[to];
+        }
+    };
     for (nidx_t i = 0; i < roots.len(); ++i) {
         nidx_t root = graph.vertices.inverse(roots[i]);
         if (parent[root] >= 0) continue;
@@ -146,25 +162,7 @@ auto nroot(G graph, R roots) {
         depth[root] = 0;
         component[root] = root;
         root_positions.push_back(root);
-        vector<nidx_t> stack{root};
-        while (!stack.empty()) {
-            nidx_t from = stack.back();
-            stack.pop_back();
-            order.push_back(from);
-            for (auto&& edge : graph.edges(graph.vertices[from])) {
-                nidx_t to = graph.vertices.inverse(graph.target(edge));
-                if (parent[to] >= 0) continue;
-                parent[to] = from;
-                depth[to] = depth[from] + 1;
-                component[to] = root;
-                stack.push_back(to);
-            }
-        }
-    }
-    for (auto it = order.rbegin(); it != order.rend(); ++it) {
-        nidx_t vertex = *it;
-        subtree[vertex] += 1;
-        if (parent[vertex] != vertex) subtree[parent[vertex]] += subtree[vertex];
+        dfs(dfs, root);
     }
     vector<nidx_t> child_offset(n + 1), child_position;
     child_position.reserve(order.size() - root_positions.size());

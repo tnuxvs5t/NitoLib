@@ -1,8 +1,8 @@
-# Nitori v3 Tutorial Comprehensive
+# Nitori v3.2 Tutorial Comprehensive
 
 > 状态：从零重建中。本文只描述 `src-v3/` 当前已经存在并经过独立测试的能力。
 > V2/X 及更早代码已离开活动工作树；V3 暂时没有统一头文件。
-> v3.1 的当前结构主线是 inverse-first：`nview` 表达正反映射，`nfunc` 复用结构 inverse
+> v3.2 的结构主线延续 inverse-first：`nview` 表达正反映射，`nfunc` 复用结构 inverse
 > 或静态 hash fallback，图与树算法只消费这一条定位端口。
 
 ## 0. V3 到底在改革什么
@@ -64,6 +64,7 @@ core
 │   ├── segment ── dynamic_tree / link_cut
 │   └── opt
 ├── math ── poly
+├── list
 └── number
 ```
 
@@ -80,6 +81,7 @@ core
 - `len()` 是 V3 有限对象的长度接口；`nlen(x)` 也能读取普通容器的 `size()`。
 - `nchmin(target,candidate)` / `nchmax(target,candidate)` 在严格序更优时原地赋值，并返回是否发生更新。
 - V3 默认不做边界检查、溢出检查和契约恢复。
+- DFS 与祖先下推优先使用直接递归；调用环境须提供足够调用栈，不为系统默认栈上限保留手工栈模拟。
 - view、func、graph descriptor 都可能只是借用；owner 移动、销毁或结构修改后，旧投影可能失效。
 - `nall(lvalue)` 保留原对象可用的 inverse，仍然只借用；descriptor 可能持有位置数组或 hash，复制成本不一定是常数。
 - 操作对象通常用 `id()` 给单位元，用 `operator()(left,right)` 合并。
@@ -613,8 +615,35 @@ nchunks(source,intervals)       通用区间键分块
 nblock(source,width,index)      一个定宽块
 nblocks(source,width)           覆盖整序列，尾块可短
 nwindows(source,width,step=1)   width/step > 0，只枚举完整窗口
-nruns(source,together={})       together(previous,current) 定义相邻归并
+nruns(source)                  相邻相等值成段
+nruns(source,operation)        operation(left,right) 判定候选段 [left,right)
 ```
+
+`nruns` 按顺序贪心生成非空块。Operation 自行捕获原 view，并接收扩展后的候选段
+`[left,right)`，不接收源对象或元素。首次及每次切段后先调用单元素段，随后 right
+每次加一；拒绝 `[left,right)` 后输出 `[left,right-1)`，立即调用
+`operation(right-1,right)` 初始化新段。每个单元素必须可成段，空输入不调用 Operation。
+
+```cpp
+// Operation 自己增量维护极值；拒绝后，新的 left 会触发重新初始化。
+auto groups = nruns(nall(a), [&, start = nidx_t(-1), low = 0LL, high = 0LL]
+                   (nidx_t left, nidx_t right) mutable {
+    long long x = a[right - 1];
+    if (left != start) start = left, low = high = x;
+    else low = min(low, x), high = max(high, x);
+    return high - low <= tolerance;
+});
+```
+
+非空输入调用次数为 `n+块数-1`，没有结束通知。Operation 可以先更新自己的摘要再
+判断，拒绝后的摘要在下一次单元素调用时重置；库不需要摘要类型、回滚或 emit 协议。
+源结构不能改变；捕获的 view/owner 必须在调用期间有效，不要捕获随后被移空的 descriptor。
+边界是快照，结果仍为原来源的 chunks。自定义双参数谓词现在表示位置边界，旧版的
+相邻值谓词应改为捕获源并比较 `source[right-2]` 与 `source[right-1]`，单元素返回 true。
+
+规则保证首次拒绝即切段；有负数时 sum 超限后可能恢复，不能据此宣称最长合法前缀。
+数值差、和由调用者保证可表示。任意区间统计可以直接调用外部 fold；预先计算或回溯
+得出的区间计划仍直接交给 `nchunks`，不强制经过 nruns。
 
 chunk 构造时把 source descriptor 移入一次共享存储，子块保留该存储，因此可以脱离外层
 chunk function；每次取子块只复制常数大小的描述，不分配、不复制整个位置计划或 hash。
@@ -625,7 +654,8 @@ move-only source 也能分块。子块共享 accessor 的可变状态；底层�
 原来的子块脱离能力保留，但带内部可变状态的 accessor 从“每个子块独立复制”改为共享。
 这类共享分块在运行期构造，不再支持常量求值；`nblock` 的单个普通切片仍可用于常量求值。
 
-以下均另计 descriptor 捕获成本和源访问成本：已有借用计划的 select/slice/stride 构造 `O(1)`；filter/unique/runs 构造 `O(n)`；
+以下均另计 descriptor 捕获成本和源访问成本：已有借用计划的 select/slice/stride 构造 `O(1)`；filter/unique 构造 `O(n)`；
+runs 构造为 `O(n + 所有谓词调用的总成本)`，空间与块数成正比；
 argsort/order/sort 为 `O(n log n)`；blocks/windows 的 interval domain 是惰性
 `O(1)` 描述，分块额外分配一次共享源；枚举全部子块与子块数成正比。
 
@@ -1228,6 +1258,45 @@ destructive 根必须独占且互不重叠；persistent 根可能共享节点，
 
 头文件：`src-v3/ds.hpp`
 
+### `nlist<T>`：独立节点双向链表
+
+头文件：`src-v3/list.hpp`。自行管理指针节点，每个元素单独分配，哨兵不构造 T；
+没有随机下标或伪 `nview`。可直接 range-for，也可以把链表作为 `ngraph` 的邻接 range。
+需要按位置处理时，显式物化为 vector；不能对链表使用要求 `operator[]` 的 `nall`。
+
+```cpp
+nlist<string> a, b;
+auto saved = a.emplace(a.end(), "river");
+a.emplace_front("gear");
+b.splice(b.end(), a, saved);     // saved 现在属于 b，元素地址不变
+b.emplace_back("lab");
+for (const auto& value : b) cout << value << '\n';
+b.erase(saved);                 // 仅被删节点的迭代器/引用失效
+```
+
+```text
+len / empty / begin / end / front / back
+emplace(pos,args...) / insert(pos,value)
+emplace_front / emplace_back / push_front / push_back
+erase(pos) / erase(first,last) / pop_front / pop_back / clear
+splice(pos,other) / splice(pos,other,item) / splice(pos,other,first,last)
+reverse
+```
+
+插入、单节点删除、端点访问、整链 splice 和单节点 splice 为 `O(1)`，另计元素构造/
+析构与分配成本。跨链表区间 splice 为维护 `len()` 遍历 k 个节点，`O(k)`；同链表区间
+splice 为 `O(1)`。splice 不构造/移动/复制元素，也不分配；reverse 为 `O(n)`，只改链接。
+`erase` 返回后继，`emplace/insert` 返回新节点迭代器；emplace_front/back 返回元素引用。
+
+迭代器为双向，const 链表只能取得 `const T&`。插入、splice、reverse 保留现有元素地址与
+迭代器；删除立即析构释放相应节点。复制产生独立节点，移动整链为 `O(1)`；移动赋值还需
+销毁目标旧元素。元素迭代器跟随节点，end 哨兵属于原链表对象。对象析构/clear 使其所有
+元素引用失效。copy 要求 T 可复制，emplace/splice 可用于不可复制、不可移动的 T。
+
+传入迭代器必须属于指定链表；`erase` 不接受 end，front/back/pop 要求非空。
+区间 `[first,last)` 必须沿 next 可达且不越过哨兵；同链表 splice 的插入位置不在区间
+内部，在 first 或 last 时不操作。长度必须能由 `nidx_t` 表示。不做逐节点 owner 检查。
+
 ### `nfenwick<T,Group>`
 
 要求 Abel 群：结合、交换、单位元、逆元。`add`、`prefix`、`fold`、`get`、`set` 均为
@@ -1375,6 +1444,11 @@ nhopcroft_karp        二分图最大匹配
 position 存储。V3 不替用户偷偷构造反图，因为反图
 的存储策略本来就是自由度的一部分。
 
+SCC 两遍使用递归 lambda DFS，辅助调用栈最坏 `O(V)`。BFS 的队列、Dijkstra 的堆
+仍是算法所需结构。SCC 组件标签按第二遍发现顺序给出，不承诺旧版本的具体标签数值。
+SCC、nroot、nreroot 及 HLD 构造会嵌套访问邻接/children，外层 range 和迭代器必须在
+内层调用期间有效；返回独立临时容器可以，返回每次调用都会覆写的共享 scratch 不可以。
+
 `ndinic<C>` 的容量类型要支持零值、比较、加减与 `min`。DFS 是递归实现，极深层次图需要
 由调用者评估栈深度。
 
@@ -1382,7 +1456,7 @@ position 存储。V3 不替用户偷偷构造反图，因为反图
 
 ### 11.1 `nroot`
 
-`nroot(graph,roots)` 对给定根做 first-discovery，返回 `nrooted`：
+`nroot(graph,roots)` 对给定根按邻接枚举顺序做递归 DFS first-discovery，返回 `nrooted`：
 
 ```text
 parents() subtree_sizes() depths() components() positions()
@@ -1391,9 +1465,13 @@ order() roots() children(vertex)
 
 这些语义入口大量使用 `nfunc`，从而保留“语义 key 与内部 position 不相等”的自由。
 `parent[root]==root`。没有被 roots 覆盖的点保留 unseen metadata。
+这些点 parent/depth/component 为 `-1`、subtree 为 `0`，不出现在 order 中；将内部
+position 翻译成 key 的 parents/components 只允许查询覆盖点。
 
 `nroot` 可以接受有向图甚至有环图；它只生成遍历森林，不声称原图本身是树。需要树语义
 的算法必须由调用者保证输入是森林。
+DFS 在返回时累计 subtree，调用栈为 `O(height)`；有环图的发现父边与旧手工栈版本
+可能不同，返回值始终是当前 DFS 的遍历森林。
 
 ### 11.2 `nhld`
 
@@ -1427,6 +1505,10 @@ visitor 只消费结果，不得修改或销毁正在遍历的布局。`path` �
 
 HLD 需要 roots/children 真正描述一片 rooted forest，每个非根恰好出现一次；`lca/path`
 的两个顶点必须在同一组件。构造 `O(n)`，LCA 和分段数 `O(log n)`。
+构造时重儿子优先递归，调用栈 `O(height)`；轻儿子顺序/同大小重儿子的选择不保证
+与旧版本相同。`len()` 是全 key 域大小，`order().len()` 只计覆盖点。未覆盖点
+position/head 为 `-1`，parent/depth/subtree 为 `-1/-1/0`；heads/parents/lca/path
+等要求合法树位置的操作只接受覆盖点。空根集的 order 为空，不会填入伪顶点。
 
 ### 11.3 `nreroot`
 
@@ -1764,6 +1846,8 @@ vector 基线与 FHQ 后端的差异、线段树、Wavelet Matrix、
 LCT 路径、直接邻接与 graph port、CSR 构造/BFS、rooted projection、稀疏节点数和峰值
 RSS。时间值受机器波动影响，checksum 与规模必须稳定；跨运行的单个毫秒值不能代替同一
 workload 下的结构、内存和 checksum 对照。
+统一入口还运行 `tree_protocol_bench.cpp`，覆盖 lazy 布局、FHQ edit 及独立节点链表的
+稳定迭代器 splice。深链递归测试/benchmark 应在调用栈充足的进程中运行；ASan 同样计入栈成本。
 
 `composition_cost_property` 额外检查排序后分块的逐块零分配、终结算法不复制持有计划的
 descriptor、move-only 源的子块脱离、共享 accessor 状态、已有 hash inverse 的显式借用，
@@ -1812,6 +1896,7 @@ discrete:   nselect nslice nstride nfilter nunique nindexed ncollect nprefix nsu
             nargmin nargmax nlower nupper nargsort norder nsort nreverse_inplace
             nchunks nblock nblocks nwindows nruns
 memory:     narena
+list:       nlist
 fhq:        nfhq nfhq_noop nmake_fhq
 segment:    nsegment_trace nsegment_cover nadd nmin nmax nseg nlazyseg nlazy_ops naddsum_action
             nlazy_addsum nsparse_seg

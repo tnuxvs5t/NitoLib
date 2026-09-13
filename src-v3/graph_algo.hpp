@@ -82,6 +82,7 @@ Kosaraju receives both forward and reverse descriptors over the same vertex keys
 their enumeration orders may differ.  Results use forward-graph positions.
 This keeps the graph port minimal and lets CSR/forward-star callers choose whether and
 how reverse edges are stored.  Component labels are dense in second-pass discovery order.
+Recursive DFS uses O(V) call stack; outstanding adjacency ranges survive nested calls.
 */
 template <class G, class R>
 nscc_result nscc(G&& graph, R&& reverse_graph) {
@@ -89,40 +90,29 @@ nscc_result nscc(G&& graph, R&& reverse_graph) {
     vector<unsigned char> seen(n);
     vector<nidx_t> order;
     order.reserve(n);
-    for (nidx_t source = 0; source < n; ++source) {
-        if (seen[source]) continue;
-        vector<pair<nidx_t, bool>> stack{{source, false}};
-        while (!stack.empty()) {
-            auto [from, exit] = stack.back();
-            stack.pop_back();
-            if (exit) {
-                order.push_back(from);
-                continue;
-            }
-            if (seen[from]) continue;
-            seen[from] = true;
-            stack.emplace_back(from, true);
-            for (auto&& edge : graph.edges(graph.vertices[from])) {
-                nidx_t to = graph.vertices.inverse(graph.target(edge));
-                if (!seen[to]) stack.emplace_back(to, false);
-            }
+    auto finish = [&](auto&& self, nidx_t from) -> void {
+        seen[from] = true;
+        for (auto&& edge : graph.edges(graph.vertices[from])) {
+            nidx_t to = graph.vertices.inverse(graph.target(edge));
+            if (!seen[to]) self(self, to);
         }
-    }
+        order.push_back(from);
+    };
+    for (nidx_t source = 0; source < n; ++source)
+        if (!seen[source]) finish(finish, source);
 
-    vector<nidx_t> component(n, -1), stack;
+    vector<nidx_t> component(n, -1);
     nidx_t count = 0;
+    auto assign = [&](auto&& self, nidx_t from) -> void {
+        component[from] = count;
+        for (auto&& edge : reverse_graph.edges(graph.vertices[from])) {
+            nidx_t to = graph.vertices.inverse(reverse_graph.target(edge));
+            if (component[to] < 0) self(self, to);
+        }
+    };
     for (auto it = order.rbegin(); it != order.rend(); ++it) {
         if (component[*it] >= 0) continue;
-        component[*it] = count;
-        stack.push_back(*it);
-        while (!stack.empty()) {
-            nidx_t from = stack.back();
-            stack.pop_back();
-            for (auto&& edge : reverse_graph.edges(graph.vertices[from])) {
-                nidx_t to = graph.vertices.inverse(reverse_graph.target(edge));
-                if (component[to] < 0) component[to] = count, stack.push_back(to);
-            }
-        }
+        assign(assign, *it);
         ++count;
     }
     return {move(component), count};

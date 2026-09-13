@@ -65,9 +65,9 @@ struct nfhq {
 
     /* Call expose before mutating a saved handle, then rebuild afterwards. */
     void expose(nidx_t handle) {
-        vector<nidx_t> path;
-        for (nidx_t x = handle; x >= 0; x = pool[x].parent) path.push_back(x);
-        for (auto it = path.rbegin(); it != path.rend(); ++it) down(*it);
+        if (handle < 0) return;
+        expose(pool[handle].parent);
+        down(handle);
     }
 
     void rebuild(nidx_t handle) {

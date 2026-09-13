@@ -8,7 +8,9 @@ struct npath_piece {
 
 /*
 HLD metadata owns dense arrays but only owns one invertible vertex descriptor, not its
-referents.  lca/path require vertices in one component.  path returns [left,right)
+referents.  len() counts all keys; order() contains only covered vertices, and uncovered
+positions/heads are -1.  Key-valued parents/heads and lca/path require covered vertices;
+lca/path additionally require one component.  path returns [left,right)
 pieces in traversal order from the first vertex to the second; reverse means read that
 base interval right-to-left.  This preserves noncommutative vertex-path aggregates.
 */
@@ -92,22 +94,18 @@ auto layout(V&& vertices, vector<nidx_t> roots, C children,
             vector<nidx_t> parent, vector<nidx_t> depth, vector<nidx_t> subtree,
             vector<nidx_t> heavy) {
     nidx_t n = vertices.len(), timer = 0;
-    vector<nidx_t> head(n), position(n), at(n);
-    for (nidx_t root : roots) {
-        vector<pair<nidx_t, nidx_t>> tasks{{root, root}};
-        while (!tasks.empty()) {
-            auto [start, chain] = tasks.back();
-            tasks.pop_back();
-            for (nidx_t vertex = start; vertex >= 0; vertex = heavy[vertex]) {
-                head[vertex] = chain;
-                position[vertex] = timer;
-                at[timer++] = vertex;
-                invoke(children, vertex, [&](nidx_t child) {
-                    if (child != heavy[vertex]) tasks.emplace_back(child, child);
-                });
-            }
-        }
-    }
+    vector<nidx_t> head(n, -1), position(n, -1), at(n);
+    auto dfs = [&](auto&& self, nidx_t vertex, nidx_t chain) -> void {
+        head[vertex] = chain;
+        position[vertex] = timer;
+        at[timer++] = vertex;
+        if (heavy[vertex] >= 0) self(self, heavy[vertex], chain);
+        invoke(children, vertex, [&](nidx_t child) {
+            if (child != heavy[vertex]) self(self, child, child);
+        });
+    };
+    for (nidx_t root : roots) dfs(dfs, root, root);
+    at.resize(timer);
     return nhld_layout<remove_cvref_t<V>>{forward<V>(vertices), move(parent), move(depth),
         move(subtree), move(heavy), move(head), move(position), move(at), move(roots)};
 }
@@ -133,36 +131,30 @@ auto rooted(R&& tree, V&& vertices) {
 /*
 The construction port is invertible vertices, roots and children(vertex).  children
 must describe a rooted forest, be repeatable, and enumerate every non-root exactly once.
-No concrete graph/tree owner, parent array type or adjacency representation is required.
+Roots may cover a subset of vertices.  Recursion uses O(height) call stack; outstanding
+child ranges remain valid during nested calls.  No concrete graph/tree owner is required.
 */
 template <class V, class R, class C>
 auto nhld(V vertices, R roots, C children) {
     nidx_t n = vertices.len();
-    vector<nidx_t> parent(n, -1), depth(n), subtree(n, 1), heavy(n, -1), traversal, root_position;
-    traversal.reserve(n);
+    vector<nidx_t> parent(n, -1), depth(n, -1), subtree(n), heavy(n, -1), root_position;
+    auto dfs = [&](auto&& self, nidx_t from) -> void {
+        subtree[from] = 1;
+        for (auto&& key : invoke(children, vertices[from])) {
+            nidx_t child = vertices.inverse(key);
+            parent[child] = from;
+            depth[child] = depth[from] + 1;
+            self(self, child);
+            subtree[from] += subtree[child];
+            if (heavy[from] < 0 || subtree[heavy[from]] < subtree[child]) heavy[from] = child;
+        }
+    };
     for (nidx_t i = 0; i < roots.len(); ++i) {
         nidx_t root = vertices.inverse(roots[i]);
         root_position.push_back(root);
         parent[root] = root;
-        vector<nidx_t> stack{root};
-        while (!stack.empty()) {
-            nidx_t from = stack.back();
-            stack.pop_back();
-            traversal.push_back(from);
-            for (auto&& child_key : invoke(children, vertices[from])) {
-                nidx_t child = vertices.inverse(child_key);
-                parent[child] = from;
-                depth[child] = depth[from] + 1;
-                stack.push_back(child);
-            }
-        }
-    }
-    for (auto it = traversal.rbegin(); it != traversal.rend(); ++it) {
-        nidx_t vertex = *it;
-        if (parent[vertex] == vertex) continue;
-        nidx_t p = parent[vertex];
-        subtree[p] += subtree[vertex];
-        if (heavy[p] < 0 || subtree[heavy[p]] < subtree[vertex]) heavy[p] = vertex;
+        depth[root] = 0;
+        dfs(dfs, root);
     }
 
     auto child_positions = [&](nidx_t vertex, auto visit) {
@@ -190,6 +182,7 @@ direction and adjacency is repeatable.  merge supplies id() and is associative; 
 is the local adjacency order, so commutativity is not required.  base(vertex) creates
 the vertex state.  lift(state,from,edge_from_to) maps the aggregate at from with `to`
 excluded into its contribution to `to`.  Returns answers by dense vertex position.
+DFS uses O(height) call stack; outstanding adjacency ranges survive nested calls.
 */
 template <class G, class Base, class Lift, class M>
 auto nreroot(G&& graph, Base base, Lift lift, M merge) {
@@ -197,19 +190,17 @@ auto nreroot(G&& graph, Base base, Lift lift, M merge) {
     nidx_t n = graph.vertices.len();
     vector<nidx_t> parent(n, -1), order;
     order.reserve(n);
+    auto dfs = [&](auto&& self, nidx_t from) -> void {
+        order.push_back(from);
+        for (auto&& edge : graph.edges(graph.vertices[from])) {
+            nidx_t to = graph.vertices.inverse(graph.target(edge));
+            if (parent[to] < 0) parent[to] = from, self(self, to);
+        }
+    };
     for (nidx_t source = 0; source < n; ++source) {
         if (parent[source] >= 0) continue;
         parent[source] = source;
-        vector<nidx_t> stack{source};
-        while (!stack.empty()) {
-            nidx_t from = stack.back();
-            stack.pop_back();
-            order.push_back(from);
-            for (auto&& edge : graph.edges(graph.vertices[from])) {
-                nidx_t to = graph.vertices.inverse(graph.target(edge));
-                if (parent[to] < 0) parent[to] = from, stack.push_back(to);
-            }
-        }
+        dfs(dfs, source);
     }
 
     vector<S> toward_parent(n, merge.id());

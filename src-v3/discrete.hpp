@@ -81,8 +81,8 @@ template <class S>
 constexpr auto nstride(S source, nidx_t first, nidx_t last, nidx_t step) {
     nidx_t distance = step > 0 ? max(nidx_t(0), last - first)
                                : max(nidx_t(0), first - last);
-    nidx_t width = abs(step);
-    nidx_t count = distance / width + (distance % width != 0);
+    nuidx_t width = step > 0 ? nuidx_t(step) : nuidx_t(0) - nuidx_t(step);
+    nidx_t count = nidx_t(nuidx_t(distance) / width + (nuidx_t(distance) % width != 0));
     return nselect(move(source), ntabulate(
         count,
         [first, step](nidx_t i) { return first + i * step; },
@@ -385,14 +385,15 @@ auto nchunks(S source, I intervals) {
 template <class S>
 constexpr auto nblock(S source, nidx_t width, nidx_t index) {
     nidx_t n = nlen(source), left = index * width;
-    return nslice(move(source), left, min(n, left + width));
+    return nslice(move(source), left, left + min(width, n - left));
 }
 
 template <class S>
 constexpr auto nblocks(S source, nidx_t width) {
     nidx_t n = nlen(source), count = n / width + (n % width != 0);
     auto intervals = ntabulate(count, [n, width](nidx_t i) {
-        return pair{i * width, min(n, (i + 1) * width)};
+        nidx_t left = i * width;
+        return pair{left, left + min(width, n - left)};
     });
     return nchunks(move(source), move(intervals));
 }
@@ -408,14 +409,30 @@ constexpr auto nwindows(S source, nidx_t width, nidx_t step = 1) {
     return nchunks(move(source), move(intervals));
 }
 
-/* Maximal adjacent runs.  together(previous,current) defines run membership. */
-template <class S, class P = equal_to<>>
-auto nruns(S source, P together = {}) {
+/*
+Greedy nonempty runs.  operation(left,right) tests the candidate [left,right), capturing
+the original view and any augmentation itself.  Each run starts with a singleton call,
+then right increases by one.  A rejection ends the old run before right-1 and immediately
+calls operation(right-1,right) to start the next.  Singletons must be accepted; no empty
+or end notification occurs.  Calls total n+runs-1 for nonempty input.  Operation uses a
+changed left to reset its state.  Source stays fixed; stored boundaries are a snapshot.
+Without an operation, adjacent equal values form runs.  Cost includes operation work.
+*/
+template <class S, class P = nullptr_t>
+auto nruns(S source, P operation = {}) {
     vector<pair<nidx_t, nidx_t>> bounds;
     nidx_t n = nlen(source), left = 0;
-    for (nidx_t i = 1; i <= n; ++i)
-        if (i == n || !invoke(together, source[i - 1], source[i]))
+    auto accept = [&](nidx_t right) {
+        if constexpr (is_same_v<P, nullptr_t>)
+            return right - left == 1 || source[right - 2] == source[right - 1];
+        else return bool(invoke(operation, left, right));
+    };
+    for (nidx_t i = 0; i < n; ++i)
+        if (!accept(i + 1)) {
             bounds.push_back({left, i}), left = i;
+            (void)accept(i + 1);
+        }
+    if (n) bounds.push_back({left, n});
     nidx_t count = nidx_t(bounds.size());
     auto intervals = ntabulate(count,
                                [bounds = move(bounds)](nidx_t i) { return bounds[i]; });

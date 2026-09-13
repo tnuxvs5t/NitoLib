@@ -86,8 +86,8 @@ int main() {
         }
 
         nidx_t threshold = nidx_t(rng() % 4);
-        auto tolerant = nruns(nall(input), [=](nidx_t left_value, nidx_t right_value) {
-            return abs(left_value - right_value) <= threshold;
+        auto tolerant = nruns(nall(input), [&](nidx_t begin, nidx_t end) {
+            return end - begin == 1 || abs(input[end - 2] - input[end - 1]) <= threshold;
         });
         nidx_t count = n ? 1 : 0;
         for (nidx_t i = 1; i < n; ++i) count += abs(input[i - 1] - input[i]) > threshold;

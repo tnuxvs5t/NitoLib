@@ -1,4 +1,4 @@
-# Nitori v3
+# Nitori v3.2
 
 Nitori v3 是面向算法竞赛的 C++23 泛型库重建工程。当前改革目标是：
 
@@ -6,8 +6,12 @@ Nitori v3 是面向算法竞赛的 C++23 泛型库重建工程。当前改革目
 结构化复用改革 + 自由度革命
 ```
 
-v3.1 当前主线是 inverse-first 的 `nview/nfunc` 结构：能代数求逆时不建表，不能时由紧凑
+v3.2 延续 inverse-first 的 `nview/nfunc` 结构：能代数求逆时不建表，不能时由紧凑
 静态 hash fallback 兜底，算法只消费统一的 `inverse(key)->position` 端口。
+
+本版新增独立节点双向链表 `nlist`；`nruns` 的自定义 Operation 接受候选段
+`[left,right)` 边界，自行捕获原 view 并维护增量摘要。图树 DFS 与祖先下推简化为递归，
+同时修复 HLD 部分覆盖和分块/stride 的整数边界。
 
 V3 不复用 V2 的实现、测试、checked/unsafe 双体系或单头文件组织。代码从 `src-v3/`
 重新生长，模板只要求实际使用的表达式，数学、生命周期和失效限制写在局部注释中。
