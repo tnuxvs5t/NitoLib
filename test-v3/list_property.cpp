@@ -1,152 +1,123 @@
 #include "../src-v3/list.hpp"
-#include "../src-v3/graph.hpp"
 
 #define CHECK(x) do { if (!(x)) { cerr << __FILE__ << ':' << __LINE__ << ": " #x "\n"; abort(); } } while (false)
 
-struct immobile {
+struct payload {
     static inline nidx_t alive = 0;
-    nidx_t value;
-    explicit immobile(nidx_t x) : value(x) { ++alive; }
-    immobile(const immobile&) = delete;
-    immobile(immobile&&) = delete;
-    ~immobile() { --alive; }
-};
-
-struct throwing_copy {
-    static inline nidx_t alive = 0, remaining = 100;
-    throwing_copy() { ++alive; }
-    throwing_copy(const throwing_copy&) {
-        if (!remaining--) throw runtime_error("copy");
+    unique_ptr<nidx_t> value;
+    explicit payload(nidx_t x) : value(make_unique<nidx_t>(x)) {
+        if (x < 0) throw runtime_error("construction");
         ++alive;
     }
-    ~throwing_copy() { --alive; }
+    payload(payload&& other) noexcept : value(move(other.value)) { ++alive; }
+    ~payload() { --alive; }
 };
 
 int main() {
-    static_assert(bidirectional_iterator<nlist<nidx_t>::iterator>);
-    static_assert(bidirectional_iterator<nlist<nidx_t>::const_iterator>);
-    static_assert(!random_access_iterator<nlist<nidx_t>::iterator>);
-    static_assert(same_as<decltype(*declval<const nlist<nidx_t>&>().begin()), const nidx_t&>);
-    static_assert(!is_copy_constructible_v<nlist<immobile>>);
+    static_assert(same_as<decltype(declval<const nlist<nidx_t>&>()[0]), const nidx_t&>);
     {
-        nlist<immobile> a, b;
-        auto saved = a.emplace(a.end(), 7);
-        immobile* address = addressof(*saved);
-        a.emplace_front(2);
-        b.splice(b.end(), a, saved);
-        CHECK(a.len() == 1 && b.len() == 1 && addressof(b.front()) == address);
-        b.emplace_back(9);
-        CHECK(next(saved)->value == 9);
-        nlist<immobile> moved(move(b));
-        CHECK(b.empty() && addressof(moved.front()) == address);
-        CHECK(next(next(saved)) == moved.end());
-        a = move(moved);
-        CHECK(moved.empty() && immobile::alive == 2 && addressof(a.front()) == address);
-        a.reverse();
-        CHECK(a.back().value == 7 && addressof(a.back()) == address);
-        a.erase(saved);
-        CHECK(immobile::alive == 1);
-        a.clear();
-        CHECK(immobile::alive == 0);
-    }
-    {
-        nlist<throwing_copy> source, target;
-        source.emplace_back(); source.emplace_back(); source.emplace_back();
-        target.emplace_back();
-        auto* old = addressof(target.front());
-        throwing_copy::remaining = 1;
+        nlist<payload> q;
+        nlist<payload>::root a, b;
+        auto x = q.insert(a, -1, 7), y = q.insert(a, -1, 8);
+        auto* owned = q[x].value.get();
+        auto part = q.cut(a, x, y);
+        CHECK(a.first == y && a.last == y && q.prev(y) == -1);
+        q.splice(b, -1, part);
+        CHECK(part.empty() && part.last == -1 && q[x].value.get() == owned);
+        q.reserve(1000);
+        CHECK(q[x].value.get() == owned && *q[x].value == 7);
+        CHECK(q.erase(b, x) == -1 && b.empty() && b.last == -1 && payload::alive == 1);
         bool threw = false;
-        try { target = source; } catch (const runtime_error&) { threw = true; }
-        CHECK(threw && throwing_copy::alive == 4 && addressof(target.front()) == old);
-        throwing_copy::remaining = 0;
-        try { target.emplace(target.end(), source.front()); } catch (const runtime_error&) {}
-        CHECK(target.len() == 1 && throwing_copy::alive == 4);
+        try { q.insert(a, -1, -1); } catch (const runtime_error&) { threw = true; }
+        CHECK(threw && q.free == x && !q.pool[x].value && payload::alive == 1);
+        CHECK(q.insert(a, y, 9) == x && q.pool.len() == 2);
+        auto all = q.cut(a, a.first, -1);
+        CHECK(a.empty() && a.last == -1);
+        q.reverse(all);
+        CHECK(all.first == y && all.last == x);
+        q.splice(a, -1, all);
+        q.clear(a);
+        CHECK(payload::alive == 0 && q.pool.len() == 2);
+        for (nidx_t i = 0; i < 1000; ++i) {
+            q.insert(a, -1, i);
+            q.clear(a);
+        }
+        CHECK(q.pool.len() == 2 && payload::alive == 0);
     }
-    CHECK(throwing_copy::alive == 0);
+    CHECK(payload::alive == 0);
 
-    array<nlist<nidx_t>, 3> lists;
+    nlist<nidx_t> q;
+    array<nlist<nidx_t>::root, 3> chains;
     array<vector<nidx_t>, 3> oracle;
-    unordered_map<nidx_t, nidx_t*> addresses;
+    unordered_map<nidx_t, nidx_t> handles;
     mt19937 rng(0x1157);
-    nidx_t serial = 0;
-    auto at = [&](nidx_t which, nidx_t position) {
-        return next(lists[which].begin(), position);
+    nidx_t serial = 0, peak = 0;
+    auto at = [&](nidx_t a, nidx_t p) {
+        return p == nidx_t(oracle[a].size()) ? nidx_t(-1) : handles.at(oracle[a][p]);
     };
     for (nidx_t step = 0; step < 25000; ++step) {
         nidx_t a = nidx_t(rng() % 3), b = nidx_t(rng() % 3);
-        nidx_t n = lists[a].len(), m = lists[b].len();
-        nidx_t p = nidx_t(rng() % (n + 1)), op = nidx_t(rng() % 8);
+        nidx_t n = nidx_t(oracle[a].size()), m = nidx_t(oracle[b].size());
+        nidx_t p = nidx_t(rng() % (n + 1)), op = nidx_t(rng() % 6);
         if (op == 0 || (!n && op == 1)) {
-            auto it = lists[a].insert(at(a, p), serial);
-            addresses[serial] = addressof(*it);
+            handles[serial] = q.insert(chains[a], at(a, p), serial);
             oracle[a].insert(oracle[a].begin() + p, serial++);
-        } else if (op == 1 && n) {
+        } else if (op == 1) {
             p %= n;
-            addresses.erase(oracle[a][p]);
-            auto after = lists[a].erase(at(a, p));
+            nidx_t value = oracle[a][p], expected = at(a, p + 1);
+            CHECK(q.erase(chains[a], handles.at(value)) == expected);
+            handles.erase(value);
             oracle[a].erase(oracle[a].begin() + p);
-            CHECK(after == at(a, p));
-        } else if (op == 2) {
+        } else if (op == 2 || op == 3) {
             nidx_t l = nidx_t(rng() % (m + 1)), r = nidx_t(rng() % (m + 1));
             if (l > r) swap(l, r);
-            if (a == b && l < p && p < r) continue;
-            lists[a].splice(at(a, p), lists[b], at(b, l), at(b, r));
-            if (!(a == b && (p == l || p == r))) {
-                vector<nidx_t> part(oracle[b].begin() + l, oracle[b].begin() + r);
-                oracle[b].erase(oracle[b].begin() + l, oracle[b].begin() + r);
-                if (a == b && p > r) p -= r - l;
-                oracle[a].insert(oracle[a].begin() + p, part.begin(), part.end());
+            if (a == b && l <= p && p < r) continue;
+            nidx_t position = at(a, p);
+            auto part = q.cut(chains[b], at(b, l), at(b, r));
+            vector<nidx_t> values(oracle[b].begin() + l, oracle[b].begin() + r);
+            oracle[b].erase(oracle[b].begin() + l, oracle[b].begin() + r);
+            if (op == 3) {
+                q.reverse(part);
+                reverse(values.begin(), values.end());
             }
-        } else if (op == 3) {
-            lists[a].splice(at(a, p), lists[b]);
-            if (a != b) {
-                oracle[a].insert(oracle[a].begin() + p, oracle[b].begin(), oracle[b].end());
-                oracle[b].clear();
-            }
-        } else if (op == 4 && m) {
-            nidx_t q = nidx_t(rng() % m), value = oracle[b][q];
-            lists[a].splice(at(a, p), lists[b], at(b, q));
-            if (!(a == b && (p == q || p == q + 1))) {
-                oracle[b].erase(oracle[b].begin() + q);
-                if (a == b && p > q) --p;
-                oracle[a].insert(oracle[a].begin() + p, value);
-            }
-        } else if (op == 5) {
-            lists[a].reverse();
+            q.splice(chains[a], position, part);
+            CHECK(part.empty() && part.last == -1);
+            if (a == b && p >= r) p -= r - l;
+            oracle[a].insert(oracle[a].begin() + p, values.begin(), values.end());
+        } else if (op == 4) {
+            q.reverse(chains[a]);
             reverse(oracle[a].begin(), oracle[a].end());
-        } else if (op == 6) {
-            nlist<nidx_t> copy(lists[a]);
-            CHECK(vector<nidx_t>(copy.begin(), copy.end()) == oracle[a]);
-            if (!copy.empty()) CHECK(addressof(copy.front()) != addressof(lists[a].front()));
-            copy = copy;
-            CHECK(vector<nidx_t>(copy.begin(), copy.end()) == oracle[a]);
-            auto& alias = lists[a];
-            lists[a] = move(alias);
-        } else if (op == 7) {
-            nidx_t r = p + nidx_t(rng() % (n - p + 1));
-            for (nidx_t i = p; i < r; ++i) addresses.erase(oracle[a][i]);
-            auto after = lists[a].erase(at(a, p), at(a, r));
-            oracle[a].erase(oracle[a].begin() + p, oracle[a].begin() + r);
-            CHECK(after == at(a, p));
+        } else {
+            q.clear(chains[a]);
+            for (auto value : oracle[a]) handles.erase(value);
+            oracle[a].clear();
         }
+        peak = max(peak, nidx_t(handles.size()));
+        CHECK(q.pool.len() == peak);
+        vector<bool> seen(size_t(q.pool.len()));
         for (nidx_t which = 0; which < 3; ++which) {
-            const auto& list = lists[which];
-            CHECK(list.len() == nidx_t(oracle[which].size()));
-            auto it = list.begin();
-            for (nidx_t value : oracle[which]) {
-                CHECK(it != list.end() && *it == value && addressof(*it) == addresses.at(value));
-                ++it;
+            auto chain = chains[which];
+            nidx_t h = chain.first, before = -1;
+            for (auto value : oracle[which]) {
+                CHECK(h >= 0 && h < q.pool.len() && !seen[h]);
+                seen[h] = true;
+                CHECK(q.pool[h].value && q[h] == value && handles.at(value) == h);
+                CHECK(q.prev(h) == before);
+                before = h;
+                h = q.next(h);
             }
-            CHECK(it == list.end());
-            for (auto expected = oracle[which].rbegin(); expected != oracle[which].rend(); ++expected)
-                CHECK(*--it == *expected);
-            CHECK(it == list.begin());
-            CHECK(lists[which].begin() == list.begin());
+            CHECK(h == -1 && before == chain.last);
+            h = chain.last;
+            for (auto it = oracle[which].rbegin(); it != oracle[which].rend(); ++it) {
+                CHECK(h == handles.at(*it));
+                h = q.prev(h);
+            }
+            CHECK(h == -1 && chain.empty() == oracle[which].empty());
         }
+        for (auto h = q.free; h >= 0; h = q.next(h)) {
+            CHECK(h < q.pool.len() && !seen[h] && !q.pool[h].value);
+            seen[h] = true;
+        }
+        CHECK(all_of(seen.begin(), seen.end(), [](bool x) { return x; }));
     }
-
-    array<nlist<nidx_t>, 4> adjacency;
-    adjacency[0].push_back(2); adjacency[2].push_back(3);
-    auto graph = ngraph{nrange(4), [&](nidx_t u) -> auto& { return adjacency[u]; }};
-    CHECK((nbfs(graph, 0) == vector<nidx_t>{0, -1, 1, 2}));
 }

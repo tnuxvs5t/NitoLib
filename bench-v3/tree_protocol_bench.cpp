@@ -62,17 +62,22 @@ int main() {
         checksum += uint64_t(initial[i]);
     }
     nlist<nidx_t> chain;
-    vector<nlist<nidx_t>::iterator> handles;
+    nlist<nidx_t>::root list;
+    vector<nidx_t> handles;
+    chain.reserve(n);
     handles.reserve(n);
-    for (nidx_t i = 0; i < n; ++i) handles.push_back(chain.emplace(chain.end(), i));
+    for (nidx_t i = 0; i < n; ++i) handles.push_back(chain.insert(list, -1, i));
     auto list_ms = timed([&] {
-        for (nidx_t i = 0; i < n; ++i) chain.splice(chain.begin(), chain, handles[i]);
+        for (nidx_t i = 0; i < n; ++i) {
+            auto part = chain.cut(list, handles[i], chain.next(handles[i]));
+            chain.splice(list, list.first, part);
+        }
     });
     nidx_t expected_value = n;
-    for (auto it = chain.begin(); it != chain.end(); ++it) {
-        if (*it != --expected_value || addressof(*it) != addressof(*handles[*it])) abort();
+    for (auto h = list.first; h >= 0; h = chain.next(h)) {
+        if (chain[h] != --expected_value || h != handles[chain[h]]) abort();
     }
-    if (expected_value || chain.len() != n) abort();
+    if (expected_value || chain.pool.len() != n) abort();
     cout << "n=" << n << " operations=" << operations << " index_bytes=" << sizeof(nidx_t)
          << " lazy_build_ms=" << build_ms << " lazy_work_ms=" << lazy_ms
          << " lazy_storage_bytes=" << storage

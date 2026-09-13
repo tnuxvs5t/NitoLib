@@ -1258,44 +1258,75 @@ destructive 根必须独占且互不重叠；persistent 根可能共享节点，
 
 头文件：`src-v3/ds.hpp`
 
-### `nlist<T>`：独立节点双向链表
+### `nlist<T>`：节点池与双向链根
 
-头文件：`src-v3/list.hpp`。自行管理指针节点，每个元素单独分配，哨兵不构造 T；
-没有随机下标或伪 `nview`。可直接 range-for，也可以把链表作为 `ngraph` 的邻接 range。
-需要按位置处理时，显式物化为 vector；不能对链表使用要求 `operator[]` 的 `nall`。
+头文件：`src-v3/list.hpp`。一个池可以承载多条链，每条链只有 `{first,last}` 两个
+端点；节点用 `nidx_t` handle 标识，`-1` 表示无邻居或尾后边界。handle 是节点身份，
+不是第几个元素。链根不缓存长度，不提供 iterator 或位置下标。
 
 ```cpp
-nlist<string> a, b;
-auto saved = a.emplace(a.end(), "river");
-a.emplace_front("gear");
-b.splice(b.end(), a, saved);     // saved 现在属于 b，元素地址不变
-b.emplace_back("lab");
-for (const auto& value : b) cout << value << '\n';
-b.erase(saved);                 // 仅被删节点的迭代器/引用失效
+nlist<string> q;
+nlist<string>::root a, b;
+auto river = q.insert(a, -1, "river");  // 尾插，返回 handle
+q.insert(a, river, "gear");            // 插到 river 前面
+auto part = q.cut(a, river, -1);       // 截出 [river,尾后)
+q.splice(b, -1, part);                // 尾接，part 变空
+q[river] += " lab";
+for (auto h = b.first; h >= 0; h = q.next(h)) cout << q[h] << '\n';
+q.erase(b, river);                    // 析构载荷、回收槽位，返回后继
 ```
 
 ```text
-len / empty / begin / end / front / back
-emplace(pos,args...) / insert(pos,value)
-emplace_front / emplace_back / push_front / push_back
-erase(pos) / erase(first,last) / pop_front / pop_back / clear
-splice(pos,other) / splice(pos,other,item) / splice(pos,other,first,last)
-reverse
+root.first / root.last / root.empty()
+q[handle] / prev(handle) / next(handle)
+insert(root,position,args...)         在 position 前构造，-1 表示尾插
+erase(root,handle) / clear(root)      删除单节点 / 清空链
+cut(root,first,last)                  截出沿 next 的半开段，返回独立链根
+splice(root,position,part)            将 part 插入 root，消费 part
+reverse(root) / reserve(node_count)
 ```
 
-插入、单节点删除、端点访问、整链 splice 和单节点 splice 为 `O(1)`，另计元素构造/
-析构与分配成本。跨链表区间 splice 为维护 `len()` 遍历 k 个节点，`O(k)`；同链表区间
-splice 为 `O(1)`。splice 不构造/移动/复制元素，也不分配；reverse 为 `O(n)`，只改链接。
-`erase` 返回后继，`emplace/insert` 返回新节点迭代器；emplace_front/back 返回元素引用。
+给定节点边界后，`cut/splice` 都为 `O(1)`，跨链也不扫描段长，不分配、不移动载荷。
+`erase` 为 `O(1)` 加载荷析构；`insert` 摊还 `O(1)` 加构造与池扩容的搬迁成本。
+`clear/reverse` 为 `O(k)`。要搬动同链的一段，先 cut，再向剩余链的边界 splice。
+空段可截取，空链可拼接；非空段的 last 必须沿 next 可达，`-1` 表示包含链尾。
 
-迭代器为双向，const 链表只能取得 `const T&`。插入、splice、reverse 保留现有元素地址与
-迭代器；删除立即析构释放相应节点。复制产生独立节点，移动整链为 `O(1)`；移动赋值还需
-销毁目标旧元素。元素迭代器跟随节点，end 哨兵属于原链表对象。对象析构/clear 使其所有
-元素引用失效。copy 要求 T 可复制，emplace/splice 可用于不可复制、不可移动的 T。
+根是轻量描述，不是独立 owner：复制根会产生别名，不能把别名当作两条独占链操作。
+参与操作的根和 handle 必须属于同一个池，splice 两侧节点集合必须不相交。
+所有活节点的 handle 在扩容、截段、拼接、反转后稳定；节点引用和载荷引用可能因
+`insert/reserve` 扩容失效，插入参数也不得借用可能搬迁的本池对象。
+`erase` 后 handle 失效，即使这个编号随后被复用也不代表原节点复活。
 
-传入迭代器必须属于指定链表；`erase` 不接受 end，front/back/pop 要求非空。
-区间 `[first,last)` 必须沿 next 可达且不越过哨兵；同链表 splice 的插入位置不在区间
-内部，在 first 或 last 时不操作。长度必须能由 `nidx_t` 表示。不做逐节点 owner 检查。
+池复用空槽，槽位数由同时存活节点数的峰值决定；删除立即析构 T，池容量保留。
+T 要满足 vector 的搬迁要求，不再承诺不可移动载荷或元素地址稳定。
+复制 kernel 是复制整个池；移动 kernel 后原有根属于目标，源需重新初始化才能继续使用。
+`pool[h].prev/next` 公开拓扑，`pool[h].value` 用 optional 管理槽位生命期；直接修改时由
+调用者维护双向链接、根端点及空槽链不变量。普通载荷访问使用 `q[h]` 即可。
+
+#### 组合成块状链表
+
+块是普通载荷，块内直接用已有 view、离散操作和自行维护的统计量。下面在节点 h
+的块内位置 k 拆分，要求 `0 < k < nlen(q[h])`：
+
+```cpp
+nlist<vector<long long>> q;
+nlist<vector<long long>>::root blocks;
+auto h = q.insert(blocks, -1, vector<long long>{1, 2, 3, 4});
+nidx_t k = 2;
+auto tail = ncollect(nsub(nall(q[h]), k, nlen(q[h])));
+q[h].resize(k);
+auto right = q.insert(blocks, q.next(h), move(tail));
+// 此时 h 和 right 两块依次为 [1,2]、[3,4]。
+```
+
+需要段和、最值或 lazy 时，T 就写成 `{data,sum,min,max,lazy,...}`，拆块前 push，
+拆块后 pull。整块区间的移动只操作链根；统计量随载荷留在原节点，不必重建或交给
+额外的框架。链上找位置需自行扫描块长或组合索引，块大小的平衡策略也由算法决定。
+不能把 `nall(q)` 误当链序；块内 `nall(q[h].data)` 或自己的 handle view 可以直接复用。
+
+`test-v3/list_blocks_property.cpp` 给出完整组合：拆块/合块、区间加、区间和、跨链搬段
+以及区间反转，并与平坦 vector 对拍。示例为验证组合而扫描合并相邻小块，未承诺每次
+修改都为平方根复杂度。
 
 ### `nfenwick<T,Group>`
 
