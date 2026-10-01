@@ -1,6 +1,6 @@
 # NitoriSTL v4 总规划
 
-状态：2026-10-01，v4 第一阶段实施中。
+状态：2026-10-01，v4 第一阶段核心重写完成。
 范围：以当前 `src-v3/`、`test-v3/`、`bench-v3/` 和教程冻结出的 v3 能力为输入；不把
 `design-lab/` 当作 v4 权威，也不把任何历史归档当作设计来源。
 
@@ -10,6 +10,15 @@
 
 当前能力账本见 `V4-CAPABILITY-MAP.md`。它把“已经逐字重写并有测试证据”和“计划中”
 分开，不能用 v4 文件存在来冒充 v3 能力已经覆盖。
+
+当前里程碑：
+
+- `903f36c` 冻结 v3 final；v4 不再向 v3 回填设计。
+- core/view/func、图树、root kernel、线段树、动态树、流与容器结构已完成竞赛化重写。
+- 2026-10-01 已完成 math、number、divisor、frac、bitmath、poly、recurrence、linear、
+  string、automata、geom、opt、io、debug 的逐字重写；每块均有 `test-v4/*_property.cpp`
+  独立证据，并针对相关模块跑过 C++20/C++23、优化、ASan/UBSan 或 64 位索引窄测。
+- `mdview.hpp` 明确 abandoned；它不再占用 v4 的能力预算，也不制造空壳兼容文件。
 
 ---
 
