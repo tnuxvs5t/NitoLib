@@ -36,6 +36,7 @@
 | shortest paths, topo, Euler, SCC | `src-v4/graph_algo.hpp` | done | graph port independent；signed/0-1/heap contracts |
 | lowlink and block-cut forest | `src-v4/graph_algo.hpp` | done | multiedge-safe edge IDs、recursive DFS |
 | flow, matching and minimum spanning forest | `src-v4/flow.hpp` | done | 增量残量流与 cut、一次物化邻接的分层匹配、只保存输入位置的 Kruskal；`test-v4/flow_property.cpp` 覆盖随机最小割、暴力匹配、非连通森林和 move-only 边 |
+| pooled chains and ordered multisets | `src-v4/list.hpp`, `bag.hpp`, `vec_bag.hpp` | done | `nlist` 保持 handle/root destructive 链操作；`nbag` 保持 FHQ handle 与只读 query；`nvec_bag` 保持位置语义；`test-v4/list_property.cpp`、`bag_property.cpp` 覆盖回收、跨链搬段、代理值、投影 bound 与 move-only 值 |
 
 独立证据：
 
@@ -45,6 +46,8 @@ test-v4/hash_property.cpp
 test-v4/tree_property.cpp
 test-v4/key_tree_property.cpp
 test-v4/flow_property.cpp
+test-v4/list_property.cpp
+test-v4/bag_property.cpp
 ```
 
 这些测试已在 C++20/C++23、`-O2` 下通过；树核心另有 ASan/UBSan 与 64-bit index
@@ -65,9 +68,9 @@ test-v4/flow_property.cpp
 | `arena.hpp` | `narena` | `arena.hpp` | done |
 | `fhq.hpp` | `nfhq` | `fhq.hpp` | done |
 | `reftree.hpp` | `nreftree` | `reftree.hpp` | pending |
-| `bag.hpp` | `nbag` | `bag.hpp` | pending |
-| `vec_bag.hpp` | `nvec_bag` | `vec_bag.hpp` | pending |
-| `list.hpp` | `nlist` | `list.hpp` | pending |
+| `bag.hpp` | `nbag` | `bag.hpp` | done |
+| `vec_bag.hpp` | `nvec_bag` | `vec_bag.hpp` | done |
+| `list.hpp` | `nlist` | `list.hpp` | done |
 | `wavelet.hpp` | `nwavelet` | `wavelet.hpp` | pending |
 | `topk.hpp` | `ntopk` | `topk.hpp` | pending |
 | `graph_store.hpp` | `ncsr`, graph views | `graph_store.hpp` | done |
