@@ -26,6 +26,8 @@
 | Fenwick, DSU, potential/rollback DSU | `src-v4/ds.hpp` | done | group/action order、势能差、rollback history |
 | queue/deque aggregation, sparse table | `src-v4/ds.hpp` | done | 非交换顺序、重建边界、幂等 sparse query |
 | `nrotate`, permutation rank/unrank | `src-v4/permutation.hpp` | done | mixed-radix rank；rank 类型必须覆盖 n! |
+| append-only handle arena | `src-v4/arena.hpp` | done | handle survives vector relocation；无 generation/owner 层 |
+| `nfhq`, destructive root algebra | `src-v4/fhq.hpp` | done | 多根 split/merge、lazy policy port、kth/rank/sequence |
 
 独立证据：
 
@@ -51,8 +53,8 @@ test-v4/key_tree_property.cpp
 | `mdview.hpp` | `nmdview` | `mdview.hpp` | pending |
 | `segment.hpp` | `nseg`, lazy/sparse segment trees, trace/cover | `segment.hpp` | pending |
 | `ds.hpp` | Fenwick/DSU/queue/deque/sparse table | `ds.hpp` | done |
-| `arena.hpp` | `narena` | `arena.hpp` | pending |
-| `fhq.hpp` | `nfhq` | `fhq.hpp` | pending |
+| `arena.hpp` | `narena` | `arena.hpp` | done |
+| `fhq.hpp` | `nfhq` | `fhq.hpp` | done |
 | `reftree.hpp` | `nreftree` | `reftree.hpp` | pending |
 | `bag.hpp` | `nbag` | `bag.hpp` | pending |
 | `vec_bag.hpp` | `nvec_bag` | `vec_bag.hpp` | pending |
