@@ -56,6 +56,7 @@ test-v4/wavelet_property.cpp
 test-v4/topk_property.cpp
 test-v4/dynamic_tree_property.cpp
 test-v4/math_property.cpp
+test-v4/number_property.cpp
 ```
 
 这些测试已在 C++20/C++23、`-O2` 下通过；树核心另有 ASan/UBSan 与 64-bit index
@@ -87,7 +88,7 @@ test-v4/math_property.cpp
 | `dynamic_tree.hpp` | Euler-tour forest | `dynamic_tree.hpp` | done |
 | `link_cut.hpp` | `nlct` | `link_cut.hpp` | done |
 | `math.hpp` | modular arithmetic, CRT, floor sum, sieve | `math.hpp` | done；`test-v4/math_property.cpp` 覆盖除法、floor sum、CRT、模运算、组合数和筛 |
-| `number.hpp` | primality/factorization/mod64 | `number.hpp` | pending |
+| `number.hpp` | primality/factorization/mod64 | `number.hpp` | done；`test-v4/number_property.cpp` 覆盖宽模乘、Miller–Rabin、Pollard rho、重复因子与 `UINT64_MAX` |
 | `divisor.hpp` | divisor/multiple zeta and factor lists | `divisor.hpp` | pending |
 | `frac.hpp` | `nfrac` | `frac.hpp` | pending |
 | `bitmath.hpp` | xor basis, bit transforms | `bitmath.hpp` | pending |
