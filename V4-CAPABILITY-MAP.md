@@ -65,6 +65,7 @@ test-v4/recurrence_property.cpp
 test-v4/linear_property.cpp
 test-v4/string_property.cpp
 test-v4/automata_property.cpp
+test-v4/geom_property.cpp
 ```
 
 这些测试已在 C++20/C++23、`-O2` 下通过；树核心另有 ASan/UBSan 与 64-bit index
@@ -105,7 +106,7 @@ test-v4/automata_property.cpp
 | `linear.hpp` | matrix, GF(2), linear solve | `linear.hpp` | done；`test-v4/linear_property.cpp` 覆盖矩阵域运算、RREF/行列式/逆、宽指数、随机线性方程组和 0/64 位边界的 packed GF(2) 求解 |
 | `string.hpp` | KMP, suffix array, Manacher, LCP | `string.hpp` | done；`test-v4/string_property.cpp` 覆盖空序列、随机小字母表、周期串以及全部匹配/LCP 语义 |
 | `automata.hpp` | `nac` | `automata.hpp` | done；`test-v4/automata_property.cpp` 覆盖空模式、重复模式、可调用字母表、walk 与 failure 聚合 |
-| `geom.hpp` | point/line/intersection/hull | `geom.hpp` | pending |
+| `geom.hpp` | point/line/intersection/hull | `geom.hpp` | done；`test-v4/geom_property.cpp` 覆盖退化线段、共线/端点相交、随机凸包、面积与无限直线交点 |
 | `opt.hpp` | Li Chao | `opt.hpp` | pending |
 
 ## 每个 pending 条目的完成条件
