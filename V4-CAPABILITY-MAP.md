@@ -28,6 +28,9 @@
 | `nrotate`, permutation rank/unrank | `src-v4/permutation.hpp` | done | mixed-radix rank；rank 类型必须覆盖 n! |
 | append-only handle arena | `src-v4/arena.hpp` | done | handle survives vector relocation；无 generation/owner 层 |
 | `nfhq`, destructive root algebra | `src-v4/fhq.hpp` | done | 多根 split/merge、lazy policy port、kth/rank/sequence |
+| `nsegment_trace`, `nsegment_cover`, `nseg` | `src-v4/segment.hpp` | done | 纯拓扑访问、ordered fold、max_right/min_left、pointwise |
+| `nlazyseg`, `nlazy_ops`, `nlazy_addsum` | `src-v4/segment.hpp` | done | action composition、push/pull、range apply/query |
+| `nsparse_seg` | `src-v4/segment.hpp` | done | destructive/persistent roots、长坐标、query 不分配 |
 
 独立证据：
 
@@ -51,7 +54,7 @@ test-v4/key_tree_property.cpp
 | `sequence.hpp` | `nrun_bounds`, `nindexed_span` | `sequence.hpp` | done |
 | `permutation.hpp` | `nargsort`, `nrotate`, rank/unrank | `permutation.hpp` | done |
 | `mdview.hpp` | `nmdview` | `mdview.hpp` | pending |
-| `segment.hpp` | `nseg`, lazy/sparse segment trees, trace/cover | `segment.hpp` | pending |
+| `segment.hpp` | `nseg`, lazy/sparse segment trees, trace/cover | `segment.hpp` | done |
 | `ds.hpp` | Fenwick/DSU/queue/deque/sparse table | `ds.hpp` | done |
 | `arena.hpp` | `narena` | `arena.hpp` | done |
 | `fhq.hpp` | `nfhq` | `fhq.hpp` | done |
