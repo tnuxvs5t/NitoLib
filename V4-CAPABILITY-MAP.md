@@ -39,6 +39,7 @@
 | pooled chains and ordered multisets | `src-v4/list.hpp`, `bag.hpp`, `vec_bag.hpp` | done | `nlist` 保持 handle/root destructive 链操作；`nbag` 保持 FHQ handle 与只读 query；`nvec_bag` 保持位置语义；`test-v4/list_property.cpp`、`bag_property.cpp` 覆盖回收、跨链搬段、代理值、投影 bound 与 move-only 值 |
 | persistent repeated-pattern tree | `src-v4/reftree.hpp` | done | 逻辑重复、aligned `block/paste/set`、无分配 `leaf_at/find_first/kth`、历史根与非交换 Info；`test-v4/reftree_property.cpp` 覆盖穷举位图、随机历史版本、字符串顺序和 64 位地址 |
 | wavelet matrix and fixed top-k summaries | `src-v4/wavelet.hpp`, `topk.hpp` | done | rank-compressed static sequence queries；ordinary/keyed top-k retain ordered evidence and monoid semantics；`test-v4/wavelet_property.cpp`、`topk_property.cpp` 覆盖空域、重复值、代理外的泛型值和结合性 |
+| dynamic forests | `src-v4/dynamic_tree.hpp`, `link_cut.hpp` | done | `nett_forest` 保持 commutative component aggregate；`nlct` 保持 ordered forward/reverse path fold；`test-v4/dynamic_tree_property.cpp` 覆盖随机 link/cut/set、非交换路径和深链 |
 
 独立证据：
 
@@ -53,6 +54,7 @@ test-v4/bag_property.cpp
 test-v4/reftree_property.cpp
 test-v4/wavelet_property.cpp
 test-v4/topk_property.cpp
+test-v4/dynamic_tree_property.cpp
 ```
 
 这些测试已在 C++20/C++23、`-O2` 下通过；树核心另有 ASan/UBSan 与 64-bit index
@@ -81,8 +83,8 @@ test-v4/topk_property.cpp
 | `graph_store.hpp` | `ncsr`, graph views | `graph_store.hpp` | done |
 | `graph_algo.hpp` | BFS/DFS, SCC, lowlink, Euler, shortest paths | `graph_algo.hpp` | done |
 | `flow.hpp` | Dinic, matching, MST | `flow.hpp` | done |
-| `dynamic_tree.hpp` | Euler-tour forest | `dynamic_tree.hpp` | pending |
-| `link_cut.hpp` | `nlct` | `link_cut.hpp` | pending |
+| `dynamic_tree.hpp` | Euler-tour forest | `dynamic_tree.hpp` | done |
+| `link_cut.hpp` | `nlct` | `link_cut.hpp` | done |
 | `math.hpp` | modular arithmetic, CRT, floor sum, sieve | `math.hpp` | pending |
 | `number.hpp` | primality/factorization/mod64 | `number.hpp` | pending |
 | `divisor.hpp` | divisor/multiple zeta and factor lists | `divisor.hpp` | pending |
