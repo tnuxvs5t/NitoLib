@@ -19,6 +19,10 @@
 | `ngraph`, `nvertices` | `src-v4/graph.hpp` | done | 最小 callable graph port |
 | `nroot`, `nrooted` | `src-v4/rooted.hpp` | done | dense/custom key domain、root algebra、递归 lambda |
 | `nhld`, `npath_piece`, path/LCA projections | `src-v4/tree.hpp` | done | `par dep sz heavy head pos at rt`；路径顺序和 key adapter |
+| `nargsort`, `nindexed_span`, `nrun_bounds` | `src-v4/sequence.hpp` | done | 位置排序计划、borrowed gather span、run snapshot |
+| `nselect`, `nslice`, stride/filter/unique/indexed | `src-v4/discrete.hpp` | done | 位置计划保持 alias；nfunc 保留 semantic keys |
+| scans, write kernels, folds, predicates, bounds, order/sort | `src-v4/discrete.hpp` | done | 左到右调用顺序、源长度写入、半开 bounds |
+| `nchunks`, `nblock`, `nblocks`, `nwindows`, `nruns` | `src-v4/discrete.hpp` | done | detached chunk 共享 descriptor；interval key 保持完整 |
 
 独立证据：
 
@@ -38,8 +42,8 @@ test-v4/key_tree_property.cpp
 | --- | --- | --- | --- |
 | `io.hpp` | `nread`, `nwrite`, `nscan`, `nprint` | `io.hpp` | pending |
 | `debug.hpp` | `ndebug`, `nwrite` debug path | `debug.hpp` | pending |
-| `discrete.hpp` | `nselect`, `nfilter`, `norder`, `nunique`, chunks/runs | `discrete.hpp` | pending |
-| `sequence.hpp` | `nrun_bounds`, `nindexed_span` | `sequence.hpp` | pending |
+| `discrete.hpp` | `nselect`, `nfilter`, `norder`, `nunique`, chunks/runs | `discrete.hpp` | done |
+| `sequence.hpp` | `nrun_bounds`, `nindexed_span` | `sequence.hpp` | done |
 | `permutation.hpp` | `nargsort`, `nrotate`, rank/unrank | `permutation.hpp` | pending |
 | `mdview.hpp` | `nmdview` | `mdview.hpp` | pending |
 | `segment.hpp` | `nseg`, lazy/sparse segment trees, trace/cover | `segment.hpp` | pending |
@@ -78,4 +82,3 @@ test-v4/key_tree_property.cpp
    graph port 等 Nitori 语义保留自有对象。
 4. 为危险边界添加固定断言和独立随机/property test；只运行与本次变更有关的测试。
 5. 在此表中补上复杂度、lifetime/invalidation 和实际测试命令后，才能把状态改为 done。
-
