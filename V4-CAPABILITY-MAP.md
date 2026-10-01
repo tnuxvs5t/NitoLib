@@ -37,6 +37,7 @@
 | lowlink and block-cut forest | `src-v4/graph_algo.hpp` | done | multiedge-safe edge IDs、recursive DFS |
 | flow, matching and minimum spanning forest | `src-v4/flow.hpp` | done | 增量残量流与 cut、一次物化邻接的分层匹配、只保存输入位置的 Kruskal；`test-v4/flow_property.cpp` 覆盖随机最小割、暴力匹配、非连通森林和 move-only 边 |
 | pooled chains and ordered multisets | `src-v4/list.hpp`, `bag.hpp`, `vec_bag.hpp` | done | `nlist` 保持 handle/root destructive 链操作；`nbag` 保持 FHQ handle 与只读 query；`nvec_bag` 保持位置语义；`test-v4/list_property.cpp`、`bag_property.cpp` 覆盖回收、跨链搬段、代理值、投影 bound 与 move-only 值 |
+| persistent repeated-pattern tree | `src-v4/reftree.hpp` | done | 逻辑重复、aligned `block/paste/set`、无分配 `leaf_at/find_first/kth`、历史根与非交换 Info；`test-v4/reftree_property.cpp` 覆盖穷举位图、随机历史版本、字符串顺序和 64 位地址 |
 
 独立证据：
 
@@ -48,6 +49,7 @@ test-v4/key_tree_property.cpp
 test-v4/flow_property.cpp
 test-v4/list_property.cpp
 test-v4/bag_property.cpp
+test-v4/reftree_property.cpp
 ```
 
 这些测试已在 C++20/C++23、`-O2` 下通过；树核心另有 ASan/UBSan 与 64-bit index
@@ -67,7 +69,7 @@ test-v4/bag_property.cpp
 | `ds.hpp` | Fenwick/DSU/queue/deque/sparse table | `ds.hpp` | done |
 | `arena.hpp` | `narena` | `arena.hpp` | done |
 | `fhq.hpp` | `nfhq` | `fhq.hpp` | done |
-| `reftree.hpp` | `nreftree` | `reftree.hpp` | pending |
+| `reftree.hpp` | `nreftree` | `reftree.hpp` | done |
 | `bag.hpp` | `nbag` | `bag.hpp` | done |
 | `vec_bag.hpp` | `nvec_bag` | `vec_bag.hpp` | done |
 | `list.hpp` | `nlist` | `list.hpp` | done |
