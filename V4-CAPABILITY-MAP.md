@@ -59,6 +59,7 @@ test-v4/math_property.cpp
 test-v4/number_property.cpp
 test-v4/divisor_property.cpp
 test-v4/frac_property.cpp
+test-v4/bitmath_property.cpp
 ```
 
 这些测试已在 C++20/C++23、`-O2` 下通过；树核心另有 ASan/UBSan 与 64-bit index
@@ -93,7 +94,7 @@ test-v4/frac_property.cpp
 | `number.hpp` | primality/factorization/mod64 | `number.hpp` | done；`test-v4/number_property.cpp` 覆盖宽模乘、Miller–Rabin、Pollard rho、重复因子与 `UINT64_MAX` |
 | `divisor.hpp` | divisor/multiple zeta and factor lists | `divisor.hpp` | done；`test-v4/divisor_property.cpp` 覆盖约数枚举、筛表、四种变换、空/单点范围与模环 |
 | `frac.hpp` | `nfrac` | `frac.hpp` | done；`test-v4/frac_property.cpp` 覆盖规范化、宽整数取消约分、异常保证、比较与随机域律 |
-| `bitmath.hpp` | xor basis, bit transforms | `bitmath.hpp` | pending |
+| `bitmath.hpp` | xor basis, bit transforms | `bitmath.hpp` | done；`test-v4/bitmath_property.cpp` 覆盖满秩/低宽基、kth 顺序、子集/超集 Möbius、XOR 变换与无除法系数环 |
 | `poly.hpp` | NTT/convolution/poly operations | `poly.hpp` | pending |
 | `recurrence.hpp` | BM and linear recurrence | `recurrence.hpp` | pending |
 | `linear.hpp` | matrix, GF(2), linear solve | `linear.hpp` | pending |
