@@ -61,6 +61,7 @@ test-v4/divisor_property.cpp
 test-v4/frac_property.cpp
 test-v4/bitmath_property.cpp
 test-v4/poly_property.cpp
+test-v4/recurrence_property.cpp
 ```
 
 这些测试已在 C++20/C++23、`-O2` 下通过；树核心另有 ASan/UBSan 与 64-bit index
@@ -97,7 +98,7 @@ test-v4/poly_property.cpp
 | `frac.hpp` | `nfrac` | `frac.hpp` | done；`test-v4/frac_property.cpp` 覆盖规范化、宽整数取消约分、异常保证、比较与随机域律 |
 | `bitmath.hpp` | xor basis, bit transforms | `bitmath.hpp` | done；`test-v4/bitmath_property.cpp` 覆盖满秩/低宽基、kth 顺序、子集/超集 Möbius、XOR 变换与无除法系数环 |
 | `poly.hpp` | NTT/convolution/poly operations | `poly.hpp` | done；`test-v4/poly_property.cpp` 覆盖 NTT、朴素/NTT 卷积、形式逆、微积分、连续点插值和自定义小模数 |
-| `recurrence.hpp` | BM and linear recurrence | `recurrence.hpp` | pending |
+| `recurrence.hpp` | BM and linear recurrence | `recurrence.hpp` | done；`test-v4/recurrence_property.cpp` 覆盖超宽下标、无除法系数环、最短 BM、随机生成序列与零尾系数 |
 | `linear.hpp` | matrix, GF(2), linear solve | `linear.hpp` | pending |
 | `string.hpp` | KMP, suffix array, Manacher, LCP | `string.hpp` | pending |
 | `automata.hpp` | `nac` | `automata.hpp` | pending |
