@@ -23,6 +23,9 @@
 | `nselect`, `nslice`, stride/filter/unique/indexed | `src-v4/discrete.hpp` | done | 位置计划保持 alias；nfunc 保留 semantic keys |
 | scans, write kernels, folds, predicates, bounds, order/sort | `src-v4/discrete.hpp` | done | 左到右调用顺序、源长度写入、半开 bounds |
 | `nchunks`, `nblock`, `nblocks`, `nwindows`, `nruns` | `src-v4/discrete.hpp` | done | detached chunk 共享 descriptor；interval key 保持完整 |
+| Fenwick, DSU, potential/rollback DSU | `src-v4/ds.hpp` | done | group/action order、势能差、rollback history |
+| queue/deque aggregation, sparse table | `src-v4/ds.hpp` | done | 非交换顺序、重建边界、幂等 sparse query |
+| `nrotate`, permutation rank/unrank | `src-v4/permutation.hpp` | done | mixed-radix rank；rank 类型必须覆盖 n! |
 
 独立证据：
 
@@ -44,10 +47,10 @@ test-v4/key_tree_property.cpp
 | `debug.hpp` | `ndebug`, `nwrite` debug path | `debug.hpp` | pending |
 | `discrete.hpp` | `nselect`, `nfilter`, `norder`, `nunique`, chunks/runs | `discrete.hpp` | done |
 | `sequence.hpp` | `nrun_bounds`, `nindexed_span` | `sequence.hpp` | done |
-| `permutation.hpp` | `nargsort`, `nrotate`, rank/unrank | `permutation.hpp` | pending |
+| `permutation.hpp` | `nargsort`, `nrotate`, rank/unrank | `permutation.hpp` | done |
 | `mdview.hpp` | `nmdview` | `mdview.hpp` | pending |
 | `segment.hpp` | `nseg`, lazy/sparse segment trees, trace/cover | `segment.hpp` | pending |
-| `ds.hpp` | Fenwick/DSU/queue/deque/sparse table | `ds.hpp` | pending |
+| `ds.hpp` | Fenwick/DSU/queue/deque/sparse table | `ds.hpp` | done |
 | `arena.hpp` | `narena` | `arena.hpp` | pending |
 | `fhq.hpp` | `nfhq` | `fhq.hpp` | pending |
 | `reftree.hpp` | `nreftree` | `reftree.hpp` | pending |
