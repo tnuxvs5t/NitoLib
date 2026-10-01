@@ -317,7 +317,7 @@ visit_path
 ```cpp
 V vertices;
 vector<nidx_t> par, dep, comp, ord, sz;
-vector<nidx_t> roots, off, ch;
+    vector<nidx_t> rt, off, ch;
 ```
 
 `nhld_layout` 的字段目标：
@@ -325,7 +325,7 @@ vector<nidx_t> roots, off, ch;
 ```cpp
 V vertices;
 vector<nidx_t> par, dep, sz, heavy;
-vector<nidx_t> head, pos, at, roots;
+    vector<nidx_t> head, pos, at, rt;
 ```
 
 方法名保持工程稳定：
