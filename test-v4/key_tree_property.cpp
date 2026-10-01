@@ -24,8 +24,12 @@ int main() {
     auto rooted = nroot(ngraph{vertices, next}, vector<string>{"root"});
     CHECK(rooted.parents()(string("leaf")) == "left");
     CHECK(rooted.depths()(string("leaf")) == 2);
+    CHECK(rooted.components()(string("leaf")) == "root");
     CHECK(rooted.subtree_sizes()(string("root")) == 4);
     CHECK(rooted.positions()(string("right")) == 2);
+    vector<string> rooted_roots;
+    for (auto&& key : rooted.roots()) rooted_roots.push_back(key);
+    CHECK((rooted_roots == vector<string>{"root"}));
     vector<string> rooted_order;
     for (auto&& key : rooted.order()) rooted_order.push_back(key);
     CHECK((rooted_order == vector<string>{"root", "left", "leaf", "right"}));
@@ -35,6 +39,8 @@ int main() {
     CHECK(copied.lca(string("leaf"), string("left")) == "left");
     CHECK(moved.lca(string("leaf"), string("left")) == "left");
     CHECK(copied.positions()(string("leaf")) >= 0);
+    CHECK(copied.heads()(string("leaf")) == "root");
+    CHECK(copied.heads()(string("right")) == "right");
 
     vector<string> path;
     copied.visit_path(string("leaf"), string("right"), [&](npath_piece piece) {
