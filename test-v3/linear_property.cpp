@@ -1,3 +1,4 @@
+#include "../src-v3/view.hpp"
 #include "../src-v3/linear.hpp"
 #include "../src-v3/math.hpp"
 

@@ -230,9 +230,9 @@ struct nfhq {
     }
 
     template <class V>
-    nidx_t build(V values) {
+    nidx_t build(V&& values) {
         nidx_t root = -1;
-        for (nidx_t i = 0; i < values.len(); ++i) root = merge(root, make(values[i]));
+        for (nidx_t i = 0; i < nlen(values); ++i) root = merge(root, make(values[i]));
         return root;
     }
 
@@ -243,8 +243,3 @@ struct nfhq {
         });
     }
 };
-
-template <class T, class Ops = nfhq_noop>
-auto nmake_fhq(Ops policy = {}, uint64_t seed = 0x243f6a8885a308d3ULL) {
-    return nfhq<T, Ops>(move(policy), seed);
-}

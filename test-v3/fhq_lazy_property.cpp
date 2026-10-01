@@ -29,7 +29,7 @@ struct sequence_ops {
 };
 
 int main() {
-    auto q = nmake_fhq<value>(sequence_ops{}, 123456789);
+    nfhq<value, sequence_ops> q(sequence_ops{}, 123456789);
     mt19937 rng(0xBAD5EED);
     vector<long long> reference;
     nidx_t root = -1;
@@ -120,7 +120,7 @@ int main() {
         unique_ptr<nidx_t> calls = make_unique<nidx_t>();
         void pull(nfhq<nidx_t, move_policy>&, nidx_t) { ++*calls; }
     };
-    auto custom = nmake_fhq<nidx_t>(move_policy{});
+    nfhq<nidx_t, move_policy> custom(move_policy{});
     nidx_t custom_root = custom.merge(custom.make(1), custom.make(2));
     CHECK(custom.size(custom_root) == 2);
     CHECK(*custom.ops.calls > 0);

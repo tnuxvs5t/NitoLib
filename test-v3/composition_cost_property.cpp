@@ -1,3 +1,4 @@
+#include "../src-v3/view.hpp"
 #include "../src-v3/discrete.hpp"
 #include "../src-v3/ds.hpp"
 #include "../src-v3/tree.hpp"

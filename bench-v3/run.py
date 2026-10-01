@@ -11,6 +11,8 @@ SOURCE = ROOT / "bench-v3/kernel_bench.cpp"
 HASH_SOURCE = ROOT / "bench-v3/hash_bench.cpp"
 IO_SOURCE = ROOT / "bench-v3/io_bench.cpp"
 TREE_SOURCE = ROOT / "bench-v3/tree_protocol_bench.cpp"
+MATH_SOURCE = ROOT / "bench-v3/math_bench.cpp"
+REF_SOURCE = ROOT / "bench-v3/reftree_bench.cpp"
 INDEX_MODES = {
     "idx32": [],
     "idx64": ["-DNITORI_INDEX_64"],
@@ -44,6 +46,20 @@ with tempfile.TemporaryDirectory(prefix="nitori-v3-bench-") as tmp:
         for sample in range(3):
             print(f"--- {index_mode} tree sample {sample + 1} ---", flush=True)
             subprocess.run([str(tree_binary)], check=True)
+
+        math_binary = Path(tmp) / f"math_bench-{index_mode}"
+        math_command = [*command[:-3], str(MATH_SOURCE), "-o", str(math_binary)]
+        print("+", " ".join(math_command), flush=True)
+        subprocess.run(math_command, check=True)
+        for sample in range(3):
+            print(f"--- {index_mode} math sample {sample + 1} ---", flush=True)
+            subprocess.run([str(math_binary)], check=True)
+
+        ref_binary = Path(tmp) / f"reftree_bench-{index_mode}"
+        ref_command = [*command[:-3], str(REF_SOURCE), "-o", str(ref_binary)]
+        print("+", " ".join(ref_command), flush=True)
+        subprocess.run(ref_command, check=True)
+        subprocess.run([str(ref_binary)], check=True)
 
     io_binary = Path(tmp) / "io_bench"
     io_command = [os.environ.get("CXX", "g++"), "-std=c++23", "-O2", "-DNDEBUG",

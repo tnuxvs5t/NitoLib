@@ -1,4 +1,6 @@
+#include "../src-v3/view.hpp"
 #include "../src-v3/graph_algo.hpp"
+#include "../src-v3/hash.hpp"
 
 #define CHECK(x) do { if (!(x)) { cerr << __FILE__ << ':' << __LINE__ << ": " #x "\n"; abort(); } } while (false)
 

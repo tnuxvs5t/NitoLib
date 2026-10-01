@@ -1,5 +1,5 @@
 #pragma once
-#include "view.hpp"
+#include "core.hpp"
 
 /* Common lowercase mapping; custom alphabets are ordinary callables returning [0,sigma). */
 struct nlowercase {
@@ -35,9 +35,9 @@ struct nac {
     }
 
     template <class V>
-    nidx_t add(V pattern) {
+    nidx_t add(V&& pattern) {
         nidx_t state = 0;
-        for (nidx_t i = 0; i < pattern.len(); ++i) {
+        for (nidx_t i = 0; i < nlen(pattern); ++i) {
             nidx_t symbol = invoke(map, pattern[i]);
             nidx_t child = edge(state, symbol);
             if (child < 0) child = make_state(), edge(state, symbol) = child;
@@ -75,19 +75,19 @@ struct nac {
     }
 
     template <class V>
-    vector<nidx_t> walk(V text) const {
-        vector<nidx_t> result(text.len());
+    vector<nidx_t> walk(V&& text) const {
+        vector<nidx_t> result(nlen(text));
         nidx_t state = 0;
-        for (nidx_t i = 0; i < text.len(); ++i) result[i] = state = step(state, text[i]);
+        for (nidx_t i = 0; i < nlen(text); ++i) result[i] = state = step(state, text[i]);
         return result;
     }
 
     template <class V>
-    vector<long long> occurrences(V text) const {
+    vector<long long> occurrences(V&& text) const {
         vector<long long> count(states());
         nidx_t state = 0;
         ++count[0];
-        for (nidx_t i = 0; i < text.len(); ++i) ++count[state = step(state, text[i])];
+        for (nidx_t i = 0; i < nlen(text); ++i) ++count[state = step(state, text[i])];
         for (auto it = order.rbegin(); it != order.rend(); ++it)
             if (*it) count[failure[*it]] += count[*it];
         return count;

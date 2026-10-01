@@ -16,10 +16,10 @@ inline constexpr bool nidx_wider_v =
     numeric_limits<remove_cvref_t<T>>::digits > numeric_limits<nidx_t>::digits;
 
 /*
-Nitori v3 intentionally uses expression-based templates instead of a concept/trait
-registry.  A finite object used below supplies len(); an ordinary container supplied
-to nall supplies size() and operator[].  Lengths and positions use nidx_t, and
-valid intervals are half-open.  These are contest contracts, not runtime diagnostics.
+Algorithms borrow ordinary STL containers or positional descriptors directly. A source
+provides size() or len(), and operator[]; nall is only needed when constructing an
+optional view. Lengths and positions use nidx_t and valid intervals are half-open.
+Public APIs are global n* names; no library namespace or registration layer is needed.
 */
 template <class A>
 constexpr nidx_t nlen(const A& a) {

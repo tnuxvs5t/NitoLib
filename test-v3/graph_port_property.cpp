@@ -1,4 +1,6 @@
+#include "../src-v3/view.hpp"
 #include "../src-v3/graph.hpp"
+#include "../src-v3/rooted.hpp"
 
 #define CHECK(x) do { if (!(x)) { cerr << __FILE__ << ':' << __LINE__ << ": " #x "\n"; abort(); } } while (false)
 
@@ -6,6 +8,9 @@ struct edge {
     nidx_t to;
     nidx_t ignored_weight;
 };
+
+template <class G, class E>
+constexpr bool has_id = requires(G& graph, E& e) { graph.edge_id(e); };
 
 int main() {
     mt19937 rng(0xA11CE);
@@ -21,6 +26,7 @@ int main() {
                 }
         nidx_t source = nidx_t(rng() % n);
         auto plain = ngraph{nrange(n), [&](nidx_t from) -> auto& { return adjacency[from]; }};
+        static_assert(!has_id<decltype(plain), nidx_t>);
         auto packed = ngraph{nrange(n), [&](nidx_t from) -> auto& { return records[from]; },
                              [](const edge& item) { return item.to; }};
         auto a = nbfs(plain, source);
@@ -113,4 +119,24 @@ int main() {
         return edges;
     }};
     CHECK((nbfs(move(move_graph), 0) == vector<nidx_t>{0, 1, 2, 3}));
+
+    // Identity is independent of target, orientation, storage and vertex positions.
+    struct arc { nidx_t to, id; };
+    vector<vector<arc>> adjacency{{{1, 71}, {1, 8}}, {{0, 8}, {0, 71}, {2, 90}}, {{1, 90}}};
+    const auto identified = ngraph{3,
+        [token = make_unique<int>(0), &adjacency](nidx_t v) -> auto& { return adjacency[v + *token]; },
+        [](const arc& e) { return e.to; },
+        [token = make_unique<int>(0)](const arc& e) mutable { return e.id + *token; }};
+    static_assert(has_id<decltype(identified), arc>);
+    CHECK(identified.edge_id(adjacency[0][0]) == 71);
+    CHECK(identified.edge_id(adjacency[1][1]) == 71);
+    CHECK((nbfs(identified, 0) == vector<nidx_t>{0, 1, 2}));
+
+    // An edge may be a handle; no record layout or address-based identity is assumed.
+    vector<vector<nidx_t>> handles{{2, 0}, {1}, {}};
+    vector<nidx_t> targets{1, 2, 2};
+    auto by_handle = ngraph{nreverse(nrange(3)),
+        [&](nidx_t v) { return handles[v]; }, [&](nidx_t e) { return targets[e]; }, nto_self{}};
+    CHECK(by_handle.edge_id(nidx_t{2}) == 2);
+    CHECK((nbfs(by_handle, 0) == vector<nidx_t>{1, 1, 0}));
 }

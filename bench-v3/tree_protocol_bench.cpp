@@ -1,3 +1,4 @@
+#include "../src-v3/view.hpp"
 #include "../src-v3/segment.hpp"
 #include "../src-v3/fhq.hpp"
 #include "../src-v3/list.hpp"

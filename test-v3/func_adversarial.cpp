@@ -1,3 +1,5 @@
+#include "../src-v3/discrete.hpp"
+#include "../src-v3/view.hpp"
 #include "../src-v3/func.hpp"
 
 #define CHECK(x) do { if (!(x)) { cerr << __FILE__ << ':' << __LINE__ << ": " #x "\n"; abort(); } } while (false)
@@ -32,7 +34,7 @@ int main() {
     CHECK(restricted.len() == 3 && restricted[0] == 20 && restricted[2] == 11);
 
     vector<nidx_t> positions{4, 0, 1, 1};
-    auto selected = nselect_positions(f, nall(positions));
+    auto selected = nselect(f, nall(positions));
     CHECK(selected.len() == 4);
     CHECK(selected.key(0) == "alpha" && selected[0] == 11);
     CHECK(selected.key(1) == "gamma" && selected[1] == 30);

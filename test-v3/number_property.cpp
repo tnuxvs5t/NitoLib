@@ -23,6 +23,12 @@ void verify_factor(uint64_t value) {
 }
 
 int main() {
+    check(naddmod64(1, 1, 7) == 2, "canonical modular addition");
+    check(naddmod64(UINT64_MAX - 1, UINT64_MAX - 1, UINT64_MAX) == UINT64_MAX - 2,
+          "wide canonical modular addition");
+    check(naddmod64(0, 0, 1) == 0, "modulus one addition");
+    check(nmulmod64(UINT64_MAX, UINT64_MAX, 97)
+          == uint64_t(__uint128_t(UINT64_MAX) * UINT64_MAX % 97), "unreduced multiplication");
     vector<uint64_t> primes{2, 3, 5, 37, 97, 1000000007ULL, 2305843009213693951ULL,
                             18446744073709551557ULL};
     vector<uint64_t> composites{0, 1, 4, 9, 341550071728321ULL,

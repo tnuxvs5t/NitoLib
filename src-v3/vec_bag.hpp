@@ -34,12 +34,12 @@ public:
 
     template <class V>
     requires requires(V& source) {
-        source.len();
+        nlen(source);
         source[0];
     }
-    explicit nvec_bag(V source, C order = {}) : nvec_bag(move(order)) {
-        values.reserve(source.len());
-        for (nidx_t i = 0; i < source.len(); ++i)
+    explicit nvec_bag(const V& source, C order = {}) : nvec_bag(move(order)) {
+        values.reserve(nlen(source));
+        for (nidx_t i = 0; i < nlen(source); ++i)
             values.emplace_back(T(nview_detail::own(source[i])));
         stable_sort(values.begin(), values.end(), ref(compare));
     }
@@ -76,8 +76,6 @@ public:
     nidx_t emplace(A&&... args) {
         return insert(T(forward<A>(args)...));
     }
-
-    nidx_t order_of_key(const T& key) const { return lower_bound(key); }
 
     pair<nidx_t, nidx_t> equal_range(const T& key) const {
         return {lower_bound(key), upper_bound(key)};

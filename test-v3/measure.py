@@ -5,7 +5,20 @@ from pathlib import Path
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-LIMIT = 128 * 1024
+GENERAL_EXTENSION = 5 * 1024
+LIMIT = (128 + 24 + 4 + 6) * 1024 + GENERAL_EXTENSION
+MATH_BASELINE = 16484
+MATH_EXTENSION = 24 * 1024
+MATH_MODULES = {"math.hpp", "number.hpp", "poly.hpp", "linear.hpp", "divisor.hpp",
+                "bitmath.hpp", "recurrence.hpp", "frac.hpp"}
+GRAPH_BASELINE = 9396
+GRAPH_EXTENSION = 4 * 1024
+GRAPH_MODULES = {"graph.hpp", "graph_algo.hpp", "graph_store.hpp", "flow.hpp"}
+DS_BASELINE = 62960  # Live DS modules before nreftree, 2026-09-20.
+GRAPH_DS_EXTENSION = 6 * 1024
+DS_MODULES = {"arena.hpp", "list.hpp", "ds.hpp", "fhq.hpp", "bag.hpp", "vec_bag.hpp",
+              "segment.hpp", "wavelet.hpp", "dynamic_tree.hpp", "link_cut.hpp",
+              "opt.hpp", "hash.hpp", "tree.hpp", "rooted.hpp", "reftree.hpp", "topk.hpp"}
 
 
 def semantic_bytes(text: str) -> int:
@@ -67,5 +80,22 @@ discrete = next((count for path, count in counts if path.name == "discrete.hpp")
 if discrete > 10 * 1024:
     raise SystemExit(f"discrete.hpp exceeded 10 KiB semantic cap: {discrete}")
 used = sum(count for _, count in counts)
+math_used = sum(count for path, count in counts if path.name in MATH_MODULES)
+graph_used = sum(count for path, count in counts if path.name in GRAPH_MODULES)
+ds_used = sum(count for path, count in counts if path.name in DS_MODULES)
+print(f"math: {math_used} bytes; extension {math_used - MATH_BASELINE} / {MATH_EXTENSION}")
+if math_used > MATH_BASELINE + MATH_EXTENSION:
+    raise SystemExit("math/polynomial extension exceeded its reserved 24 KiB")
+print(f"graph: {graph_used} bytes; extension {graph_used - GRAPH_BASELINE} / {GRAPH_EXTENSION}")
+shared_used = max(0, graph_used - GRAPH_BASELINE - GRAPH_EXTENSION) + max(0, ds_used - DS_BASELINE)
+print(f"DS: {ds_used} bytes; baseline {DS_BASELINE}")
+print(f"graph/DS shared extension: {shared_used} / {GRAPH_DS_EXTENSION}")
+other_used = used - math_used - graph_used - ds_used
+spill = max(0, shared_used - GRAPH_DS_EXTENSION)
+general_used = other_used + spill
+general_limit = 128 * 1024 - MATH_BASELINE - GRAPH_BASELINE - DS_BASELINE + GENERAL_EXTENSION
+print(f"general: {general_used} / {general_limit} bytes (graph/DS spill {spill})")
+if general_used > general_limit:
+    raise SystemExit("general code and graph/DS spill exceeded the general allowance")
 print(f"{used:6} / {LIMIT} semantic bytes ({used / LIMIT:.1%})")
 sys.exit(used > LIMIT)

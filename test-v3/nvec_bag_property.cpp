@@ -1,3 +1,4 @@
+#include "../src-v3/view.hpp"
 #include "../src-v3/vec_bag.hpp"
 
 #define CHECK(x) do { if (!(x)) { cerr << __FILE__ << ':' << __LINE__ << ": " #x "\n"; abort(); } } while (false)
@@ -68,7 +69,7 @@ int main() {
             nidx_t right = nidx_t(distance(reference.begin(), upper));
             CHECK(bag.lower_bound(key) == left);
             CHECK(bag.upper_bound(key) == right);
-            CHECK(bag.order_of_key(key) == left);
+            CHECK(bag.lower_bound(key) == left);
             CHECK(bag.equal_range(key) == pair(left, right));
             CHECK(bag.count(key) == right - left);
             CHECK(bag.find(key) == (left < right ? left : bag.len()));

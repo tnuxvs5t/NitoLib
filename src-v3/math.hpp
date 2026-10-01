@@ -28,6 +28,63 @@ constexpr I ndiv_ceil(I a, I b) {
     return quotient;
 }
 
+/* n >= 0, modulus > 0; sum floor((a*i+b)/modulus), 0 <= i < n.
+   O(log modulus); signed parameters are normalized before the Euclidean descent.
+   The result and intermediate sums must fit signed __int128_t. */
+constexpr __int128_t nfloor_sum(long long n, long long modulus, long long a, long long b) {
+    __int128_t count = n, mod = modulus, slope = a, offset = b;
+    __int128_t triangle = count * (count - 1) / 2;
+    __int128_t answer = ndiv_floor(slope, mod) * triangle + ndiv_floor(offset, mod) * count;
+    slope %= mod;
+    offset %= mod;
+    if (slope < 0) slope += mod;
+    if (offset < 0) offset += mod;
+    while (true) {
+        answer += count * (count - 1) / 2 * (slope / mod) + count * (offset / mod);
+        slope %= mod;
+        offset %= mod;
+        __int128_t height = slope * count + offset;
+        if (height < mod) return answer;
+        count = height / mod;
+        offset = height % mod;
+        swap(slope, mod);
+    }
+}
+
+/* Exact floor(sqrt(value)) on the whole uint64_t domain; 32 binary-search steps. */
+constexpr uint64_t nisqrt(uint64_t value) {
+    uint64_t low = 0, high = uint64_t(1) << 32;
+    while (high - low > 1) {
+        uint64_t middle = low + (high - low) / 2;
+        if (middle * middle <= value) low = middle;
+        else high = middle;
+    }
+    return low;
+}
+
+/* 0 <= n < LLONG_MAX; visit(left,right,quotient) partitions [1,n+1).
+   Half-open blocks, constant floor(n/i); O(sqrt(n)) calls, no allocations. */
+template <class F>
+void nquotient_blocks(long long n, F&& visit) {
+    for (long long left = 1; left <= n;) {
+        long long quotient = n / left, right = n / quotient + 1;
+        invoke(visit, left, right, quotient);
+        left = right;
+    }
+}
+
+/* a,b >= 0 and min(a,b) < LLONG_MAX; jointly constant quotients on [1,min(a,b)+1).
+   O(sqrt(a)+sqrt(b)) calls; zero-quotient tails beyond min(a,b) are not visited. */
+template <class F>
+void nquotient_blocks(long long a, long long b, F&& visit) {
+    for (long long left = 1; left <= min(a, b);) {
+        long long qa = a / left, qb = b / left;
+        long long right = min(a / qa, b / qb) + 1;
+        invoke(visit, left, right, qa, qb);
+        left = right;
+    }
+}
+
 /* exponent is nonnegative; one is the multiplication identity. */
 template <class T, class E, class M>
 constexpr T npow(T base, E exponent, T one, M multiply) {
@@ -48,19 +105,24 @@ struct negcd_result {
     long long gcd, x, y;
 };
 
+/* Returns a nonnegative gcd and a*x+b*y=gcd. The gcd must fit long long (so
+   gcd==2^63 is excluded). Wider internal remainders/coefficients support LLONG_MIN
+   and the final unused coefficient update, even when that update exceeds int64.
+   O(1+log(max(|a|,|b|))) Euclidean steps; (0,0) returns {0,1,0}. */
 constexpr negcd_result next_gcd(long long a, long long b) {
-    long long old_x = 1, x = 0, old_y = 0, y = 1;
-    while (b) {
-        long long quotient = a / b;
-        a -= quotient * b;
-        swap(a, b);
+    __int128_t left = a, right = b;
+    __int128_t old_x = 1, x = 0, old_y = 0, y = 1;
+    while (right) {
+        __int128_t quotient = left / right;
+        left -= quotient * right;
+        swap(left, right);
         old_x -= quotient * x;
         swap(old_x, x);
         old_y -= quotient * y;
         swap(old_y, y);
     }
-    if (a < 0) a = -a, old_x = -old_x, old_y = -old_y;
-    return {a, old_x, old_y};
+    if (left < 0) left = -left, old_x = -old_x, old_y = -old_y;
+    return {static_cast<long long>(left), static_cast<long long>(old_x), static_cast<long long>(old_y)};
 }
 
 /* modulus is positive; value % modulus converts to long long; nullopt means no inverse. */
@@ -236,15 +298,68 @@ struct ncomb {
     M choose(nidx_t n, nidx_t k) const {
         return k < 0 || k > n ? M{} : factorial[n] * inverse_factorial[k] * inverse_factorial[n - k];
     }
+
+    /* M::mod() is prime, and this table covers [0,mod). n,k are nonnegative.
+       O(log_mod(n)) digit lookups; intended for small prime moduli only. */
+    template <class I>
+    M lucas(I n, I k) const {
+        M answer = 1;
+        const auto modulus = M::mod();
+        while (n || k) {
+            auto a = n % modulus, b = k % modulus;
+            if (b > a) return M{};
+            answer *= choose(nidx_t(a), nidx_t(b));
+            n /= modulus;
+            k /= modulus;
+        }
+        return answer;
+    }
 };
 
+/* Nonnegative n; invalid k returns zero. Every 1..min(k,n-k) is invertible in M.
+   O(min(k,n-k)) multiplications and one inverse; n need not fit a table index. */
+template <class M, class I>
+M nchoose_small(I n, I k) {
+    if (k < 0 || k > n) return M{};
+    k = min(k, n - k);
+    M numerator = 1, denominator = 1;
+    for (I i = 0; i < k; ++i) {
+        numerator *= M(n - i);
+        denominator *= M(i + 1);
+    }
+    return numerator / denominator;
+}
+
+/* Commutative multiplication; each element is invertible. O(n) products, one division.
+   Intermediate products must remain representable and invertible in M; this is not
+   a numerically stabilized floating-point batch inversion algorithm.
+   Empty input returns empty without inversion; V provides nlen and operator[]. */
+template <class V>
+auto ninverse_batch(const V& values) {
+    using M = remove_cvref_t<decltype(values[0])>;
+    nidx_t n = nlen(values);
+    vector<M> result(n);
+    if (!n) return result;
+    M product = 1;
+    for (nidx_t i = 0; i < n; ++i) result[i] = product, product *= values[i];
+    M inverse = M(1) / product;
+    for (nidx_t i = n; i-- > 0;) {
+        result[i] *= inverse;
+        inverse *= values[i];
+    }
+    return result;
+}
+
+/* Euler sieve on [0,n]; n >= 0 and n+1 fits nidx_t. Queries lie in the table;
+   factor/phi require value >= 1. O(n) build and memory, O(log(value)) factor/phi.
+   phi_table and mu_table allocate their own O(n) result only when requested. */
 struct nsieve {
     vector<nidx_t> least, primes;
     explicit nsieve(nidx_t n = 0) : least(n + 1) {
         for (nidx_t value = 2; value <= n; ++value) {
             if (!least[value]) least[value] = value, primes.push_back(value);
             for (nidx_t prime : primes) {
-                if (prime > least[value] || 1LL * prime * value > n) break;
+                if (prime > least[value] || prime > n / value) break;
                 least[prime * value] = prime;
             }
         }
@@ -261,7 +376,29 @@ struct nsieve {
     }
     nidx_t phi(nidx_t value) const {
         nidx_t result = value;
-        for (auto [prime, exponent] : factor(value)) result -= result / prime, (void)exponent;
+        while (value > 1) {
+            nidx_t prime = least[value];
+            result -= result / prime;
+            do value /= prime; while (value > 1 && least[value] == prime);
+        }
+        return result;
+    }
+    vector<nidx_t> phi_table() const {
+        vector<nidx_t> result(least.size());
+        if (nlen(result) > 1) result[1] = 1;
+        for (nidx_t value = 2; value < nlen(result); ++value) {
+            nidx_t prime = least[value], rest = value / prime;
+            result[value] = result[rest] * (rest % prime == 0 ? prime : prime - 1);
+        }
+        return result;
+    }
+    vector<int8_t> mu_table() const {
+        vector<int8_t> result(least.size());
+        if (nlen(result) > 1) result[1] = 1;
+        for (nidx_t value = 2; value < nlen(result); ++value) {
+            nidx_t prime = least[value], rest = value / prime;
+            result[value] = rest % prime == 0 ? 0 : int8_t(-result[rest]);
+        }
         return result;
     }
 };

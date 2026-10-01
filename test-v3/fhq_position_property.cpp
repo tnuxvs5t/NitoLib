@@ -76,7 +76,7 @@ struct position_ops {
 };
 
 int main() {
-    auto q = nmake_fhq<record>(position_ops{}, 7654321);
+    nfhq<record, position_ops> q(position_ops{}, 7654321);
     vector<atom> reference;
     nidx_t root = -1;
     auto insert = [&](nidx_t at, atom value) {

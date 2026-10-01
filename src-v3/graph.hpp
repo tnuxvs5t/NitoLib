@@ -1,5 +1,5 @@
 #pragma once
-#include "func.hpp"
+#include "core.hpp"
 
 struct nto_self {
     template <class E>
@@ -8,17 +8,30 @@ struct nto_self {
     }
 };
 
+/* Dense integer domain; ngraph{n,next,to} needs no view or hash module. */
+struct nvertices {
+    nidx_t count;
+    constexpr nvertices(nidx_t n) : count(n) {}
+    constexpr nidx_t len() const { return count; }
+    constexpr nidx_t operator[](nidx_t i) const { return i; }
+    constexpr nidx_t inverse(nidx_t i) const { return i; }
+};
+
 /*
 Minimal graph descriptor.  vertices enumerates semantic vertex keys, next(vertex)
 returns any range-for compatible adjacency object, and to(edge) returns its target key.
 vertices.inverse(key) returns its dense position.  No graph type, iterator category,
-edge record or ownership model is imposed.
+edge record or ownership model is imposed. Optional id(edge) gives a stable nonnegative
+nidx_t logical edge ID, not an adjacency slot: opposite incidences of an undirected
+edge share it, distinct edges never do. IDs may be sparse; -1 is reserved for no edge.
+Algorithms requiring identity call edge_id; topology-only graphs have no such port.
 */
-template <class V, class N, class To = nto_self>
+template <class V, class N, class To = nto_self, class Id = nullptr_t>
 struct ngraph {
     V vertices;
     mutable N next;
     mutable To to{};
+    [[no_unique_address]] mutable Id id{};
 
     template <class K>
     constexpr decltype(auto) edges(K&& vertex) const {
@@ -29,6 +42,11 @@ struct ngraph {
     constexpr decltype(auto) target(E&& edge) const {
         return invoke(to, forward<E>(edge));
     }
+
+    template <class E> requires invocable<Id&, E>
+    constexpr nidx_t edge_id(E&& edge) const {
+        return invoke(id, forward<E>(edge));
+    }
 };
 
 template <class V, class N>
@@ -37,12 +55,24 @@ ngraph(V, N) -> ngraph<V, N>;
 template <class V, class N, class To>
 ngraph(V, N, To) -> ngraph<V, N, To>;
 
+template <class V, class N, class To, class Id>
+ngraph(V, N, To, Id) -> ngraph<V, N, To, Id>;
+
+template <integral I, class N>
+ngraph(I, N) -> ngraph<nvertices, N>;
+
+template <integral I, class N, class To>
+ngraph(I, N, To) -> ngraph<nvertices, N, To>;
+
+template <integral I, class N, class To, class Id>
+ngraph(I, N, To, Id) -> ngraph<nvertices, N, To, Id>;
+
 /* Distances are stored by dense position.  Duplicate sources are harmless. */
 template <class G, class R>
-vector<nidx_t> nbfs_many(G&& graph, R sources) {
+vector<nidx_t> nbfs_many(G&& graph, R&& sources) {
     vector<nidx_t> distance(graph.vertices.len(), -1), queue;
     queue.reserve(graph.vertices.len());
-    for (nidx_t i = 0; i < sources.len(); ++i) {
+    for (nidx_t i = 0; i < nlen(sources); ++i) {
         nidx_t source = graph.vertices.inverse(sources[i]);
         if (distance[source] < 0) distance[source] = 0, queue.push_back(source);
     }
@@ -58,123 +88,6 @@ vector<nidx_t> nbfs_many(G&& graph, R sources) {
 
 template <class G, class K>
 vector<nidx_t> nbfs(G&& graph, K source) {
-    auto sources = ntabulate(1, [source = move(source)](nidx_t) mutable -> decltype(auto) {
-        return (source);
-    });
+    array<K, 1> sources{move(source)};
     return nbfs_many(forward<G>(graph), move(sources));
-}
-
-/*
-A rooted projection owns only traversal metadata and its invertible vertex descriptor.
-Its nfunc/nview accessors borrow *this and therefore expire when it moves or dies.
-parent[root]==root; unseen vertices have parent/depth/component/subtree == -1/0.
-Key-valued parents()/components() are only defined for covered vertices.
-*/
-template <class V>
-struct nrooted {
-    V vertices;
-    vector<nidx_t> parent_position, depth_value, component_position;
-    vector<nidx_t> preorder_position, subtree_value, root_position;
-    vector<nidx_t> child_offset, child_position;
-
-    nidx_t len() const { return vertices.len(); }
-
-    auto keys() const { return nall(vertices); }
-
-    auto locate() const {
-        return nlocate(vertices);
-    }
-
-    auto positions() const { return nfunc{keys(), locate()}; }
-
-    auto parents() const {
-        return nmap_values(nanchors(keys(), nall(parent_position)),
-                           [this](nidx_t position) -> decltype(auto) {
-                               return vertices[position];
-                           });
-    }
-
-    auto depths() const {
-        return nanchors(keys(), nall(depth_value));
-    }
-
-    auto components() const {
-        return nmap_values(nanchors(keys(), nall(component_position)),
-                           [this](nidx_t position) -> decltype(auto) {
-                               return vertices[position];
-                           });
-    }
-
-    auto subtree_sizes() const {
-        return nanchors(keys(), nall(subtree_value));
-    }
-
-    auto order() const {
-        return nproject(nall(preorder_position),
-                        [this](nidx_t position) -> decltype(auto) { return vertices[position]; });
-    }
-
-    auto roots() const {
-        return nproject(nall(root_position),
-                        [this](nidx_t position) -> decltype(auto) { return vertices[position]; });
-    }
-
-    template <class K>
-    auto children(K&& key) const {
-        nidx_t position = vertices.inverse(forward<K>(key));
-        return nproject(nsub(nall(child_position), child_offset[position],
-                             child_offset[position + 1]),
-                        [this](nidx_t child) -> decltype(auto) { return vertices[child]; });
-    }
-};
-
-/*
-nroot builds a first-discovery forest from the supplied roots.  It is valid on directed
-or cyclic graphs: already discovered arcs are ignored.  Tree algorithms that interpret
-subtree metadata as original-tree structure must separately rely on the input being a
-forest.  Roots need not cover every vertex; uncovered metadata remains unseen.
-Discovery follows recursive DFS adjacency order and uses O(height) call stack.
-Outstanding adjacency ranges must survive nested graph.edges calls.
-*/
-template <class G, class R>
-auto nroot(G graph, R roots) {
-    nidx_t n = graph.vertices.len();
-    vector<nidx_t> parent(n, -1), depth(n, -1), component(n, -1), order, subtree(n);
-    vector<nidx_t> root_positions;
-    order.reserve(n);
-    auto dfs = [&](auto&& self, nidx_t from) -> void {
-        order.push_back(from);
-        subtree[from] = 1;
-        for (auto&& edge : graph.edges(graph.vertices[from])) {
-            nidx_t to = graph.vertices.inverse(graph.target(edge));
-            if (parent[to] >= 0) continue;
-            parent[to] = from;
-            depth[to] = depth[from] + 1;
-            component[to] = component[from];
-            self(self, to);
-            subtree[from] += subtree[to];
-        }
-    };
-    for (nidx_t i = 0; i < roots.len(); ++i) {
-        nidx_t root = graph.vertices.inverse(roots[i]);
-        if (parent[root] >= 0) continue;
-        parent[root] = root;
-        depth[root] = 0;
-        component[root] = root;
-        root_positions.push_back(root);
-        dfs(dfs, root);
-    }
-    vector<nidx_t> child_offset(n + 1), child_position;
-    child_position.reserve(order.size() - root_positions.size());
-    for (nidx_t vertex : order)
-        if (parent[vertex] != vertex) ++child_offset[parent[vertex] + 1];
-    partial_sum(child_offset.begin(), child_offset.end(), child_offset.begin());
-    vector<nidx_t> cursor = child_offset;
-    child_position.resize(child_offset.back());
-    for (nidx_t vertex : order)
-        if (parent[vertex] != vertex) child_position[cursor[parent[vertex]]++] = vertex;
-    using V = decltype(graph.vertices);
-    return nrooted<V>{move(graph.vertices), move(parent), move(depth), move(component),
-                      move(order), move(subtree), move(root_positions), move(child_offset),
-                      move(child_position)};
 }

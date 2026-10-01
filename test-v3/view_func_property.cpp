@@ -1,3 +1,4 @@
+#include "../src-v3/view.hpp"
 #include "../src-v3/func.hpp"
 
 #define CHECK(x) do { if (!(x)) { cerr << __FILE__ << ':' << __LINE__ << ": " #x "\n"; abort(); } } while (false)

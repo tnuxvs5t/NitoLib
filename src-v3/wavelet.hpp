@@ -1,5 +1,5 @@
 #pragma once
-#include "view.hpp"
+#include "core.hpp"
 
 /*
 Static wavelet matrix over the rank-compression of T.  T only needs copying, == and a
@@ -17,7 +17,8 @@ struct nwavelet {
     nwavelet() = default;
 
     template <class V>
-    explicit nwavelet(V source) : length(source.len()) {
+    requires requires(V& source) { source[0]; }
+    explicit nwavelet(const V& source) : length(nlen(source)) {
         alphabet.reserve(length);
         for (nidx_t i = 0; i < length; ++i) alphabet.push_back(source[i]);
         sort(alphabet.begin(), alphabet.end());

@@ -26,9 +26,10 @@ struct nlct {
     }
 
     template <class V>
-    explicit nlct(V values, M operation = {}) : merge(move(operation)) {
-        nodes.reserve(values.len());
-        for (nidx_t i = 0; i < values.len(); ++i) {
+    requires requires(V& source) { source[0]; }
+    explicit nlct(const V& values, M operation = {}) : merge(move(operation)) {
+        nodes.reserve(nlen(values));
+        for (nidx_t i = 0; i < nlen(values); ++i) {
             T value = values[i];
             nodes.push_back({value, value, move(value)});
         }

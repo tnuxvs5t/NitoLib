@@ -1,3 +1,4 @@
+#include "../src-v3/view.hpp"
 #include "../src-v3/ds.hpp"
 
 #define CHECK(x) do { if (!(x)) { cerr << __FILE__ << ':' << __LINE__ << ": " #x "\n"; abort(); } } while (false)
@@ -36,14 +37,32 @@ int main() {
             long long total = accumulate(values.begin(), values.end(), 0LL);
             long long target = rng() % (total + 2);
             nidx_t expected = n;
+            nidx_t expected_upper = n;
             long long prefix = 0;
             for (nidx_t i = 0; i < n; ++i) {
                 prefix += values[i];
                 if (prefix >= target) { expected = i; break; }
             }
-            CHECK(tree.lower(target) == expected);
+            prefix = 0;
+            for (nidx_t i = 0; i < n; ++i) {
+                prefix += values[i];
+                if (prefix > target) { expected_upper = i; break; }
+            }
+            CHECK(tree.lower_bound(target) == expected);
+            CHECK(tree.upper_bound(target) == expected_upper);
+            CHECK(tree.lower_bound(target) == expected);
         }
     }
+
+    nfenwick<long long> empty_fenwick;
+    CHECK(empty_fenwick.lower_bound(0) == 0 && empty_fenwick.upper_bound(0) == 0);
+    vector<long long> repeated_prefix{0, 2, 0, 3};
+    nfenwick repeated_tree(nall(repeated_prefix));
+    CHECK(repeated_tree.lower_bound(0) == 0);
+    CHECK(repeated_tree.upper_bound(0) == 1);
+    CHECK(repeated_tree.lower_bound(2) == 1);
+    CHECK(repeated_tree.upper_bound(2) == 3);
+    CHECK(repeated_tree.lower_bound(6) == repeated_tree.len());
 
     for (nidx_t round = 0; round < 3000; ++round) {
         nidx_t n = 1 + nidx_t(rng() % 30);

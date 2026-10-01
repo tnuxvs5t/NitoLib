@@ -1,3 +1,4 @@
+#include "../src-v3/view.hpp"
 #include "../src-v3/segment.hpp"
 #include "../src-v3/discrete.hpp"
 
@@ -81,6 +82,19 @@ int main() {
     nseg<long long, nmax<long long>> empty_max;
     CHECK(empty_min.fold() == numeric_limits<long long>::max());
     CHECK(empty_max.fold() == numeric_limits<long long>::lowest());
+
+    vector<string> ordered{"a", "b", "c", "d", "e"};
+    auto prefix_of_bcd = [](const string& value) { return string("bcd").starts_with(value); };
+    auto suffix_of_bcd = [](const string& value) { return string("bcd").ends_with(value); };
+    nseg ordered_tree(nall(ordered), concat{});
+    CHECK(ordered_tree.max_right(1, prefix_of_bcd) == 4);
+    CHECK(ordered_tree.min_left(4, suffix_of_bcd) == 1);
+    CHECK(ordered_tree.max_right(ordered_tree.len(), [](const string&) { return true; }) ==
+          ordered_tree.len());
+    CHECK(ordered_tree.min_left(0, [](const string&) { return true; }) == 0);
+    nseg<string, concat> empty_ordered;
+    CHECK(empty_ordered.max_right(0, [](const string&) { return true; }) == 0);
+    CHECK(empty_ordered.min_left(0, [](const string&) { return true; }) == 0);
 
     mt19937 rng(0x5E6);
     const double infinity = numeric_limits<double>::infinity();
@@ -197,6 +211,51 @@ int main() {
                 string expected;
                 for (nidx_t i = left; i < right; ++i) expected += values[i];
                 CHECK(tree.fold(left, right) == expected);
+            }
+        }
+    }
+
+    vector<string> lazy_ordered{"a", "b", "c", "d", "e"};
+    nlazyseg lazy_ordered_tree(nall(lazy_ordered), nlazy_ops{concat{}, assign_string{}});
+    lazy_ordered_tree.apply(2, 4, 'x');
+    auto prefix_of_bxx = [](const string& value) { return string("bxx").starts_with(value); };
+    auto suffix_of_bxx = [](const string& value) { return string("bxx").ends_with(value); };
+    CHECK(lazy_ordered_tree.max_right(1, prefix_of_bxx) == 4);
+    CHECK(lazy_ordered_tree.min_left(4, suffix_of_bxx) == 1);
+
+    for (nidx_t round = 0; round < 1000; ++round) {
+        nidx_t n = nidx_t(rng() % 65);
+        vector<long long> values(n);
+        for (long long& value : values) value = rng() % 8;
+        nseg plain(nall(values), nadd<long long>{});
+        nlazy_addsum<long long> lazy(nall(values));
+        for (nidx_t step = 0; step < 100; ++step) {
+            if (n && rng() % 3 == 0) {
+                nidx_t left = nidx_t(rng() % n);
+                nidx_t right = left + 1 + nidx_t(rng() % (n - left));
+                long long delta = rng() % 5;
+                lazy.apply(left, right, delta);
+                for (nidx_t i = left; i < right; ++i) {
+                    values[i] += delta;
+                    plain.set(i, values[i]);
+                }
+            } else {
+                nidx_t left = nidx_t(rng() % (n + 1));
+                nidx_t right = nidx_t(rng() % (n + 1));
+                long long limit = rng() % 150;
+                auto within = [=](long long sum) { return sum <= limit; };
+                nidx_t expected_right = left;
+                long long sum = 0;
+                while (expected_right < n && sum + values[expected_right] <= limit)
+                    sum += values[expected_right++];
+                nidx_t expected_left = right;
+                sum = 0;
+                while (expected_left && sum + values[expected_left - 1] <= limit)
+                    sum += values[--expected_left];
+                CHECK(plain.max_right(left, within) == expected_right);
+                CHECK(lazy.max_right(left, within) == expected_right);
+                CHECK(plain.min_left(right, within) == expected_left);
+                CHECK(lazy.min_left(right, within) == expected_left);
             }
         }
     }

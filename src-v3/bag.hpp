@@ -36,12 +36,12 @@ struct nbag {
 
     template <class V>
     requires requires(V& source) {
-        source.len();
+        nlen(source);
         source[0];
     }
-    explicit nbag(V source, C order = {}, uint64_t seed = default_seed)
+    explicit nbag(const V& source, C order = {}, uint64_t seed = default_seed)
         : nbag(move(order), seed) {
-        for (nidx_t i = 0; i < source.len(); ++i) insert(T(source[i]));
+        for (nidx_t i = 0; i < nlen(source); ++i) insert(T(source[i]));
     }
 
     nidx_t len() const { return tree.size(root); }
@@ -133,8 +133,6 @@ public:
             return !invoke(order, key, invoke(projection, value));
         });
     }
-
-    nidx_t order_of_key(const T& key) const { return lower_bound(key); }
 
     pair<nidx_t, nidx_t> equal_range(const T& key) const {
         return {lower_bound(key), upper_bound(key)};

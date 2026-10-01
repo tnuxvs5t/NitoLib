@@ -89,11 +89,6 @@ constexpr auto nredomain(G function, D domain) {
     return nfunc{move(domain), move(function.eval)};
 }
 
-template <class G, class D>
-constexpr auto nrestrict(G function, D domain) {
-    return nredomain(move(function), move(domain));
-}
-
 /* nmap_values keeps keys and transforms values, preserving the transform's result. */
 template <class G, class F>
 constexpr auto nmap_values(G function, F transform) {
@@ -110,12 +105,6 @@ constexpr auto nmap_values(G function, F transform) {
 template <class F, class G>
 constexpr auto ncompose(F outer, G inner) {
     return nmap_values(move(inner), move(outer));
-}
-
-template <class G, class I>
-constexpr auto nselect_positions(G function, I positions) {
-    auto domain = ngather(move(function.domain), move(positions));
-    return nfunc{move(domain), move(function.eval)};
 }
 
 /* locate(key) returns the position used to index values. */

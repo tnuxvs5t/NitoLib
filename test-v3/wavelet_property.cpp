@@ -1,3 +1,4 @@
+#include "../src-v3/view.hpp"
 #include "../src-v3/wavelet.hpp"
 
 template <class T>

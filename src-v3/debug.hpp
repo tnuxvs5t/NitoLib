@@ -101,6 +101,16 @@ struct printer {
         out.put(']');
     }
 
+    template <class T, class A>
+    void repr(const deque<T, A>& values) {
+        out.put('[');
+        for (size_t i = 0; i < values.size(); ++i) {
+            if (i) out << ", ";
+            repr(values[i]);
+        }
+        out.put(']');
+    }
+
     template <class A, class B>
     void repr(const pair<A, B>& value) {
         out.put('(');

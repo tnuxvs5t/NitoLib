@@ -1,3 +1,4 @@
+#include "../src-v3/view.hpp"
 #include "../src-v3/automata.hpp"
 
 void check(bool condition, const char* message) {

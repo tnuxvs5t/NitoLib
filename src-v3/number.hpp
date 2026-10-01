@@ -1,12 +1,13 @@
 #pragma once
 #include "core.hpp"
 
-/* modulus is nonzero; operands are reduced internally. */
+/* modulus is nonzero; addition requires both operands in [0,modulus). */
 constexpr uint64_t naddmod64(uint64_t left, uint64_t right, uint64_t modulus) {
     uint64_t gap = modulus - right;
     return left >= gap ? left - gap : left + right;
 }
 
+/* modulus is nonzero; multiplication accepts unreduced uint64_t operands. */
 constexpr uint64_t nmulmod64(uint64_t left, uint64_t right, uint64_t modulus) {
     return uint64_t(__uint128_t(left) * right % modulus);
 }

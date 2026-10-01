@@ -1,3 +1,4 @@
+#include "../src-v3/view.hpp"
 #include "../src-v3/debug.hpp"
 
 #define CHECK(x) do { if (!(x)) { cerr << __FILE__ << ':' << __LINE__ << ": " #x "\n"; abort(); } } while (false)
@@ -97,6 +98,13 @@ int main() {
           "nested = [(1, (\"a\\n\\\"b\", [true, false])), "
           "(2, (\"河童\", [false]))] () (5,)\n");
 
+    deque<pair<nidx_t, string>> queue{{1, "a\n"}, {2, "b"}};
+    stringstream deque_output;
+    ndebug(deque_output, "queue =", queue, deque<nidx_t>{},
+           vector<deque<nidx_t>>{{3, 4}, {5}});
+    CHECK(deque_output.str() ==
+          "queue = [(1, \"a\\n\"), (2, \"b\")] [] [[3, 4], [5]]\n");
+
     nidx_t view_calls = 0;
     auto view = ntabulate(4, [&](nidx_t i) {
         ++view_calls;
@@ -172,6 +180,25 @@ int main() {
 
     mt19937 rng(0xD38A6);
     for (nidx_t round = 0; round < 1000; ++round) {
+        deque<nidx_t> random_queue;
+        nidx_t queue_length = nidx_t(rng() % 21);
+        for (nidx_t i = 0; i < queue_length; ++i) {
+            nidx_t value = nidx_t(rng() % 101) - 50;
+            if (rng() & 1) random_queue.push_front(value);
+            else random_queue.push_back(value);
+        }
+        stringstream deque_got, deque_expected;
+        ndebug(deque_got, random_queue);
+        deque_expected << '[';
+        bool first = true;
+        for (nidx_t value : random_queue) {
+            if (!first) deque_expected << ", ";
+            first = false;
+            deque_expected << value;
+        }
+        deque_expected << "]\n";
+        CHECK(deque_got.str() == deque_expected.str());
+
         nidx_t n = nidx_t(rng() % 21);
         vector<nidx_t> keys(n);
         for (nidx_t& key : keys) key = nidx_t(rng() % 11) - 5;

@@ -1,5 +1,6 @@
 #pragma once
 #include "ds.hpp"
+#include "sequence.hpp"
 
 /* Residual edges are stored in xor-pairs; add returns the forward edge handle. */
 template <class C>
@@ -132,13 +133,9 @@ struct nmst_result {
 
 /* Edge projections receive edges[position]; the result is a minimum spanning forest. */
 template <class V, class From, class To, class Weight>
-auto nkruskal(nidx_t vertices, V edges, From from, To to, Weight weight) {
+auto nkruskal(nidx_t vertices, V&& edges, From from, To to, Weight weight) {
     using W = remove_cvref_t<decltype(invoke(weight, edges[0]))>;
-    vector<nidx_t> order(edges.len());
-    iota(order.begin(), order.end(), 0);
-    sort(order.begin(), order.end(), [&](nidx_t a, nidx_t b) {
-        return invoke(weight, edges[a]) < invoke(weight, edges[b]);
-    });
+    auto order = nargsort(edges, less<>{}, ref(weight));
     ndsu components(vertices);
     nmst_result<W> result{W{}, {}};
     for (nidx_t position : order) {

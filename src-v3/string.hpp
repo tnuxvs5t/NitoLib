@@ -1,10 +1,10 @@
 #pragma once
-#include "view.hpp"
+#include "core.hpp"
 
 template <class V>
-vector<nidx_t> nprefix_function(V sequence) {
-    vector<nidx_t> prefix(sequence.len());
-    for (nidx_t i = 1; i < sequence.len(); ++i) {
+vector<nidx_t> nprefix_function(V&& sequence) {
+    vector<nidx_t> prefix(nlen(sequence));
+    for (nidx_t i = 1; i < nlen(sequence); ++i) {
         nidx_t border = prefix[i - 1];
         while (border && !(sequence[i] == sequence[border])) border = prefix[border - 1];
         if (sequence[i] == sequence[border]) ++border;
@@ -14,8 +14,8 @@ vector<nidx_t> nprefix_function(V sequence) {
 }
 
 template <class V>
-vector<nidx_t> nz(V sequence) {
-    nidx_t n = sequence.len();
+vector<nidx_t> nz(V&& sequence) {
+    nidx_t n = nlen(sequence);
     vector<nidx_t> z(n);
     if (n) z[0] = n;
     for (nidx_t i = 1, left = 0, right = 0; i < n; ++i) {
@@ -26,20 +26,20 @@ vector<nidx_t> nz(V sequence) {
     return z;
 }
 
-/* Empty pattern occurs at every boundary [0,text.len()]. */
+/* Empty pattern occurs at every boundary [0,nlen(text)]. */
 template <class T, class P>
-vector<nidx_t> nkmp(T text, P pattern) {
+vector<nidx_t> nkmp(T&& text, P&& pattern) {
     vector<nidx_t> answer;
-    if (!pattern.len()) {
-        answer.resize(text.len() + 1);
+    if (!nlen(pattern)) {
+        answer.resize(nlen(text) + 1);
         iota(answer.begin(), answer.end(), 0);
         return answer;
     }
     auto prefix = nprefix_function(pattern);
-    for (nidx_t i = 0, matched = 0; i < text.len(); ++i) {
+    for (nidx_t i = 0, matched = 0; i < nlen(text); ++i) {
         while (matched && !(text[i] == pattern[matched])) matched = prefix[matched - 1];
         if (text[i] == pattern[matched]) ++matched;
-        if (matched == pattern.len()) answer.push_back(i + 1 - matched), matched = prefix[matched - 1];
+        if (matched == nlen(pattern)) answer.push_back(i + 1 - matched), matched = prefix[matched - 1];
     }
     return answer;
 }
@@ -50,8 +50,8 @@ struct npalindrome_radii {
 
 /* odd[i] includes center i; even[i] is centered between i-1 and i. */
 template <class V>
-npalindrome_radii nmanacher(V sequence) {
-    nidx_t n = sequence.len();
+npalindrome_radii nmanacher(V&& sequence) {
+    nidx_t n = nlen(sequence);
     vector<nidx_t> odd(n), even(n);
     for (nidx_t i = 0, left = 0, right = -1; i < n; ++i) {
         nidx_t radius = i > right ? 1 : min(odd[left + right - i], right - i + 1);
@@ -72,8 +72,8 @@ npalindrome_radii nmanacher(V sequence) {
 
 /* Generic comparable alphabet; counting by ranks makes each doubling round O(n). */
 template <class V>
-vector<nidx_t> nsuffix_array(V sequence) {
-    nidx_t n = sequence.len();
+vector<nidx_t> nsuffix_array(V&& sequence) {
+    nidx_t n = nlen(sequence);
     vector<nidx_t> suffix(n), rank(n), next_rank(n), candidate;
     iota(suffix.begin(), suffix.end(), 0);
     sort(suffix.begin(), suffix.end(), [&](nidx_t a, nidx_t b) { return sequence[a] < sequence[b]; });
@@ -106,8 +106,8 @@ vector<nidx_t> nsuffix_array(V sequence) {
 }
 
 template <class V>
-vector<nidx_t> nlcp(V sequence, const vector<nidx_t>& suffix) {
-    nidx_t n = sequence.len(), height = 0;
+vector<nidx_t> nlcp(V&& sequence, const vector<nidx_t>& suffix) {
+    nidx_t n = nlen(sequence), height = 0;
     vector<nidx_t> rank(n), lcp(max(nidx_t(0), n - 1));
     for (nidx_t i = 0; i < n; ++i) rank[suffix[i]] = i;
     for (nidx_t start = 0; start < n; ++start) {

@@ -1,3 +1,4 @@
+#include "../src-v3/view.hpp"
 #include "../src-v3/bag.hpp"
 #include "../src-v3/discrete.hpp"
 #include "../src-v3/fhq.hpp"

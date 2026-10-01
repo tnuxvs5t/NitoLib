@@ -47,10 +47,11 @@ struct nett_forest {
     }
 
     template <class V>
-    explicit nett_forest(V values, M merge = {})
-        : sequence(pull_policy{move(merge)}), representative(values.len()) {
+    requires requires(V& source) { source[0]; }
+    explicit nett_forest(const V& values, M merge = {})
+        : sequence(pull_policy{move(merge)}), representative(nlen(values)) {
         T identity = sequence.ops.merge.id();
-        for (nidx_t vertex = 0; vertex < values.len(); ++vertex)
+        for (nidx_t vertex = 0; vertex < nlen(values); ++vertex)
             representative[vertex] = sequence.make(item{vertex, true, values[vertex], identity, 1});
     }
 

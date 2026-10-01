@@ -1,5 +1,5 @@
 #pragma once
-#include "view.hpp"
+#include "core.hpp"
 
 template <class T>
 struct nsum_group {
@@ -9,9 +9,9 @@ struct nsum_group {
 };
 
 /*
-Fenwick updates and range subtraction rely on an Abelian group.  lower additionally
-requires prefixes to be monotone under less and returns len() when no position reaches
-the target.  No syntax machinery attempts to prove these algebraic laws.
+Fenwick updates and range subtraction rely on an Abelian group.  Bound searches require
+prefixes to be monotone under less and return len() when no position satisfies the bound.
+No syntax machinery attempts to prove these algebraic laws.
 */
 template <class T, class G = nsum_group<T>>
 struct nfenwick {
@@ -22,8 +22,9 @@ struct nfenwick {
         : group(move(operation)), tree(n + 1, group.id()) {}
 
     template <class V>
-    explicit nfenwick(V source, G operation = {}) : nfenwick(source.len(), move(operation)) {
-        for (nidx_t i = 0; i < source.len(); ++i) tree[i + 1] = source[i];
+    requires requires(V& source) { source[0]; }
+    explicit nfenwick(const V& source, G operation = {}) : nfenwick(nlen(source), move(operation)) {
+        for (nidx_t i = 0; i < nlen(source); ++i) tree[i + 1] = source[i];
         for (nidx_t i = 1; i < nidx_t(tree.size()); ++i) {
             nidx_t parent = i + (i & -i);
             if (parent < nidx_t(tree.size())) tree[parent] = invoke(this->group, tree[parent], tree[i]);
@@ -53,20 +54,40 @@ struct nfenwick {
         add(position, invoke(group, group.inverse(get(position)), value));
     }
 
-    template <class Less = less<>>
-    nidx_t lower(const T& target, Less less = {}) const {
+private:
+    template <class Less>
+    nidx_t bound(const T& target, Less less, bool strict) const {
         nidx_t position = 0;
         T prefix_value = group.id();
         for (nidx_t step = nidx_t(bit_floor(nuidx_t(len()))); step; step >>= 1) {
             nidx_t next = position + step;
             if (next <= len()) {
                 T candidate = invoke(group, prefix_value, tree[next]);
-                if (invoke(less, candidate, target)) position = next, prefix_value = move(candidate);
+                bool before = strict ? !invoke(less, target, candidate)
+                                     : invoke(less, candidate, target);
+                if (before) position = next, prefix_value = move(candidate);
             }
         }
         return position;
     }
+
+public:
+    /* First element position i whose prefix(i+1) is >= target under less. */
+    template <class Less = less<>>
+    nidx_t lower_bound(const T& target, Less less = {}) const {
+        return bound(target, move(less), false);
+    }
+
+    /* First element position i whose prefix(i+1) is > target under less. */
+    template <class Less = less<>>
+    nidx_t upper_bound(const T& target, Less less = {}) const {
+        return bound(target, move(less), true);
+    }
+
 };
+
+template <class V, class G = nsum_group<remove_cvref_t<decltype(declval<V&>()[0])>>>
+nfenwick(const V&, G = {}) -> nfenwick<remove_cvref_t<decltype(declval<V&>()[0])>, G>;
 
 struct ndsu {
     vector<nidx_t> parent;
@@ -280,8 +301,8 @@ struct nsparse_table {
     vector<vector<T>> table;
 
     template <class V>
-    explicit nsparse_table(V source, O merge = {}) : operation(move(merge)) {
-        nidx_t n = source.len(), levels = n ? bit_width(nuidx_t(n)) : 0;
+    explicit nsparse_table(const V& source, O merge = {}) : operation(move(merge)) {
+        nidx_t n = nlen(source), levels = n ? bit_width(nuidx_t(n)) : 0;
         if (!n) return;
         vector<T> first;
         first.reserve(n);

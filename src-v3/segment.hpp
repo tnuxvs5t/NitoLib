@@ -1,6 +1,5 @@
 #pragma once
 #include "arena.hpp"
-#include "view.hpp"
 
 template <class T>
 struct nadd {
@@ -164,7 +163,8 @@ struct nseg {
           tree(size_t(2) * base, merge.id()) {}
 
     template <class V>
-    explicit nseg(V source, M operation = {}) : nseg(source.len(), move(operation)) {
+    requires requires(V& source) { source[0]; }
+    explicit nseg(const V& source, M operation = {}) : nseg(nlen(source), move(operation)) {
         for (nidx_t i = 0; i < length; ++i) tree[base + i] = source[i];
         for (nidx_t i = base; --i;) tree[i] = invoke(merge, tree[i << 1], tree[i << 1 | 1]);
     }
@@ -189,6 +189,60 @@ struct nseg {
     }
 
     T fold() const { return length ? tree[1] : merge.id(); }
+
+    /* predicate(id()) is true and stays false after further ordered extension.
+       Search is O(log n) times predicate/merge cost; arguments lie in [0,len()]. */
+    template <class P>
+    nidx_t max_right(nidx_t left, P predicate) const {
+        T aggregate = merge.id();
+        assert(invoke(predicate, aggregate));
+        if (left == length) return length;
+        nidx_t node = left + base;
+        do {
+            while (!(node & 1)) node >>= 1;
+            T candidate = invoke(merge, aggregate, tree[node]);
+            if (!invoke(predicate, candidate)) {
+                while (node < base) {
+                    node <<= 1;
+                    candidate = invoke(merge, aggregate, tree[node]);
+                    if (invoke(predicate, candidate)) {
+                        aggregate = move(candidate);
+                        ++node;
+                    }
+                }
+                return min(length, node - base);
+            }
+            aggregate = move(candidate);
+            ++node;
+        } while ((node & -node) != node);
+        return length;
+    }
+
+    template <class P>
+    nidx_t min_left(nidx_t right, P predicate) const {
+        T aggregate = merge.id();
+        assert(invoke(predicate, aggregate));
+        if (!right) return 0;
+        nidx_t node = right + base;
+        do {
+            --node;
+            while (node > 1 && (node & 1)) node >>= 1;
+            T candidate = invoke(merge, tree[node], aggregate);
+            if (!invoke(predicate, candidate)) {
+                while (node < base) {
+                    node = node << 1 | 1;
+                    candidate = invoke(merge, tree[node], aggregate);
+                    if (invoke(predicate, candidate)) {
+                        aggregate = move(candidate);
+                        --node;
+                    }
+                }
+                return max(nidx_t(0), node + 1 - base);
+            }
+            aggregate = move(candidate);
+        } while ((node & -node) != node);
+        return 0;
+    }
 
     /* Pointwise leaf merge; lengths and operation meanings must agree. */
     void pointwise(const nseg& other) {
@@ -225,9 +279,9 @@ struct nlazyseg {
     }
 
     template <class V>
-    requires requires(V& source) { source.len(); source[0]; }
-    explicit nlazyseg(V source, Ops policy = {})
-        : nlazyseg(source.len(), move(policy)) {
+    requires requires(V& source) { source[0]; }
+    explicit nlazyseg(const V& source, Ops policy = {})
+        : nlazyseg(nlen(source), move(policy)) {
         for (nidx_t i = 0; i < length; ++i) tree[base + i] = ops.make(source[i]);
         for (nidx_t i = base; --i;) pull(i);
     }
@@ -294,6 +348,58 @@ struct nlazyseg {
             if (full) tree[node] = ops.make(forward<U>(value));
             return full;
         });
+    }
+
+    /* Same ordered-monotone predicate contract as nseg. Searches may push lazy
+       state and therefore physically change the tree while preserving its value. */
+    template <class P>
+    nidx_t max_right(nidx_t left, P predicate) {
+        T aggregate = ops.identity();
+        assert(invoke(predicate, aggregate));
+        auto descend = [&](auto&& self, nidx_t node, nidx_t lo, nidx_t hi) -> nidx_t {
+            if (hi <= left || length <= lo) return -1;
+            if (left <= lo && hi <= length) {
+                T candidate = ops.join(aggregate, tree[node]);
+                if (invoke(predicate, candidate)) {
+                    aggregate = move(candidate);
+                    return -1;
+                }
+                if (lo + 1 == hi) return lo;
+            }
+            push(node, lo, hi);
+            nidx_t mid = midpoint(lo, hi);
+            nidx_t answer = self(self, node << 1, lo, mid);
+            if (answer < 0) answer = self(self, node << 1 | 1, mid, hi);
+            pull(node);
+            return answer;
+        };
+        nidx_t answer = descend(descend, 1, 0, base);
+        return answer < 0 ? length : answer;
+    }
+
+    template <class P>
+    nidx_t min_left(nidx_t right, P predicate) {
+        T aggregate = ops.identity();
+        assert(invoke(predicate, aggregate));
+        auto descend = [&](auto&& self, nidx_t node, nidx_t lo, nidx_t hi) -> nidx_t {
+            if (right <= lo) return -1;
+            if (hi <= right) {
+                T candidate = ops.join(tree[node], aggregate);
+                if (invoke(predicate, candidate)) {
+                    aggregate = move(candidate);
+                    return -1;
+                }
+                if (lo + 1 == hi) return hi;
+            }
+            push(node, lo, hi);
+            nidx_t mid = midpoint(lo, hi);
+            nidx_t answer = self(self, node << 1 | 1, mid, hi);
+            if (answer < 0) answer = self(self, node << 1, lo, mid);
+            pull(node);
+            return answer;
+        };
+        nidx_t answer = descend(descend, 1, 0, base);
+        return answer < 0 ? 0 : answer;
     }
 };
 

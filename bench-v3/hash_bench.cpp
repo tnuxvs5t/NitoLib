@@ -1,3 +1,4 @@
+#include "../src-v3/view.hpp"
 #include "../src-v3/func.hpp"
 
 using clock_type = chrono::steady_clock;

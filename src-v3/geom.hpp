@@ -1,5 +1,5 @@
 #pragma once
-#include "view.hpp"
+#include "core.hpp"
 
 template <class T>
 struct npoint {
@@ -42,21 +42,21 @@ constexpr bool nsegment_intersect(npoint<T> a, npoint<T> b, npoint<T> c, npoint<
 }
 
 template <class V>
-auto npolygon_area2(V polygon) {
+auto npolygon_area2(V&& polygon) {
     using R = decltype(ncross(polygon[0], polygon[0]));
     R area{};
-    for (nidx_t i = 0; i < polygon.len(); ++i)
-        area += ncross(polygon[i], polygon[(i + 1) % polygon.len()]);
+    for (nidx_t i = 0; i < nlen(polygon); ++i)
+        area += ncross(polygon[i], polygon[(i + 1) % nlen(polygon)]);
     return area;
 }
 
 /* Returns unique hull vertices counterclockwise, excluding collinear edge interiors. */
 template <class V>
-auto nconvex_hull(V points) {
+auto nconvex_hull(V&& points) {
     using P = remove_cvref_t<decltype(points[0])>;
     vector<P> sorted;
-    sorted.reserve(points.len());
-    for (nidx_t i = 0; i < points.len(); ++i) sorted.push_back(points[i]);
+    sorted.reserve(nlen(points));
+    for (nidx_t i = 0; i < nlen(points); ++i) sorted.push_back(points[i]);
     sort(sorted.begin(), sorted.end());
     sorted.erase(unique(sorted.begin(), sorted.end()), sorted.end());
     if (sorted.size() <= 1) return sorted;

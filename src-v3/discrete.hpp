@@ -1,5 +1,6 @@
 #pragma once
 #include "func.hpp"
+#include "sequence.hpp"
 
 /*
 This module treats an index list as a reusable structural plan.  Applying the plan
@@ -311,17 +312,6 @@ constexpr nidx_t nupper(S&& source, const T& value, C compare = {}, P projection
 }
 
 /* nargsort is a positional plan; norder applies it without moving source values. */
-template <class S, class C = less<>, class P = identity>
-vector<nidx_t> nargsort(const S& source, C compare = {}, P projection = {}) {
-    vector<nidx_t> order(nlen(source));
-    iota(order.begin(), order.end(), 0);
-    ranges::sort(order, [&](nidx_t left, nidx_t right) {
-        return invoke(compare, invoke(projection, source[left]),
-                       invoke(projection, source[right]));
-    });
-    return order;
-}
-
 template <class S, class C = less<>, class P = identity>
 auto norder(S source, C compare = {}, P projection = {}) {
     auto order = nargsort(source, move(compare), move(projection));

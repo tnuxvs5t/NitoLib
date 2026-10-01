@@ -6,12 +6,14 @@ Nitori v3 是面向算法竞赛的 C++23 泛型库重建工程。当前改革目
 结构化复用改革 + 自由度革命
 ```
 
-v3.2 延续 inverse-first 的 `nview/nfunc` 结构：能代数求逆时不建表，不能时由紧凑
-静态 hash fallback 兜底，算法只消费统一的 `inverse(key)->position` 端口。
+当前清理方向是直接使用 STL 容器与 span，公开接口保持全局 `n*` 名字。普通算法不要求
+先包装 `nall`；语义投影需要时再引入 `nview/nfunc`。规则多维数据用独立的 `nmdview`
+组合切片、换轴、反向和 bias，不复制元素、不建 hash。
 
-本版新增独立节点双向链表 `nlist`；`nruns` 的自定义 Operation 接受候选段
-`[left,right)` 边界，自行捕获原 view 并维护增量摘要。图树 DFS 与祖先下推简化为递归，
-同时修复 HLD 部分覆盖和分块/stride 的整数边界。
+本版新增 pooled doubly-linked chains 内核 `nlist`；它以共享节点池、整数 handle 和轻量链根
+支持多链组合，并非 `std::list` 替代。`nruns` 的自定义 Operation 接受候选段
+`[left,right)` 边界，自行捕获原 view 并维护增量摘要。直接 HLD 构造已使用迭代遍历，
+支持 `nhld(n,root,next)`；`nroot/nreroot` 等仍按各自契约使用递归。
 
 V3 不复用 V2 的实现、测试、checked/unsafe 双体系或单头文件组织。代码从 `src-v3/`
 重新生长，模板只要求实际使用的表达式，数学、生命周期和失效限制写在局部注释中。
@@ -27,9 +29,7 @@ V3 不复用 V2 的实现、测试、checked/unsafe 双体系或单头文件组�
 V3 暂时没有统一 `Nitori.h`。直接包含需要的模块：
 
 ```cpp
-#include "src-v3/view.hpp"
 #include "src-v3/io.hpp"
-#include "src-v3/discrete.hpp"
 #include "src-v3/segment.hpp"
 ```
 
@@ -52,7 +52,7 @@ fallback。`nanchors(keys,values)` 优先复用结构 inverse，否则自动建�
 
 ## 施工原则
 
-- 128 KiB 语义源码预算；注释和布局空白不计入。
+- 162 KiB（128 + 24 + 4 + 6 KiB）语义源码预算；24 KiB 专用于数学与多项式，4 KiB 专用于图论，另有 6 KiB 供图论与 DS 共享，注释和布局空白不计入。
 - 有符号 `nidx_t` 位置，半开区间 `[left,right)`；默认 `int`，全程序定义
   `NITORI_INDEX_64` 时切换为 `long long`。
 - 不建立 concept/trait/npre 森林。
@@ -63,15 +63,18 @@ fallback。`nanchors(keys,values)` 优先复用结构 inverse，否则自动建�
 
 ## 验证
 
+**严禁跑全量测试。** 只选择与本次改动直接相关的最小测试集；不得枚举全部测试名，
+或通过分片、并行、分批执行变相跑全量。阶段收尾也不例外。整库头文件编译审计和完整
+benchmark runner 不作为默认替代检查；只检查受影响的头文件及确有必要的 benchmark。
+纯文档修改不运行 C++ 测试，相关验证通过后停止，不为形式上的完整性重复运行。
+
 ```bash
-python3 test-v3/run.py
-python3 test-v3/run.py composition graph_store_property
-python3 test-v3/audit.py
-python3 bench-v3/run.py
+python3 test-v3/run.py reftree_property
 python3 test-v3/measure.py
 ```
 
-测试会分别编译运行 debug、`-O2` 和 ASan+UBSan 模式，并启用严格 warnings。
+上面的测试名是定向验证示例，应按实际改动选择；`measure.py` 用于源码或预算变化。
+选中的测试会分别编译运行 debug、`-O2` 和 ASan+UBSan 模式，并启用严格 warnings。
 
 ## V2 状态
 

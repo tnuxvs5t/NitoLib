@@ -1,5 +1,5 @@
 #pragma once
-#include "graph.hpp"
+#include "rooted.hpp"
 
 struct npath_piece {
     nidx_t left, right;
@@ -95,16 +95,21 @@ auto layout(V&& vertices, vector<nidx_t> roots, C children,
             vector<nidx_t> heavy) {
     nidx_t n = vertices.len(), timer = 0;
     vector<nidx_t> head(n, -1), position(n, -1), at(n);
-    auto dfs = [&](auto&& self, nidx_t vertex, nidx_t chain) -> void {
-        head[vertex] = chain;
-        position[vertex] = timer;
-        at[timer++] = vertex;
-        if (heavy[vertex] >= 0) self(self, heavy[vertex], chain);
-        invoke(children, vertex, [&](nidx_t child) {
-            if (child != heavy[vertex]) self(self, child, child);
-        });
-    };
-    for (nidx_t root : roots) dfs(dfs, root, root);
+    vector<nidx_t> pending(roots.rbegin(), roots.rend());
+    while (!pending.empty()) {
+        nidx_t chain = pending.back();
+        pending.pop_back();
+        for (nidx_t vertex = chain; vertex >= 0; vertex = heavy[vertex]) {
+            head[vertex] = chain;
+            position[vertex] = timer;
+            at[timer++] = vertex;
+            size_t first = pending.size();
+            invoke(children, vertex, [&](nidx_t child) {
+                if (child != heavy[vertex]) pending.push_back(child);
+            });
+            reverse(pending.begin() + ptrdiff_t(first), pending.end());
+        }
+    }
     at.resize(timer);
     return nhld_layout<remove_cvref_t<V>>{forward<V>(vertices), move(parent), move(depth),
         move(subtree), move(heavy), move(head), move(position), move(at), move(roots)};
@@ -131,38 +136,57 @@ auto rooted(R&& tree, V&& vertices) {
 /*
 The construction port is invertible vertices, roots and children(vertex).  children
 must describe a rooted forest, be repeatable, and enumerate every non-root exactly once.
-Roots may cover a subset of vertices.  Recursion uses O(height) call stack; outstanding
-child ranges remain valid during nested calls.  No concrete graph/tree owner is required.
+Roots may cover a subset of vertices. An undirected forest is also accepted: discovered
+parents are skipped. Construction uses O(n) heap work storage and constant call depth.
+No concrete graph/tree owner is required; child ranges are only held during one loop.
 */
 template <class V, class R, class C>
+requires requires(V& vertices) { vertices.len(); vertices.inverse(vertices[0]); }
 auto nhld(V vertices, R roots, C children) {
     nidx_t n = vertices.len();
     vector<nidx_t> parent(n, -1), depth(n, -1), subtree(n), heavy(n, -1), root_position;
-    auto dfs = [&](auto&& self, nidx_t from) -> void {
-        subtree[from] = 1;
-        for (auto&& key : invoke(children, vertices[from])) {
-            nidx_t child = vertices.inverse(key);
-            parent[child] = from;
-            depth[child] = depth[from] + 1;
-            self(self, child);
-            subtree[from] += subtree[child];
-            if (heavy[from] < 0 || subtree[heavy[from]] < subtree[child]) heavy[from] = child;
-        }
-    };
-    for (nidx_t i = 0; i < roots.len(); ++i) {
+    vector<nidx_t> order;
+    for (nidx_t i = 0; i < nlen(roots); ++i) {
         nidx_t root = vertices.inverse(roots[i]);
         root_position.push_back(root);
         parent[root] = root;
         depth[root] = 0;
-        dfs(dfs, root);
+        order.push_back(root);
+    }
+    for (size_t i = 0; i < order.size(); ++i) {
+        nidx_t from = order[i];
+        subtree[from] = 1;
+        for (auto&& key : invoke(children, vertices[from])) {
+            nidx_t child = vertices.inverse(key);
+            if (parent[child] >= 0) continue;
+            parent[child] = from;
+            depth[child] = depth[from] + 1;
+            order.push_back(child);
+        }
+    }
+    for (auto it = order.rbegin(); it != order.rend(); ++it) {
+        nidx_t child = *it, from = parent[child];
+        if (child == from) continue;
+        subtree[from] += subtree[child];
+        if (heavy[from] < 0 || subtree[heavy[from]] <= subtree[child]) heavy[from] = child;
     }
 
+    // layout takes ownership of parent; its buffer remains live during enumeration.
+    const nidx_t* parent_data = parent.data();
     auto child_positions = [&](nidx_t vertex, auto visit) {
-        for (auto&& key : invoke(children, vertices[vertex]))
-            invoke(visit, vertices.inverse(key));
+        for (auto&& key : invoke(children, vertices[vertex])) {
+            nidx_t child = vertices.inverse(key);
+            if (parent_data[child] == vertex && child != vertex) invoke(visit, child);
+        }
     };
     return nhld_detail::layout(move(vertices), move(root_position), child_positions,
                                move(parent), move(depth), move(subtree), move(heavy));
+}
+
+/* Dense connected tree; next(vertex) returns adjacent integer vertices. */
+template <class C>
+auto nhld(nidx_t n, nidx_t root, C next) {
+    return nhld(nvertices{n}, array{root}, move(next));
 }
 
 template <class V>
