@@ -35,6 +35,7 @@
 | `ncsr`, undirected CSR expansion | `src-v4/graph_store.hpp` | done | input order、logical edge ID、borrowed view |
 | shortest paths, topo, Euler, SCC | `src-v4/graph_algo.hpp` | done | graph port independent；signed/0-1/heap contracts |
 | lowlink and block-cut forest | `src-v4/graph_algo.hpp` | done | multiedge-safe edge IDs、recursive DFS |
+| flow, matching and minimum spanning forest | `src-v4/flow.hpp` | done | 增量残量流与 cut、一次物化邻接的分层匹配、只保存输入位置的 Kruskal；`test-v4/flow_property.cpp` 覆盖随机最小割、暴力匹配、非连通森林和 move-only 边 |
 
 独立证据：
 
@@ -43,6 +44,7 @@ test-v4/view_func_property.cpp
 test-v4/hash_property.cpp
 test-v4/tree_property.cpp
 test-v4/key_tree_property.cpp
+test-v4/flow_property.cpp
 ```
 
 这些测试已在 C++20/C++23、`-O2` 下通过；树核心另有 ASan/UBSan 与 64-bit index
@@ -70,7 +72,7 @@ test-v4/key_tree_property.cpp
 | `topk.hpp` | `ntopk` | `topk.hpp` | pending |
 | `graph_store.hpp` | `ncsr`, graph views | `graph_store.hpp` | done |
 | `graph_algo.hpp` | BFS/DFS, SCC, lowlink, Euler, shortest paths | `graph_algo.hpp` | done |
-| `flow.hpp` | Dinic, matching, MST | `flow.hpp` | pending |
+| `flow.hpp` | Dinic, matching, MST | `flow.hpp` | done |
 | `dynamic_tree.hpp` | Euler-tour forest | `dynamic_tree.hpp` | pending |
 | `link_cut.hpp` | `nlct` | `link_cut.hpp` | pending |
 | `math.hpp` | modular arithmetic, CRT, floor sum, sieve | `math.hpp` | pending |
