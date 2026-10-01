@@ -67,6 +67,7 @@ test-v4/string_property.cpp
 test-v4/automata_property.cpp
 test-v4/geom_property.cpp
 test-v4/opt_property.cpp
+test-v4/io_property.cpp
 ```
 
 这些测试已在 C++20/C++23、`-O2` 下通过；树核心另有 ASan/UBSan 与 64-bit index
@@ -76,7 +77,7 @@ test-v4/opt_property.cpp
 
 | v3 头文件 | 主要对象/操作 | v4 归宿计划 | 状态 |
 | --- | --- | --- | --- |
-| `io.hpp` | `nread`, `nwrite`, `nscan`, `nprint` | `io.hpp` | pending |
+| `io.hpp` | `nread`, `nwrite`, `nscan`, `nprint` | `io.hpp` | done；`test-v4/io_property.cpp` 覆盖有界整数、128 位极值、EOF/failbit、流交错与单空格输出 |
 | `debug.hpp` | `ndebug`, `nwrite` debug path | `debug.hpp` | pending |
 | `discrete.hpp` | `nselect`, `nfilter`, `norder`, `nunique`, chunks/runs | `discrete.hpp` | done |
 | `sequence.hpp` | `nrun_bounds`, `nindexed_span` | `sequence.hpp` | done |
