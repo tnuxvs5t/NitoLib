@@ -66,6 +66,7 @@ test-v4/linear_property.cpp
 test-v4/string_property.cpp
 test-v4/automata_property.cpp
 test-v4/geom_property.cpp
+test-v4/opt_property.cpp
 ```
 
 这些测试已在 C++20/C++23、`-O2` 下通过；树核心另有 ASan/UBSan 与 64-bit index
@@ -107,7 +108,7 @@ test-v4/geom_property.cpp
 | `string.hpp` | KMP, suffix array, Manacher, LCP | `string.hpp` | done；`test-v4/string_property.cpp` 覆盖空序列、随机小字母表、周期串以及全部匹配/LCP 语义 |
 | `automata.hpp` | `nac` | `automata.hpp` | done；`test-v4/automata_property.cpp` 覆盖空模式、重复模式、可调用字母表、walk 与 failure 聚合 |
 | `geom.hpp` | point/line/intersection/hull | `geom.hpp` | done；`test-v4/geom_property.cpp` 覆盖退化线段、共线/端点相交、随机凸包、面积与无限直线交点 |
-| `opt.hpp` | Li Chao | `opt.hpp` | pending |
+| `opt.hpp` | Li Chao | `opt.hpp` | done；`test-v4/opt_property.cpp` 覆盖稀疏 root、整域/区间加线、空查询以及 min/max evaluator |
 
 ## 每个 pending 条目的完成条件
 
