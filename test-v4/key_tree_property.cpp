@@ -11,6 +11,8 @@ struct keys {
     }
 };
 
+static_assert(ranges::random_access_range<decltype(nall(declval<vector<int>&>()))>);
+
 int main() {
     vector<string> keys{"root", "left", "right", "leaf"};
     vector<vector<string>> children{{"left", "right"}, {"leaf"}, {}, {}};

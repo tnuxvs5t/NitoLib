@@ -24,13 +24,31 @@ struct nview {
     decltype(auto) operator[](nidx_t i) const { return invoke(access, i); }
 
     struct iterator {
-        const nview* view;
-        nidx_t position;
+        using difference_type = nidx_t;
+        using value_type = remove_cvref_t<decltype(declval<const nview&>()[0])>;
+        using reference = decltype(declval<const nview&>()[0]);
+        using pointer = void;
+        using iterator_category = random_access_iterator_tag;
+        using iterator_concept = random_access_iterator_tag;
+
+        const nview* view = nullptr;
+        nidx_t position = 0;
         decltype(auto) operator*() const { return (*view)[position]; }
+        decltype(auto) operator[](nidx_t d) const { return (*view)[position + d]; }
         iterator& operator++() { ++position; return *this; }
+        iterator operator++(int) { auto old = *this; ++*this; return old; }
+        iterator& operator--() { --position; return *this; }
+        iterator operator--(int) { auto old = *this; --*this; return old; }
+        iterator& operator+=(nidx_t d) { position += d; return *this; }
+        iterator& operator-=(nidx_t d) { position -= d; return *this; }
+        friend iterator operator+(iterator it, nidx_t d) { return it += d; }
+        friend iterator operator+(nidx_t d, iterator it) { return it += d; }
+        friend iterator operator-(iterator it, nidx_t d) { return it -= d; }
+        friend nidx_t operator-(iterator a, iterator b) { return a.position - b.position; }
         friend bool operator==(iterator a, iterator b) {
             return a.view == b.view && a.position == b.position;
         }
+        friend auto operator<=>(iterator a, iterator b) { return a.position <=> b.position; }
     };
 
     iterator begin() const { return {this, 0}; }

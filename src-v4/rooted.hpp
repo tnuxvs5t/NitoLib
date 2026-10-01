@@ -49,8 +49,8 @@ struct nrooted {
     }
 };
 
-template <class V, class N, class To, class R>
-auto nroot(ngraph<V, N, To> graph, R&& roots) {
+template <class G, class R>
+auto nroot(G graph, R&& roots) {
     nidx_t n = graph.vertices.len();
     vector<nidx_t> par(n, -1), dep(n, -1), comp(n, -1), ord, sz(n);
     vector<nidx_t> rt;
@@ -93,6 +93,7 @@ auto nroot(ngraph<V, N, To> graph, R&& roots) {
     for (nidx_t v : ord)
         if (par[v] != v) ch[at[par[v]]++] = v;
 
+    using V = remove_cvref_t<decltype(graph.vertices)>;
     return nrooted<V>{move(graph.vertices), n, move(par), move(dep), move(comp), move(ord), move(sz),
             move(rt), move(off), move(ch)};
 }
