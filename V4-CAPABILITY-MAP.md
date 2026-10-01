@@ -31,6 +31,10 @@
 | `nsegment_trace`, `nsegment_cover`, `nseg` | `src-v4/segment.hpp` | done | 纯拓扑访问、ordered fold、max_right/min_left、pointwise |
 | `nlazyseg`, `nlazy_ops`, `nlazy_addsum` | `src-v4/segment.hpp` | done | action composition、push/pull、range apply/query |
 | `nsparse_seg` | `src-v4/segment.hpp` | done | destructive/persistent roots、长坐标、query 不分配 |
+| `ngraph` edge identity port | `src-v4/graph.hpp` | done | vertices/next/target/edge_id 最小 callable port |
+| `ncsr`, undirected CSR expansion | `src-v4/graph_store.hpp` | done | input order、logical edge ID、borrowed view |
+| shortest paths, topo, Euler, SCC | `src-v4/graph_algo.hpp` | done | graph port independent；signed/0-1/heap contracts |
+| lowlink and block-cut forest | `src-v4/graph_algo.hpp` | done | multiedge-safe edge IDs、recursive DFS |
 
 独立证据：
 
@@ -64,8 +68,8 @@ test-v4/key_tree_property.cpp
 | `list.hpp` | `nlist` | `list.hpp` | pending |
 | `wavelet.hpp` | `nwavelet` | `wavelet.hpp` | pending |
 | `topk.hpp` | `ntopk` | `topk.hpp` | pending |
-| `graph_store.hpp` | `ncsr`, graph views | `graph_store.hpp` | pending |
-| `graph_algo.hpp` | BFS/DFS, SCC, lowlink, Euler, shortest paths | `graph_algo.hpp` | pending |
+| `graph_store.hpp` | `ncsr`, graph views | `graph_store.hpp` | done |
+| `graph_algo.hpp` | BFS/DFS, SCC, lowlink, Euler, shortest paths | `graph_algo.hpp` | done |
 | `flow.hpp` | Dinic, matching, MST | `flow.hpp` | pending |
 | `dynamic_tree.hpp` | Euler-tour forest | `dynamic_tree.hpp` | pending |
 | `link_cut.hpp` | `nlct` | `link_cut.hpp` | pending |

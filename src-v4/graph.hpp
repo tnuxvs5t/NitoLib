@@ -8,11 +8,12 @@ struct nto_self {
     }
 };
 
-template <class V, class N, class To = nto_self>
+template <class V, class N, class To = nto_self, class Id = nullptr_t>
 struct ngraph {
     V vertices;
     mutable N next;
     mutable To to{};
+    mutable Id id{};
 
     nidx_t len() const { return vertices.len(); }
 
@@ -25,6 +26,12 @@ struct ngraph {
     decltype(auto) target(E&& edge) const {
         return invoke(to, forward<E>(edge));
     }
+
+    template <class E>
+    requires invocable<Id&, E>
+    nidx_t edge_id(E&& edge) const {
+        return invoke(id, forward<E>(edge));
+    }
 };
 
 template <class V, class N>
@@ -32,6 +39,9 @@ ngraph(V, N) -> ngraph<V, N>;
 
 template <class V, class N, class To>
 ngraph(V, N, To) -> ngraph<V, N, To>;
+
+template <class V, class N, class To, class Id>
+ngraph(V, N, To, Id) -> ngraph<V, N, To, Id>;
 
 struct nvertices {
     nidx_t n;
