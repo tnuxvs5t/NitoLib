@@ -366,7 +366,7 @@ subtree_sizes, order, roots, children, lca, visit_path, path
 | `graph_algo/flow` | 算法直写关键循环 | 返回结果保留可复用证据 |
 | `rooted/tree` | 先重写 | 清除 `xxx_detail` 与冗长字段 |
 | `dynamic_tree/link_cut` | 独立专题 | 不为了统一而抽象路径结构 |
-| `math/number/poly/linear` | 保留难以临场重写的能力 | 只压缩重复胶水 |
+| `math/number/poly/linear` | 允许按数学内核重新合并、拆分和重排 | 不把 v3 文件边界当兼容目标；先消灭重复模运算/数论/多项式胶水，再固定公共入口 |
 | `string/automata/geom/opt` | 独立竞赛条目 | 语义和边界优先于统一外观 |
 
 “保留”表示能力不丢，不表示 v3 的文件边界、类型布局或调用方式必须原样复制。
@@ -443,7 +443,11 @@ dynamic_tree
 
 ### Phase 6：数学、字符串、几何与工具
 
-最后处理重复胶水和模块边界；难以临场重写的算法能力不因为体积大而删除。
+数学先于字符串、几何和工具。数学模块允许异常强的破坏性重组：以模运算、整数数论、
+组合/生成函数、线性代数和多项式等真实内核重新安排文件，而不是逐个照抄 v3 文件。
+公共函数名和能力要保留，内部 helper、文件边界和对象布局不保留；普通算术优先回到
+`<numeric>`、ranges 和局部 lambda。`mdview.hpp` 明确放弃，不为不存在的独立语义保留
+空壳文件。
 
 ---
 

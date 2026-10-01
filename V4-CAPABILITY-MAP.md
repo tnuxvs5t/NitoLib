@@ -55,6 +55,7 @@ test-v4/reftree_property.cpp
 test-v4/wavelet_property.cpp
 test-v4/topk_property.cpp
 test-v4/dynamic_tree_property.cpp
+test-v4/math_property.cpp
 ```
 
 这些测试已在 C++20/C++23、`-O2` 下通过；树核心另有 ASan/UBSan 与 64-bit index
@@ -69,7 +70,7 @@ test-v4/dynamic_tree_property.cpp
 | `discrete.hpp` | `nselect`, `nfilter`, `norder`, `nunique`, chunks/runs | `discrete.hpp` | done |
 | `sequence.hpp` | `nrun_bounds`, `nindexed_span` | `sequence.hpp` | done |
 | `permutation.hpp` | `nargsort`, `nrotate`, rank/unrank | `permutation.hpp` | done |
-| `mdview.hpp` | `nmdview` | `mdview.hpp` | pending |
+| `mdview.hpp` | `nmdview` | — | abandoned；多维 view 不再作为 v4 独立能力，普通多维访问由 STL 容器、span 和题解局部索引承担 |
 | `segment.hpp` | `nseg`, lazy/sparse segment trees, trace/cover | `segment.hpp` | done |
 | `ds.hpp` | Fenwick/DSU/queue/deque/sparse table | `ds.hpp` | done |
 | `arena.hpp` | `narena` | `arena.hpp` | done |
@@ -85,7 +86,7 @@ test-v4/dynamic_tree_property.cpp
 | `flow.hpp` | Dinic, matching, MST | `flow.hpp` | done |
 | `dynamic_tree.hpp` | Euler-tour forest | `dynamic_tree.hpp` | done |
 | `link_cut.hpp` | `nlct` | `link_cut.hpp` | done |
-| `math.hpp` | modular arithmetic, CRT, floor sum, sieve | `math.hpp` | pending |
+| `math.hpp` | modular arithmetic, CRT, floor sum, sieve | `math.hpp` | done；`test-v4/math_property.cpp` 覆盖除法、floor sum、CRT、模运算、组合数和筛 |
 | `number.hpp` | primality/factorization/mod64 | `number.hpp` | pending |
 | `divisor.hpp` | divisor/multiple zeta and factor lists | `divisor.hpp` | pending |
 | `frac.hpp` | `nfrac` | `frac.hpp` | pending |
@@ -106,3 +107,8 @@ test-v4/dynamic_tree_property.cpp
    graph port 等 Nitori 语义保留自有对象。
 4. 为危险边界添加固定断言和独立随机/property test；只运行与本次变更有关的测试。
 5. 在此表中补上复杂度、lifetime/invalidation 和实际测试命令后，才能把状态改为 done。
+
+数学模块是例外的组织信号：v4 不把 `math.hpp`、`number.hpp`、`divisor.hpp`、
+`frac.hpp`、`bitmath.hpp`、`poly.hpp`、`recurrence.hpp`、`linear.hpp` 的 v3 文件边界
+视为必须保留的架构。只要公共对象和函数能力仍可被独立验证，数学实现可以合并、拆分或
+重新排列；先消灭重复的模运算、数论和多项式胶水，再决定最终文件形状。
