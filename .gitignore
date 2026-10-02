@@ -1,5 +1,9 @@
 /build/
 
+# Machine-local editor configuration.
+/.clangd
+/.vscode/
+
 # Abel is a separate project and must not enter the NitoLib repository.
 /Abel/
 /abel/

@@ -1,4 +1,0 @@
-CompileFlags:
-  Add:
-    - -std=gnu++20
-    - -I/home/tnuzy/NitoriSTL
