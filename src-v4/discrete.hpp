@@ -59,6 +59,7 @@ constexpr vector<T> nsuffix(S&& source, T identity = {}, F operation = {}) {
     return result;
 }
 
+// step != 0; selected positions and the source length must fit nidx_t.
 template <class S>
 constexpr auto nstride(S source, nidx_t first, nidx_t last, nidx_t step) {
     nidx_t distance = step > 0 ? max(nidx_t(0), last - first)
@@ -276,6 +277,8 @@ constexpr void nreverse_inplace(S&& source) {
 
 /* A retained descriptor is the one place where shared ownership is semantic: chunks
    may be detached from their parent function while still borrowing external owners. */
+namespace ndetail {
+
 template <class S>
 auto nretain(shared_ptr<S> source) {
     return nview{
@@ -295,9 +298,11 @@ auto nretain(shared_ptr<nfunc<D, F>> source) {
     };
 }
 
+} // namespace ndetail
+
 template <class S, class I>
 auto nchunks(S source, I intervals) {
-    auto retained = nretain(make_shared<S>(move(source)));
+    auto retained = ndetail::nretain(make_shared<S>(move(source)));
     return nfunc{
         move(intervals),
         [source = move(retained)](pair<nidx_t, nidx_t> interval) mutable {
@@ -306,6 +311,7 @@ auto nchunks(S source, I intervals) {
     };
 }
 
+// width > 0; index identifies an existing block.
 template <class S>
 constexpr auto nblock(S source, nidx_t width, nidx_t index) {
     nidx_t n = nlen(source);
@@ -313,6 +319,7 @@ constexpr auto nblock(S source, nidx_t width, nidx_t index) {
     return nslice(move(source), left, left + min(width, n - left));
 }
 
+// width > 0.
 template <class S>
 constexpr auto nblocks(S source, nidx_t width) {
     nidx_t n = nlen(source), count = n / width + (n % width != 0);
@@ -323,6 +330,7 @@ constexpr auto nblocks(S source, nidx_t width) {
     return nchunks(move(source), move(intervals));
 }
 
+// width > 0 and step > 0; incomplete windows are excluded.
 template <class S>
 constexpr auto nwindows(S source, nidx_t width, nidx_t step = 1) {
     nidx_t n = nlen(source), count = width <= n ? 1 + (n - width) / step : 0;

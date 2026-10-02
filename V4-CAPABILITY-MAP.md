@@ -17,8 +17,10 @@
 | `nanchors` | `src-v4/func.hpp` | done | 显式 locator、结构 inverse、hash fallback、dense ordinal |
 | `nhash`, `nhash_inverse`, `nmake_hash_inverse`, `ninvert` | `src-v4/hash.hpp` | done | 结构 hash、固定容量开放寻址、碰撞回归 |
 | `ngraph`, `nvertices` | `src-v4/graph.hpp` | done | 最小 callable graph port |
+| `nbfs`, `nbfs_many` | `src-v4/graph.hpp` | restored | 单源 `O(V+E)`、多源 `O(V+E+S)`，答案按 dense position，重复源无害；空源集合与 arbitrary keys 有独立 oracle |
 | `nroot`, `nrooted` | `src-v4/rooted.hpp` | done | dense/custom key domain、root algebra、递归 lambda |
 | `nhld`, `npath_piece`, path/LCA projections | `src-v4/tree.hpp` | done | `par dep sz heavy head pos at rt`；路径顺序和 key adapter |
+| `nreroot` | `src-v4/tree.hpp` | restored | symmetric forest 的 `base/lift/merge`，按邻接顺序排除贡献，非交换 monoid，`O(V+E)` state operations；空森林、字符串 key 与随机加权森林 oracle |
 | `nargsort`, `nindexed_span`, `nrun_bounds` | `src-v4/sequence.hpp` | done | 位置排序计划、borrowed gather span、run snapshot |
 | `nselect`, `nslice`, stride/filter/unique/indexed | `src-v4/discrete.hpp` | done | 位置计划保持 alias；nfunc 保留 semantic keys |
 | scans, write kernels, folds, predicates, bounds, order/sort | `src-v4/discrete.hpp` | done | 左到右调用顺序、源长度写入、半开 bounds |
@@ -31,9 +33,9 @@
 | `nsegment_trace`, `nsegment_cover`, `nseg` | `src-v4/segment.hpp` | done | 纯拓扑访问、ordered fold、max_right/min_left、pointwise |
 | `nlazyseg`, `nlazy_ops`, `nlazy_addsum` | `src-v4/segment.hpp` | done | action composition、push/pull、range apply/query |
 | `nsparse_seg` | `src-v4/segment.hpp` | done | destructive/persistent roots、长坐标、query 不分配 |
-| `ngraph` edge identity port | `src-v4/graph.hpp` | done | vertices/next/target/edge_id 最小 callable port |
+| `ngraph` edge identity port | `src-v4/graph.hpp` | done | `edges(key)`，identity `nvertices` 的 2/3/4 参数 CTAD；无向边的两 incidence 共用非负 logical ID |
 | `ncsr`, undirected CSR expansion | `src-v4/graph_store.hpp` | done | input order、logical edge ID、borrowed view |
-| shortest paths, topo, Euler, SCC | `src-v4/graph_algo.hpp` | done | graph port independent；signed/0-1/heap contracts |
+| shortest paths, topo, Euler, SCC | `src-v4/graph_algo.hpp` | done | graph key port independent；signed/0-1/heap contracts；Euler 检查度数与指定起点，不能用“消费全部边”替代 trail 合法性 |
 | lowlink and block-cut forest | `src-v4/graph_algo.hpp` | done | multiedge-safe edge IDs、recursive DFS |
 | flow, matching and minimum spanning forest | `src-v4/flow.hpp` | done | 增量残量流与 cut、一次物化邻接的分层匹配、只保存输入位置的 Kruskal；`test-v4/flow_property.cpp` 覆盖随机最小割、暴力匹配、非连通森林和 move-only 边 |
 | pooled chains and ordered multisets | `src-v4/list.hpp`, `bag.hpp`, `vec_bag.hpp` | done | `nlist` 保持 handle/root destructive 链操作；`nbag` 保持 FHQ handle 与只读 query；`nvec_bag` 保持位置语义；`test-v4/list_property.cpp`、`bag_property.cpp` 覆盖回收、跨链搬段、代理值、投影 bound 与 move-only 值 |
@@ -95,7 +97,7 @@ test-v4/debug_property.cpp
 | `wavelet.hpp` | `nwavelet` | `wavelet.hpp` | done |
 | `topk.hpp` | `ntopk` | `topk.hpp` | done |
 | `graph_store.hpp` | `ncsr`, graph views | `graph_store.hpp` | done |
-| `graph_algo.hpp` | BFS/DFS, SCC, lowlink, Euler, shortest paths | `graph_algo.hpp` | done |
+| `graph.hpp / graph_algo.hpp` | BFS, SCC, lowlink, Euler, shortest paths | `graph.hpp / graph_algo.hpp` | done |
 | `flow.hpp` | Dinic, matching, MST | `flow.hpp` | done |
 | `dynamic_tree.hpp` | Euler-tour forest | `dynamic_tree.hpp` | done |
 | `link_cut.hpp` | `nlct` | `link_cut.hpp` | done |
@@ -115,7 +117,8 @@ test-v4/debug_property.cpp
 ## 每个 pending 条目的完成条件
 
 1. 先在 v3 中列出有效对象、函数、代数/复杂度和失效条件，不以实现细节代替契约。
-2. 在 v4 中逐字重写，不复制 v3 文件，再决定是否需要新的短 helper；禁止 `xxx_detail`。
+2. 在 v4 中逐字重写，不复制 v3 文件，再决定是否需要新的短 helper；纯实现 helper
+   进入统一 `ndetail`，不建立逐模块 detail 架构或框架层。
 3. 普通遍历、排序、复制、变换优先用 ranges/views；只有位置计划、root algebra、
    graph port 等 Nitori 语义保留自有对象。
 4. 为危险边界添加固定断言和独立随机/property test；只运行与本次变更有关的测试。
@@ -125,3 +128,46 @@ test-v4/debug_property.cpp
 `frac.hpp`、`bitmath.hpp`、`poly.hpp`、`recurrence.hpp`、`linear.hpp` 的 v3 文件边界
 视为必须保留的架构。只要公共对象和函数能力仍可被独立验证，数学实现可以合并、拆分或
 重新排列；先消灭重复的模运算、数论和多项式胶水，再决定最终文件形状。
+
+## 2026-10-02 abstraction consistency 验收
+
+- `edges(key)` 在 graph descriptor、算法和 rooted 构造之间统一；integral 4 参数
+  CTAD 恢复。`graph_contract_property` 覆盖字符串 key、非 identity 整数 key、反图的
+  不同枚举顺序、单源/多源 BFS 与 Floyd oracle。
+- Bellman–Ford 的邻接发现阶段只取得一次 range，再比较它的 begin/end；允许邻接
+  按值返回 owning vector，不再比较不同临时 vector 的 iterator。
+- Euler 拒绝错误度数/指定起点；1200 个随机小图逐一以边枚举 DFS 核验有向/无向、
+  自动/指定起点、重边、自环、稀疏 logical IDs，并检查返回 trail 的逐边合法性。
+- `nreroot` 以 700 个随机森林验证所有根的加权距离与非交换邻接顺序，并有字符串
+  key 固定回归。`nbfs / nbfs_many / nreroot` restore；`mdview` permanently remove。
+- view/product accessor、hash worker、graph worker、整数 I/O 内核、debug backend、
+  retained chunk descriptor、segment emitter、模运算辅助与 Pollard RNG 统一进入
+  `ndetail`。`nowned_t/nown`、`ndebug_writer` 等有用户语义的 primitive 保留公开。
+  `nhash_inverse` 内部状态私有化，测试不依赖 `ndetail` 或私有字段。
+- 仅补代数、坐标、ownership 与合法输入前提；没有增加 owner/trait/registry 框架。
+
+实际编译器：GCC 14.2.0。只运行以下受影响 stems，不是全量测试：
+
+```text
+graph_contract_property reroot_property graph_property tree_property key_tree_property
+view_func_property hash_property discrete_property segment_property io_property
+debug_property math_property number_property
+```
+
+这 13 项各自在以下两种配置编译运行通过：
+
+```text
+-std=c++20 -O2 -D_GLIBCXX_ASSERTIONS -Wall -Wextra -Wpedantic -Werror
+-std=c++23 -O1 -g -DNITORI_INDEX_64 -Wall -Wextra -Wpedantic -Werror
+  -fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie -no-pie
+  ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1
+```
+
+另外 `graph_contract_property / reroot_property / key_tree_property` 在 C++23
+`-O0 -g -D_GLIBCXX_DEBUG -Wall -Wextra -Wpedantic -Werror` 下通过。
+旧 `graph_property` 的距离 identity 常量已显式使用 `nidx_t`，修复 64 位模式的测试
+类型推导错误；改动后重新运行了对应优化和 sanitizer 配置。
+
+语义源码以冻结的 `test-v3/measure.py` 中计数规则测量（只复用计数函数，不执行 v3
+测试或整库编译）：`150176 → 153599` bytes，净增 `3423`。没有为 v4 擅自设定新预算。
+`git diff --check` 通过。此证据只支持本次 consistency pass，不宣称全部算法已穷尽验证。

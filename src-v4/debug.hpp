@@ -2,22 +2,24 @@
 #include "func.hpp"
 #include "io.hpp"
 
-struct ndebug_state;
+namespace ndetail { struct ndebug_state; }
 
 // ADL customization writes through this small public facade. raw() is for literal
 // punctuation/labels, value() recurses through the normal renderer, and object()
 // supplies the stable name=value field form.
 struct ndebug_writer {
   private:
-    ndebug_state* state;
-    explicit ndebug_writer(ndebug_state* source) : state(source) {}
-    friend struct ndebug_state;
+    ndetail::ndebug_state* state;
+    explicit ndebug_writer(ndetail::ndebug_state* source) : state(source) {}
+    friend struct ndetail::ndebug_state;
 
   public:
     template <class T> void value(const T& value);
     void raw(string_view text);
     template <class F> void object(string_view type, F&& fields);
 };
+
+namespace ndetail {
 
 struct ndebug_state {
     ostream& out;
@@ -160,6 +162,8 @@ struct ndebug_state {
     template <class T> void top(const T& value) { repr(value); }
 };
 
+} // namespace ndetail
+
 inline void ndebug_writer::raw(string_view text) { state->raw(text); }
 
 template <class T>
@@ -183,7 +187,7 @@ void ndebug_writer::object(string_view type, F&& fields) {
 
 template <class... T>
 ostream& ndebug(ostream& out, const T&... values) {
-    ndebug_state state{out};
+    ndetail::ndebug_state state{out};
     if constexpr (sizeof...(T)) {
         bool first = true;
         auto emit = [&](const auto& value) {

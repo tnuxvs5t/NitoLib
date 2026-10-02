@@ -3,11 +3,14 @@
 
 struct npath_piece {
     nidx_t left, right;
+    // reverse=true means consume this HLD segment right-to-left.
     bool reverse;
 };
 
 template <class V>
 struct nhld_layout {
+    // Projections borrow this layout; lca/path endpoints must be reached vertices
+    // in the same component. Construction uses O(height) recursive call stack.
     V vertices;
     vector<nidx_t> par, dep, sz, heavy;
     vector<nidx_t> head, pos, at, rt;
@@ -186,4 +189,62 @@ auto nhld(nrooted<V>&& tree) {
 template <class C>
 auto nhld(nidx_t n, nidx_t root, C next) {
     return nhld(nroot(ngraph{n, move(next)}, array<nidx_t, 1>{root}));
+}
+
+// Symmetric forest: each undirected edge occurs once in each direction, and
+// adjacency is repeatable and survives nested calls. merge is associative with
+// id(); base(key) is first, then contributions in local adjacency order.
+// lift(state, from_key, edge_from_to) sends from's state with to excluded.
+// Answers use dense positions. O(V+E) state operations/space, O(height) call stack.
+template <class G, class Base, class Lift, class M>
+auto nreroot(G&& graph, Base base, Lift lift, M merge) {
+    using T = remove_cvref_t<invoke_result_t<Base&, decltype(graph.vertices[0])>>;
+    nidx_t n = graph.vertices.len();
+    vector<nidx_t> par(n, -1), order;
+    vector<T> down(n, merge.id()), up(n, merge.id()), answer(n, merge.id());
+    order.reserve(n);
+
+    auto dfs = [&](auto&& self, nidx_t v) -> void {
+        order.push_back(v);
+        T state = invoke(base, graph.vertices[v]);
+        for (auto&& edge : graph.edges(graph.vertices[v])) {
+            nidx_t u = graph.vertices.inverse(graph.target(edge));
+            if (u == par[v]) continue;
+            par[u] = v;
+            self(self, u);
+            state = invoke(merge, move(state), down[u]);
+        }
+        if (par[v] != v)
+            for (auto&& edge : graph.edges(graph.vertices[v]))
+                if (graph.vertices.inverse(graph.target(edge)) == par[v]) {
+                    down[v] = invoke(lift, move(state), graph.vertices[v], edge);
+                    break;
+                }
+    };
+    for (nidx_t v = 0; v < n; ++v) if (par[v] < 0) {
+        par[v] = v;
+        dfs(dfs, v);
+    }
+
+    for (nidx_t v : order) {
+        vector<T> part;
+        for (auto&& edge : graph.edges(graph.vertices[v])) {
+            nidx_t u = graph.vertices.inverse(graph.target(edge));
+            part.push_back(u == par[v] ? up[v] : down[u]);
+        }
+        vector<T> suffix(part.size() + 1, merge.id());
+        for (size_t i = part.size(); i-- > 0;)
+            suffix[i] = invoke(merge, part[i], suffix[i + 1]);
+        T prefix = invoke(base, graph.vertices[v]);
+        size_t i = 0;
+        for (auto&& edge : graph.edges(graph.vertices[v])) {
+            nidx_t u = graph.vertices.inverse(graph.target(edge));
+            if (u != par[v])
+                up[u] = invoke(lift, invoke(merge, prefix, suffix[i + 1]),
+                               graph.vertices[v], edge);
+            prefix = invoke(merge, move(prefix), part[i++]);
+        }
+        answer[v] = move(prefix);
+    }
+    return answer;
 }

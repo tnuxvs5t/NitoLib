@@ -2,7 +2,8 @@
 #include "graph.hpp"
 #include "func.hpp"
 
-/* Dense rooted metadata. Every array is indexed by a vertex in [0,n). */
+// Arrays use dense positions. Only vertices reached from the supplied roots have
+// metadata; projections borrow this object. DFS needs O(height) call stack.
 template <class V>
 struct nrooted {
     V vertices;
@@ -61,7 +62,7 @@ auto nroot(G graph, R&& roots) {
         auto dfs = [&](auto&& self, nidx_t v) -> void {
             ord.push_back(v);
             sz[v] = 1;
-            for (auto&& edge : graph.edges(v)) {
+            for (auto&& edge : graph.edges(graph.vertices[v])) {
                 nidx_t u = graph.vertices.inverse(graph.target(edge));
                 if (par[u] >= 0) continue;
                 par[u] = v;

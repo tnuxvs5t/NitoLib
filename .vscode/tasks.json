@@ -1,0 +1,97 @@
+{
+    "tasks": [
+        {
+            "type": "cppbuild",
+            "label": "Nitori v2: build checked (O2)",
+            "command": "/usr/bin/g++",
+            "args": [
+                "-fdiagnostics-color=always",
+                "-std=gnu++20",
+                "-O2",
+                "-pipe",
+                "-g",
+                "-Wall",
+                "-Wextra",
+                "-I/home/tnuzy/NitoriSTL",
+                "${file}",
+                "-o",
+                "${fileDirname}/${fileBasenameNoExtension}"
+            ],
+            "options": {
+                "cwd": "${fileDirname}"
+            },
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "detail": "Canonical checked Nitori v2, GNU C++20, O2."
+        },
+        {
+            "type": "cppbuild",
+            "label": "Nitori v2: build unsafe (O2)",
+            "command": "/usr/bin/g++",
+            "args": [
+                "-fdiagnostics-color=always",
+                "-std=gnu++20",
+                "-O2",
+                "-pipe",
+                "-Wall",
+                "-Wextra",
+                "-I/home/tnuzy/NitoriSTL",
+                "${file}",
+                "-o",
+                "${fileDirname}/${fileBasenameNoExtension}.unsafe"
+            ],
+            "options": {
+                "cwd": "${fileDirname}"
+            },
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "group": "build",
+            "detail": "Canonical unsafe Nitori v2; use only after checked validation."
+        },
+        {
+            "type": "shell",
+            "label": "Nitori v2: deploy checked",
+            "command": "/home/tnuzy/.local/bin/deploynitori",
+            "args": [
+                "--checked",
+                "${file}",
+                "-o",
+                "${fileDirname}/${fileBasenameNoExtension}.submit.cpp",
+                "--no-line",
+                "-v"
+            ],
+            "options": {
+                "cwd": "${fileDirname}"
+            },
+            "problemMatcher": [
+                "$gcc"
+            ]
+        },
+        {
+            "type": "shell",
+            "label": "Nitori v2: deploy unsafe",
+            "command": "/home/tnuzy/.local/bin/deploynitori",
+            "args": [
+                "--unsafe",
+                "${file}",
+                "-o",
+                "${fileDirname}/${fileBasenameNoExtension}.submit.cpp",
+                "--no-line",
+                "-v"
+            ],
+            "options": {
+                "cwd": "${fileDirname}"
+            },
+            "problemMatcher": [
+                "$gcc"
+            ]
+        }
+    ],
+    "version": "2.0.0"
+}

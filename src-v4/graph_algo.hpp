@@ -32,15 +32,19 @@ ndenseprim_result<W> ndenseprim(nidx_t n, Weight&& weight, W infinity) {
     return result;
 }
 
+namespace ndetail {
+
 template <class G, class K, class Cost, class W>
 vector<W> nbellman_distances(G& graph, const K& source, Cost& cost, W infinity) {
     nidx_t n = graph.vertices.len();
     vector<W> distance(n, infinity);
     distance[graph.vertices.inverse(source)] = W{};
     vector<nidx_t> sources;
-    for (nidx_t from = 0; from < n; ++from)
-        if (begin(graph.edges(graph.vertices[from])) != end(graph.edges(graph.vertices[from])))
+    for (nidx_t from = 0; from < n; ++from) {
+        auto&& edges = graph.edges(graph.vertices[from]);
+        if (begin(edges) != end(edges))
             sources.push_back(from);
+    }
     for (nidx_t pass = 1; pass < n; ++pass) {
         bool changed = false;
         for (nidx_t from : sources)
@@ -55,9 +59,12 @@ vector<W> nbellman_distances(G& graph, const K& source, Cost& cost, W infinity) 
     return distance;
 }
 
+} // namespace ndetail
+
+// Adjacency is repeatable; all finite relaxations fit W and stay below infinity.
 template <class G, class K, class Cost, class W>
 optional<vector<W>> nbellman_ford(G&& graph, K source, Cost cost, W infinity) {
-    auto distance = nbellman_distances(graph, source, cost, infinity);
+    auto distance = ndetail::nbellman_distances(graph, source, cost, infinity);
     for (nidx_t from = 0; from < graph.vertices.len(); ++from)
         if (distance[from] != infinity)
             for (auto&& edge : graph.edges(graph.vertices[from])) {
@@ -70,7 +77,7 @@ optional<vector<W>> nbellman_ford(G&& graph, K source, Cost cost, W infinity) {
 template <class G, class K, class Cost, class W>
 vector<W> nbellman_ford_closure(G&& graph, K source, Cost cost,
                                 W infinity, W negative_infinity) {
-    auto distance = nbellman_distances(graph, source, cost, infinity);
+    auto distance = ndetail::nbellman_distances(graph, source, cost, infinity);
     nidx_t n = graph.vertices.len();
     vector<unsigned char> affected(n);
     vector<nidx_t> queue;
@@ -90,6 +97,7 @@ vector<W> nbellman_ford_closure(G&& graph, K source, Cost cost,
     return distance;
 }
 
+// Costs are nonnegative; finite relaxations fit W and stay below infinity.
 template <class G, class K, class Cost, class W>
 vector<W> ndijkstra(G&& graph, K source, Cost cost, W infinity) {
     vector<W> distance(graph.vertices.len(), infinity);
@@ -113,6 +121,7 @@ vector<W> ndijkstra(G&& graph, K source, Cost cost, W infinity) {
     return distance;
 }
 
+// Each cost is 0 or 1; distances use dense positions, -1 means unreachable.
 template <class G, class K, class Cost>
 vector<nidx_t> n01bfs(G&& graph, K source, Cost cost) {
     nidx_t n = graph.vertices.len(), start = graph.vertices.inverse(source);
@@ -161,9 +170,12 @@ vector<nidx_t> ntoposort(G&& graph) {
 enum class neuler_kind { undirected, directed };
 
 struct neuler_result {
+    // vertices are dense positions; edges are logical edge IDs.
     vector<nidx_t> vertices, edges;
     bool complete = false;
 };
+
+namespace ndetail {
 
 template <class G>
 neuler_result neuler_run(G& graph, nidx_t m, nidx_t start, neuler_kind kind) {
@@ -185,13 +197,27 @@ neuler_result neuler_run(G& graph, nidx_t m, nidx_t start, neuler_kind kind) {
             if (kind == neuler_kind::directed) ++balance[from], --balance[to];
             else ++balance[from];
         }
-    if (start < 0)
-        for (nidx_t v = 0; v < n; ++v)
-            if ((kind == neuler_kind::directed && balance[v] == 1) ||
-                (kind == neuler_kind::undirected && (balance[v] & 1))) {
-                start = v;
-                break;
-            }
+    if (nidx_t(ids.size()) != m || start >= n) return result;
+    nidx_t required = -1, positive = 0, negative = 0, odd = 0;
+    for (nidx_t v = 0; v < n; ++v) {
+        if (kind == neuler_kind::directed) {
+            if (balance[v] == 1) ++positive, required = v;
+            else if (balance[v] == -1) ++negative;
+            else if (balance[v] != 0) return result;
+        } else if (balance[v] & 1) {
+            ++odd;
+            if (required < 0) required = v;
+        }
+    }
+    if (kind == neuler_kind::directed) {
+        if (!((positive == 0 && negative == 0) || (positive == 1 && negative == 1)))
+            return result;
+        if (start >= 0 && required >= 0 && start != required) return result;
+    } else {
+        if (odd != 0 && odd != 2) return result;
+        if (start >= 0 && odd && !(balance[start] & 1)) return result;
+    }
+    if (start < 0) start = required;
     if (start < 0)
         for (nidx_t v = 0; v < n; ++v)
             if (!adjacency[v].empty()) { start = v; break; }
@@ -219,16 +245,18 @@ neuler_result neuler_run(G& graph, nidx_t m, nidx_t start, neuler_kind kind) {
     return result;
 }
 
+} // namespace ndetail
+
 template <class G>
 neuler_result neuler(G&& graph, nidx_t edges,
                      neuler_kind kind = neuler_kind::undirected) {
-    return neuler_run(graph, edges, -1, kind);
+    return ndetail::neuler_run(graph, edges, -1, kind);
 }
 
 template <class G, class K>
 neuler_result neuler(G&& graph, K&& source, nidx_t edges,
                      neuler_kind kind = neuler_kind::undirected) {
-    return neuler_run(graph, edges, graph.vertices.inverse(forward<K>(source)), kind);
+    return ndetail::neuler_run(graph, edges, graph.vertices.inverse(forward<K>(source)), kind);
 }
 
 struct nlowlink_result {
@@ -241,6 +269,8 @@ struct nblockcut_result {
     vector<vector<nidx_t>> adjacency;
     vector<vector<nidx_t>> edges;
 };
+
+namespace ndetail {
 
 template <bool Blocks, class G>
 auto nlowlink_run(G& graph) {
@@ -315,14 +345,18 @@ auto nlowlink_run(G& graph) {
     return result;
 }
 
+} // namespace ndetail
+
+// Symmetric undirected adjacency with logical edge IDs; self-loops are ignored.
+// DFS uses O(V) worst-case call stack; outer adjacency must survive nested calls.
 template <class G>
 nlowlink_result nlowlink(G&& graph) {
-    return nlowlink_run<false>(graph);
+    return ndetail::nlowlink_run<false>(graph);
 }
 
 template <class G>
 nblockcut_result nblockcut(G&& graph) {
-    return nlowlink_run<true>(graph);
+    return ndetail::nlowlink_run<true>(graph);
 }
 
 struct nscc_result {
@@ -330,6 +364,8 @@ struct nscc_result {
     nidx_t count;
 };
 
+// Both ports enumerate the same key set; reverse_graph reverses each arc.
+// DFS uses O(V) worst-case call stack and nested adjacency must remain valid.
 template <class G, class R>
 nscc_result nscc(G&& graph, R&& reverse_graph) {
     nidx_t n = graph.vertices.len();

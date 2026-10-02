@@ -2,7 +2,9 @@
 #include "segment.hpp"
 
 /* Link-cut forest with ordered path aggregates.  M needs id() and associative
-   operator(); both path directions are stored so M need not commute. */
+   operator(); both path directions are stored so M need not commute.
+   link requires different components, cut requires a live edge, and path queries
+   require connected endpoints. */
 template <class T, class M = nadd<T>>
 struct nlct {
     struct node {

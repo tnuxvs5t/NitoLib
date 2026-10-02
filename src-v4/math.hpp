@@ -1,6 +1,7 @@
 #pragma once
 #include "core.hpp"
 
+// b != 0 and a/b must be representable (in particular, no signed MIN/-1).
 template <class I>
 constexpr I ndiv_floor(I a, I b) {
     I q = a / b, r = a % b;
@@ -9,6 +10,7 @@ constexpr I ndiv_floor(I a, I b) {
     return q;
 }
 
+// Same division preconditions as ndiv_floor.
 template <class I>
 constexpr I ndiv_ceil(I a, I b) {
     I q = a / b, r = a % b;
@@ -105,6 +107,7 @@ constexpr negcd_result next_gcd(long long a, long long b) {
             static_cast<long long>(old_y)};
 }
 
+// modulus > 0; non-coprime values return nullopt.
 template <class I>
 constexpr optional<long long> ninv_mod(I value, long long modulus) {
     long long reduced = static_cast<long long>(value % modulus);
@@ -117,6 +120,7 @@ constexpr optional<long long> ninv_mod(I value, long long modulus) {
     return x;
 }
 
+// modulus > 0; reduction happens before narrowing the source value.
 template <class I>
 constexpr long long nmod_norm(I value, long long modulus) {
     auto remainder = value % modulus;
@@ -124,6 +128,8 @@ constexpr long long nmod_norm(I value, long long modulus) {
     if (result < 0) result += modulus;
     return result;
 }
+
+namespace ndetail {
 
 constexpr long long nmod_add_canonical(long long left, long long right,
                                        long long modulus) {
@@ -146,26 +152,29 @@ constexpr long long nmod_neg_canonical(long long value, long long modulus) {
     return value ? modulus - value : 0;
 }
 
+} // namespace ndetail
+
 template <class A, class B>
 constexpr long long nmod_add(A left, B right, long long modulus) {
-    return nmod_add_canonical(nmod_norm(left, modulus), nmod_norm(right, modulus), modulus);
+    return ndetail::nmod_add_canonical(nmod_norm(left, modulus), nmod_norm(right, modulus), modulus);
 }
 
 template <class A, class B>
 constexpr long long nmod_sub(A left, B right, long long modulus) {
-    return nmod_sub_canonical(nmod_norm(left, modulus), nmod_norm(right, modulus), modulus);
+    return ndetail::nmod_sub_canonical(nmod_norm(left, modulus), nmod_norm(right, modulus), modulus);
 }
 
 template <class A, class B>
 constexpr long long nmod_mul(A left, B right, long long modulus) {
-    return nmod_mul_canonical(nmod_norm(left, modulus), nmod_norm(right, modulus), modulus);
+    return ndetail::nmod_mul_canonical(nmod_norm(left, modulus), nmod_norm(right, modulus), modulus);
 }
 
 template <class I>
 constexpr long long nmod_neg(I value, long long modulus) {
-    return nmod_neg_canonical(nmod_norm(value, modulus), modulus);
+    return ndetail::nmod_neg_canonical(nmod_norm(value, modulus), modulus);
 }
 
+// Both moduli are positive and their lcm fits long long.
 template <class A, class B>
 constexpr optional<pair<long long, long long>>
 ncrt(A a, long long modulus_a, B b, long long modulus_b) {
@@ -175,11 +184,11 @@ ncrt(A a, long long modulus_a, B b, long long modulus_b) {
     long long difference = right - left;
     if (difference % gcd) return nullopt;
     long long reduced = modulus_b / gcd;
-    long long step = nmod_mul_canonical(nmod_norm(difference / gcd, reduced),
+    long long step = ndetail::nmod_mul_canonical(nmod_norm(difference / gcd, reduced),
                                         nmod_norm(x, reduced), reduced);
     long long modulus = modulus_a / gcd * modulus_b;
-    long long value = nmod_add_canonical(
-        nmod_mul_canonical(nmod_norm(modulus_a, modulus),
+    long long value = ndetail::nmod_add_canonical(
+        ndetail::nmod_mul_canonical(nmod_norm(modulus_a, modulus),
                            nmod_norm(step, modulus), modulus),
         nmod_norm(left, modulus), modulus);
     return pair{value, modulus};
@@ -198,17 +207,18 @@ struct nmodint {
     constexpr explicit operator value_type() const { return value; }
 
     constexpr nmodint& operator+=(nmodint other) {
-        value = nmod_add_canonical(value, other.value, mod()); return *this;
+        value = ndetail::nmod_add_canonical(value, other.value, mod()); return *this;
     }
     constexpr nmodint& operator-=(nmodint other) {
-        value = nmod_sub_canonical(value, other.value, mod()); return *this;
+        value = ndetail::nmod_sub_canonical(value, other.value, mod()); return *this;
     }
     constexpr nmodint& operator*=(nmodint other) {
-        value = nmod_mul_canonical(value, other.value, mod()); return *this;
+        value = ndetail::nmod_mul_canonical(value, other.value, mod()); return *this;
     }
     template <class E> constexpr nmodint pow(E exponent) const {
         return npow(*this, exponent);
     }
+    // value must be invertible modulo MOD.
     constexpr nmodint inv() const { return nmodint(*ninv_mod(value, mod())); }
     constexpr nmodint& operator/=(nmodint other) { return *this *= other.inv(); }
 
@@ -217,7 +227,7 @@ struct nmodint {
     friend constexpr nmodint operator*(nmodint a, nmodint b) { return a *= b; }
     friend constexpr nmodint operator/(nmodint a, nmodint b) { return a /= b; }
     friend constexpr nmodint operator-(nmodint a) {
-        return nmodint(nmod_neg_canonical(a.value, mod()));
+        return nmodint(ndetail::nmod_neg_canonical(a.value, mod()));
     }
     friend constexpr auto operator<=>(nmodint, nmodint) = default;
     friend ostream& operator<<(ostream& out, nmodint x) { return out << x.value; }
@@ -235,10 +245,10 @@ struct nmodint {
         for (; at < nidx_t(token.size()); ++at) {
             nidx_t digit = token[at] - '0';
             if (digit < 0 || digit > 9) return in.setstate(ios::failbit), in;
-            residue = nmod_add_canonical(nmod_mul_canonical(residue, 10 % mod(), mod()),
+            residue = ndetail::nmod_add_canonical(ndetail::nmod_mul_canonical(residue, 10 % mod(), mod()),
                                          digit % mod(), mod());
         }
-        x.value = negative ? nmod_neg_canonical(residue, mod()) : residue;
+        x.value = negative ? ndetail::nmod_neg_canonical(residue, mod()) : residue;
         return in;
     }
 };

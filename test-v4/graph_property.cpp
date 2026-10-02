@@ -10,7 +10,7 @@ struct edge {
 int main() {
     vector<vector<nidx_t>> dag{{1, 2}, {3}, {3}, {}};
     auto graph = ngraph{nrange(4), [&](nidx_t v) -> auto& { return dag[v]; }};
-    CHECK((ndijkstra(graph, 0, [](nidx_t) { return nidx_t(1); }, 1'000'000) ==
+    CHECK((ndijkstra(graph, 0, [](nidx_t) { return nidx_t(1); }, nidx_t(1'000'000)) ==
            vector<nidx_t>{0, 1, 1, 2}));
     CHECK((n01bfs(graph, 0, [](nidx_t) { return nidx_t(1); }) ==
            vector<nidx_t>{0, 1, 1, 2}));
@@ -44,7 +44,7 @@ int main() {
                          [](const edge& e) { return e.id; });
     CHECK(csr.edges(0).len() == 2 && csr.edge_id(csr.edges(0)[0]) == 10);
     auto csr_view = csr.view();
-    CHECK((ndijkstra(csr_view, 0, [](const edge& e) { return e.weight; }, 1'000'000) ==
+    CHECK((ndijkstra(csr_view, 0, [](const edge& e) { return e.weight; }, nidx_t(1'000'000)) ==
            vector<nidx_t>{0, 4, 7}));
 
     vector<edge> undirected{{0, 1, 1, 0}, {1, 2, 1, 1}, {1, 3, 1, 2}};

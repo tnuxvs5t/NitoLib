@@ -51,12 +51,16 @@ constexpr bool nisprime(uint64_t value) {
     return true;
 }
 
+namespace ndetail {
+
 inline uint64_t nsplitmix64(uint64_t& state) {
     uint64_t value = (state += 0x9e3779b97f4a7c15ULL);
     value = (value ^ (value >> 30)) * 0xbf58476d1ce4e5b9ULL;
     value = (value ^ (value >> 27)) * 0x94d049bb133111ebULL;
     return value ^ (value >> 31);
 }
+
+} // namespace ndetail
 
 // Returns a nontrivial factor of an odd composite. The seed only changes the walk.
 inline uint64_t npollard(uint64_t value, uint64_t seed = 0x243f6a8885a308d3ULL) {
@@ -70,8 +74,8 @@ inline uint64_t npollard(uint64_t value, uint64_t seed = 0x243f6a8885a308d3ULL) 
 
     uint64_t state = seed ^ value;
     while (true) {
-        uint64_t y = nsplitmix64(state) % (value - 1) + 1;
-        uint64_t c = nsplitmix64(state) % (value - 1) + 1;
+        uint64_t y = ndetail::nsplitmix64(state) % (value - 1) + 1;
+        uint64_t c = ndetail::nsplitmix64(state) % (value - 1) + 1;
         auto step = [&](uint64_t x) {
             return naddmod64(nmulmod64(x, x, value), c, value);
         };
@@ -117,7 +121,7 @@ inline vector<uint64_t> nfactor(uint64_t value) {
             result.push_back(current);
             continue;
         }
-        uint64_t divisor = npollard(current, nsplitmix64(seed));
+        uint64_t divisor = npollard(current, ndetail::nsplitmix64(seed));
         todo.push_back(divisor);
         todo.push_back(current / divisor);
     }

@@ -6,6 +6,10 @@ struct constant_hash {
     size_t operator()(nidx_t) const { return 0; }
 };
 
+template <class I>
+concept public_hash_storage = requires(I& index) { index.keys; index.table; index.mask; };
+static_assert(!public_hash_storage<nhash_inverse<nidx_t>>);
+
 int main() {
     nhash fixed(0x123456789abcdef0ULL);
     CHECK(fixed(pair{17, 23}) == fixed(pair{17, 23}));

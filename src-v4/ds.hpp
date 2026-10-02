@@ -283,6 +283,8 @@ public:
     }
 };
 
+// Nonempty fold intervals; operation is associative and idempotent, not necessarily
+// commutative. Overlapping blocks are intentional.
 template <class T, class O>
 struct nsparse_table {
     [[no_unique_address]] mutable O operation;

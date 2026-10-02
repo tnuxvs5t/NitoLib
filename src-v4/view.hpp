@@ -62,6 +62,8 @@ template <class A>
 nview(nidx_t, A) -> nview<A>;
 
 /* Hash fallback keys own the value category recursively, including pair/tuple refs. */
+namespace ndetail {
+
 template <class T>
 struct nowned {
     using type = remove_cvref_t<T>;
@@ -78,15 +80,18 @@ struct nowned<tuple<A...>> {
     using type = tuple<typename nowned<remove_cvref_t<A>>::type...>;
 };
 
+} // namespace ndetail
+
 template <class T>
-using nowned_t = typename nowned<remove_cvref_t<T>>::type;
+using nowned_t = typename ndetail::nowned<remove_cvref_t<T>>::type;
 
 template <class T>
 constexpr nowned_t<T> nown(T&& value) {
     return nowned_t<T>(forward<T>(value));
 }
 
-/* nref is the only accessor needed to turn a stable lvalue into a view. */
+namespace ndetail {
+
 template <class A>
 struct nref {
     A* source;
@@ -110,15 +115,17 @@ struct ninverse_ref {
     }
 };
 
+} // namespace ndetail
+
 template <class V>
 requires requires(V& view) { view.inverse(view[0]); }
 constexpr auto nlocate(V& view) {
-    return ninverse_ref<V>{addressof(view)};
+    return ndetail::ninverse_ref<V>{addressof(view)};
 }
 
 template <class A>
 constexpr auto nall(A& source) {
-    return nview{nlen(source), nref<A>{addressof(source)}};
+    return nview{nlen(source), ndetail::nref<A>{addressof(source)}};
 }
 
 template <class N, class F>
@@ -130,6 +137,8 @@ constexpr auto ntabulate(N length, F f) {
 template <class N, class F>
 requires nidx_wider_v<N>
 constexpr auto ntabulate(N, F) = delete;
+
+namespace ndetail {
 
 template <class F, class I>
 struct ninvertible {
@@ -146,16 +155,20 @@ struct ninvertible {
     }
 };
 
+} // namespace ndetail
+
 template <class N, class F, class I>
 requires (!nidx_wider_v<N>)
 constexpr auto ntabulate(N length, F forward_map, I backward_map) {
     return nview{nidx_t(length),
-                 ninvertible<F, I>{move(forward_map), move(backward_map)}};
+                 ndetail::ninvertible<F, I>{move(forward_map), move(backward_map)}};
 }
 
 template <class N, class F, class I>
 requires nidx_wider_v<N>
 constexpr auto ntabulate(N, F, I) = delete;
+
+namespace ndetail {
 
 struct nrange_access {
     nidx_t first;
@@ -164,10 +177,12 @@ struct nrange_access {
     constexpr nidx_t inverse(nidx_t key) const { return key - first; }
 };
 
+} // namespace ndetail
+
 template <class A, class B>
 requires (!nidx_wider_v<A> && !nidx_wider_v<B>)
 constexpr auto nrange(A first, B last) {
-    return nview{nidx_t(last) - nidx_t(first), nrange_access{nidx_t(first)}};
+    return nview{nidx_t(last) - nidx_t(first), ndetail::nrange_access{nidx_t(first)}};
 }
 
 template <class A, class B>
@@ -184,6 +199,8 @@ template <class N>
 requires nidx_wider_v<N>
 constexpr auto nrange(N) = delete;
 
+namespace ndetail {
+
 template <class V>
 struct nsub_access {
     V view;
@@ -198,16 +215,20 @@ struct nsub_access {
     }
 };
 
+} // namespace ndetail
+
 template <class V, class A, class B>
 requires (!nidx_wider_v<A> && !nidx_wider_v<B>)
 constexpr auto nsub(V view, A first, B last) {
     return nview{nidx_t(last) - nidx_t(first),
-                 nsub_access<V>{move(view), nidx_t(first)}};
+                 ndetail::nsub_access<V>{move(view), nidx_t(first)}};
 }
 
 template <class V, class A, class B>
 requires (nidx_wider_v<A> || nidx_wider_v<B>)
 constexpr auto nsub(V, A, B) = delete;
+
+namespace ndetail {
 
 template <class V>
 struct nreverse_access {
@@ -225,10 +246,12 @@ struct nreverse_access {
     }
 };
 
+} // namespace ndetail
+
 template <class V>
 constexpr auto nreverse(V view) {
     nidx_t n = view.len();
-    return nview{n, nreverse_access<V>{move(view), n}};
+    return nview{n, ndetail::nreverse_access<V>{move(view), n}};
 }
 
 /* nproject keeps the callable's result category; nmap deliberately materializes it. */
@@ -247,6 +270,8 @@ constexpr auto nmap(V view, F f) {
                      return invoke(f, view[i]);
                  }};
 }
+
+namespace ndetail {
 
 template <class V, class I>
 struct ngather_access {
@@ -267,9 +292,11 @@ struct ngather_access {
     }
 };
 
+} // namespace ndetail
+
 template <class V, class I>
 constexpr auto ngather(V view, I positions) {
-    return nview{positions.len(), ngather_access<V, I>{move(view), move(positions)}};
+    return nview{positions.len(), ndetail::ngather_access<V, I>{move(view), move(positions)}};
 }
 
 /* Zip stops at the shortest input and returns a tuple of the input result categories. */
@@ -283,6 +310,8 @@ constexpr auto nzip(V first, W... rest) {
                      }, views);
                  }};
 }
+
+namespace ndetail {
 
 template <class Tuple, size_t... I>
 constexpr auto nproduct_lengths(const Tuple& views, index_sequence<I...>) {
@@ -357,12 +386,14 @@ struct nproduct_tuple {
     }
 };
 
+} // namespace ndetail
+
 /* Left-major product; the last axis changes fastest.  The product must fit nidx_t. */
 template <class X, class Y>
 constexpr auto nproduct(X left, Y right) {
     nidx_t width = right.len();
     nidx_t length = nidx_t(__int128_t(left.len()) * right.len());
-    return nview{length, nproduct_pair<X, Y>{move(left), move(right), width}};
+    return nview{length, ndetail::nproduct_pair<X, Y>{move(left), move(right), width}};
 }
 
 template <class X, class Y, class... Z>
@@ -370,11 +401,11 @@ requires (sizeof...(Z) > 0)
 constexpr auto nproduct(X first, Y second, Z... rest) {
     constexpr size_t dimensions = 2 + sizeof...(Z);
     auto views = tuple<X, Y, Z...>(move(first), move(second), move(rest)...);
-    auto lengths = nproduct_lengths(views, make_index_sequence<dimensions>{});
+    auto lengths = ndetail::nproduct_lengths(views, make_index_sequence<dimensions>{});
     __int128_t total = 1;
     for (nidx_t length : lengths) total *= length;
     return nview{
         nidx_t(total),
-        nproduct_tuple<decltype(views), dimensions>{move(views), lengths}
+        ndetail::nproduct_tuple<decltype(views), dimensions>{move(views), lengths}
     };
 }

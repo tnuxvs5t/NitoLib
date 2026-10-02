@@ -1,6 +1,8 @@
 #pragma once
 #include "core.hpp"
 
+namespace ndetail {
+
 // Decimal integer token reader. It uses the stream buffer directly so ordinary
 // extraction and nread/nscan can be interleaved; the destination changes only after
 // a complete in-range token has been parsed.
@@ -81,10 +83,12 @@ bool nwrite_integer(ostream& out, T value) {
     return true;
 }
 
+} // namespace ndetail
+
 template <class T>
 bool nread(istream& in, T& value) {
     typename istream::sentry guard(in, true);
-    return guard && nread_integer(in, value);
+    return guard && ndetail::nread_integer(in, value);
 }
 
 template <class T>
@@ -93,7 +97,7 @@ bool nread(T& value) { return nread(cin, value); }
 template <class T, class... U>
 bool nscan(istream& in, T& first, U&... rest) {
     typename istream::sentry guard(in, true);
-    return guard && nread_integer(in, first) && (nread_integer(in, rest) && ...);
+    return guard && ndetail::nread_integer(in, first) && (ndetail::nread_integer(in, rest) && ...);
 }
 
 template <class T, class... U>
@@ -103,7 +107,7 @@ bool nscan(T& first, U&... rest) { return nscan(cin, first, rest...); }
 template <class T>
 ostream& nwrite(ostream& out, T value) {
     typename ostream::sentry guard(out);
-    if (guard && !nwrite_integer(out, value)) out.setstate(ios::badbit);
+    if (guard && !ndetail::nwrite_integer(out, value)) out.setstate(ios::badbit);
     return out;
 }
 
@@ -123,7 +127,7 @@ ostream& nprint(ostream& out, const T&... values) {
             return;
         }
         first = false;
-        if (!nwrite_integer(out, value)) out.setstate(ios::badbit);
+        if (!ndetail::nwrite_integer(out, value)) out.setstate(ios::badbit);
     };
     (emit(values), ...);
     return out;

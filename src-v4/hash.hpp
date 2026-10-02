@@ -1,6 +1,8 @@
 #pragma once
 #include "view.hpp"
 
+namespace ndetail {
+
 constexpr uint64_t nhash_mix(uint64_t x) {
     x ^= x >> 30;
     x *= 0xbf58476d1ce4e5b9ULL;
@@ -62,21 +64,24 @@ uint64_t nhash_value(const T& object, uint64_t salt) {
     return nhash_mix(uint64_t(hash<U>{}(object)) ^ salt);
 }
 
+} // namespace ndetail
+
 struct nhash {
     uint64_t salt;
 
-    nhash() : salt(nhash_seed()) {}
+    nhash() : salt(ndetail::nhash_seed()) {}
     explicit nhash(uint64_t fixed_salt) : salt(fixed_salt) {}
 
     template <class T>
     size_t operator()(const T& object) const {
-        return size_t(nhash_value(object, salt));
+        return size_t(ndetail::nhash_value(object, salt));
     }
 };
 
 /* Fixed-capacity open addressing: build O(n), expected lookup O(1), storage O(n). */
 template <class K, class H = nhash, class E = equal_to<>>
 struct nhash_inverse {
+private:
     struct slot {
         uint32_t fingerprint = 0;
         nidx_t position = -1;
@@ -100,6 +105,7 @@ struct nhash_inverse {
         return uint32_t(value >> 32);
     }
 
+public:
     template <class V>
     explicit nhash_inverse(const V& source, H hash = {}, E relation = {})
         : hasher(move(hash)), equal(move(relation)) {
@@ -141,6 +147,8 @@ auto nmake_hash_inverse(const V& view, H hash = {}, E equal = {}) {
     return nhash_inverse<K, H, E>(view, move(hash), move(equal));
 }
 
+namespace ndetail {
+
 template <class V, class I>
 struct ninvert_access {
     V view;
@@ -152,6 +160,8 @@ struct ninvert_access {
     nidx_t inverse(const K& key) const { return locate.find(key); }
 };
 
+} // namespace ndetail
+
 template <class V>
 requires requires(V& view) { view.inverse(view[0]); }
 constexpr V ninvert(V view) {
@@ -162,7 +172,7 @@ template <class V, class H, class E>
 auto ninvert(V view, H hash, E equal) {
     nidx_t n = view.len();
     auto locate = nmake_hash_inverse(view, move(hash), move(equal));
-    return nview{n, ninvert_access<V, decltype(locate)>{move(view), move(locate)}};
+    return nview{n, ndetail::ninvert_access<V, decltype(locate)>{move(view), move(locate)}};
 }
 
 template <class V>

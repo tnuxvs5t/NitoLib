@@ -1,6 +1,6 @@
 # NitoriSTL v4 总规划
 
-状态：2026-10-01，v4 第一阶段核心重写完成。
+状态：2026-10-02，v4 第一阶段核心重写完成；进入 abstraction consistency 收口阶段。
 范围：以当前 `src-v3/`、`test-v3/`、`bench-v3/` 和教程冻结出的 v3 能力为输入；不把
 `design-lab/` 当作 v4 权威，也不把任何历史归档当作设计来源。
 
@@ -19,6 +19,8 @@
   string、automata、geom、opt、io、debug 的逐字重写；每块均有 `test-v4/*_property.cpp`
   独立证据，并针对相关模块跑过 C++20/C++23、优化、ASan/UBSan 或 64 位索引窄测。
 - `mdview.hpp` 明确 abandoned；它不再占用 v4 的能力预算，也不制造空壳兼容文件。
+- 收口优先级：统一 graph key contract → 隐藏实现细节 → 最少语义注释 → 修复非故意
+  能力回归。此后冻结架构，不继续为缩短行数重写已形成的 kernel。
 
 ---
 
@@ -126,18 +128,17 @@ resource registry
 调用者需要提供什么？
 ```
 
-### 2.2 禁止 `xxx_detail` 架构层
+### 2.2 最小 abstraction 与实现封装
 
-v4 不建立 `nxxx_detail`、`xxx_detail` 这种 namespace 来藏实现。
+减少 abstraction 不等于减少 encapsulation。公开名字只保留用户会主动调用的
+primitive；内部 accessor、遍历 worker、整数 I/O 内核、hash/模运算辅助函数统一放入
+`ndetail`，不承诺其名称或布局稳定。不要为每个模块建立平行的 `xxx_detail` 架构层。
 
-一段逻辑只有三种归宿：
+局部的一次性步骤仍优先成员函数、局部 lambda 或 standalone block。`ndetail` 只是
+可见性边界，不是新的 policy/trait/framework 层。kernel 的拓扑若是用户组合算法所需的
+端口，可继续公开；`nhash_inverse` 这类对象的表、keys、fingerprint 和容量策略应当私有。
 
-1. 它是可复用的竞赛机制：直接成为公开、短命名的核心对象/函数；
-2. 它是某个对象不可分的局部步骤：直接写在对象成员函数或构造函数中；
-3. 它只服务一次调用：使用 `standalone { ... }`、局部 lambda、递归 lambda 或局部
-   结构体分割命名域，不建立长期名字。
-
-不允许通过 `xxx_detail` 把“尚未决定接口的代码”伪装成架构。
+只注释代码不能表达的 invariant、代数律、ownership 与坐标约定，不注释实现步骤。
 
 允许使用 standalone block：
 
@@ -291,6 +292,11 @@ ndsu / npotential_dsu / nrollback_dsu
 ### 3.6 图和树层
 
 图算法使用最小 callable 端口；树算法直接操作 dense position 数组。
+
+统一约定：`graph.vertices[position]` 得到 key，`graph.edges(key)` 接受 key，
+`graph.target(edge)` 返回 key，`graph.vertices.inverse(key)` 得到 position。
+算法统一使用 `graph.edges(graph.vertices[v])`，`edges` 自身不做 position→key 转换。
+`nvertices` 只是 identity map；integral graph 的 2/3/4 参数 CTAD 必须齐全。
 
 树对象的字段应使用算法稳定 token：
 
@@ -505,7 +511,7 @@ v4 开工后的第一票不是增加新算法，而是清理第一组架构污�
 第一票验收标准：
 
 ```text
-没有 xxx_detail namespace
+只有统一 ndetail 实现边界，没有逐模块 detail 架构
 没有因为防爆 stack 把清晰递归改成长显式栈
 稳定函数名未被随意重命名
 HLD 主循环能脱离工程包装直接读懂
@@ -529,3 +535,16 @@ HLD 主循环能脱离工程包装直接读懂
 ```
 
 v4 的破坏性应该破坏偶然复杂度，不应破坏已经被题解和证明使用的语义词汇。
+
+## 10. 架构冻结与功能去留
+
+2026-10-02 收口决定（不向冻结的 v3 回填）：
+
+| 功能 | 决定 | 理由 |
+| --- | --- | --- |
+| `nbfs / nbfs_many` | restore，`graph.hpp` | 无权最短路是独立 primitive：单源 `O(V+E)`，多源 `O(V+E+S)`（S 为含重复的输入源数）；用 Dijkstra 替代会改变复杂度，多源入口明确零距离集合 |
+| `nreroot` | restore，`tree.hpp` | 排除一个邻接贡献的 prefix/suffix 与跨边 lift 有独立语义；保持局部邻接顺序，支持非交换 monoid 与 arbitrary key 森林 |
+| `mdview` | permanently remove | 普通规则多维访问由 STL 容器、span 和局部索引承担；不恢复 rank/layout/owner 包装或空壳兼容文件 |
+
+架构到此冻结：保留小型 composable kernel、STL-native 实现和薄语义抽象。后续只为
+可复现错误、真实缺失的竞赛操作或明确契约缺口改动，不再开展 architecture rewrite。

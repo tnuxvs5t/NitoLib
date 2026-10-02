@@ -3,7 +3,8 @@
 #include "hash.hpp"
 #include "segment.hpp"
 
-/* Euler-tour forest: component aggregates only, with a commutative merge. */
+// merge is associative and commutative with id(). link requires different
+// components; cut requires a live edge. Removed occurrence handles are not reused.
 template <class T, class M = nadd<T>>
 struct nett_forest {
     struct item {

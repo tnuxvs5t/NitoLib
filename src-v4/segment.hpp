@@ -80,6 +80,8 @@ struct nmax<tuple<A...>> {
     }
 };
 
+namespace ndetail {
+
 template <class F, class I>
 constexpr void nsegment_emit(F& visit, nidx_t node, I left, I right) {
     if constexpr (requires { invoke(visit, node, left, right); })
@@ -88,11 +90,13 @@ constexpr void nsegment_emit(F& visit, nidx_t node, I left, I right) {
         invoke(visit, node);
 }
 
+} // namespace ndetail
+
 template <class I, class C, class F>
 constexpr void nsegment_trace(nidx_t root, I left, I right, I position,
                               C&& child, F&& visit) {
     for (nidx_t node = root; node >= 0;) {
-        nsegment_emit(visit, node, left, right);
+        ndetail::nsegment_emit(visit, node, left, right);
         if (left + 1 == right) break;
         I middle = midpoint(left, right);
         nidx_t side = position < middle ? 0 : 1;
@@ -109,7 +113,7 @@ constexpr void nsegment_cover(nidx_t root, I left, I right, I query_left,
     auto walk = [&](auto&& self, nidx_t node, I node_left, I node_right) -> void {
         if (node < 0 || query_right <= node_left || node_right <= query_left) return;
         if (query_left <= node_left && node_right <= query_right) {
-            nsegment_emit(visit, node, node_left, node_right);
+            ndetail::nsegment_emit(visit, node, node_left, node_right);
             return;
         }
         I middle = midpoint(node_left, node_right);
@@ -396,6 +400,7 @@ struct nlazy_ops {
     bool try_apply(Q& q, nidx_t node, nidx_t left, nidx_t right, const F& tag) {
         q[node] = action.apply(move(q[node]), tag, right - left);
         if (node < q.base) {
+            // compose(newer, older): older is applied first.
             lazy[node] = pending[node] ? action.compose(tag, lazy[node]) : tag;
             pending[node] = true;
         }

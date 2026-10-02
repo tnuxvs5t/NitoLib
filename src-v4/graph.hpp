@@ -8,6 +8,9 @@ struct nto_self {
     }
 };
 
+// vertices[position] is a key; edges(key) and target(edge) use that key domain.
+// Opposite incidences of an undirected edge share one nonnegative edge_id;
+// distinct logical edges have distinct IDs. -1 denotes no edge.
 template <class V, class N, class To = nto_self, class Id = nullptr_t>
 struct ngraph {
     V vertices;
@@ -19,7 +22,7 @@ struct ngraph {
 
     template <class X>
     decltype(auto) edges(X&& vertex) const {
-        return invoke(next, vertices[forward<X>(vertex)]);
+        return invoke(next, forward<X>(vertex));
     }
 
     template <class E>
@@ -55,3 +58,35 @@ ngraph(I, N) -> ngraph<nvertices, N>;
 
 template <integral I, class N, class To>
 ngraph(I, N, To) -> ngraph<nvertices, N, To>;
+
+template <integral I, class N, class To, class Id>
+ngraph(I, N, To, Id) -> ngraph<nvertices, N, To, Id>;
+
+// Distances use dense positions; unreachable vertices are -1, duplicate sources
+// are harmless. O(V+E+S) time for S sources, O(V) space, with unit-cost port calls.
+template <class G, class R>
+vector<nidx_t> nbfs_many(G&& graph, R&& sources) {
+    vector<nidx_t> distance(graph.vertices.len(), -1), queue;
+    queue.reserve(distance.size());
+    for (nidx_t i = 0; i < nlen(sources); ++i) {
+        nidx_t v = graph.vertices.inverse(sources[i]);
+        if (distance[v] >= 0) continue;
+        distance[v] = 0;
+        queue.push_back(v);
+    }
+    for (size_t at = 0; at < queue.size(); ++at) {
+        nidx_t v = queue[at];
+        for (auto&& edge : graph.edges(graph.vertices[v])) {
+            nidx_t u = graph.vertices.inverse(graph.target(edge));
+            if (distance[u] >= 0) continue;
+            distance[u] = distance[v] + 1;
+            queue.push_back(u);
+        }
+    }
+    return distance;
+}
+
+template <class G, class K>
+vector<nidx_t> nbfs(G&& graph, K source) {
+    return nbfs_many(forward<G>(graph), array<K, 1>{move(source)});
+}
